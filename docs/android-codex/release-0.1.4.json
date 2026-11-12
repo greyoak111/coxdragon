@@ -1,0 +1,16 @@
+{
+  "release": "v0.1.4",
+  "package": "cox.dragon",
+  "versionCode": 5,
+  "targetSdk": 28,
+  "apk": "coxdragon-0.1.4-mcp-input.apk",
+  "sha256": "68881ff9f75c3527a5eef77a049e546908f37f020813ce68427f6c4cdf1c2150",
+  "signerCertificateSha256": "93f4d801b104b160140644b9d13109756d20cf8cc1d875fec58ef93835b2b9fb",
+  "sourceFilesMatchedToApk": 543,
+  "nativeCode": "Preserved from the installed v0.1.2 APK; not rebuilt for this web-only update",
+  "originalSourceCommit": "14f9bfed2f450647824b520ffd7bd3683940ae7e",
+  "upstreamReuseCommit": "af79e9b",
+  "baseApkSha256": "efa09bc808d643df51732045bf9c16aa6dfd0b7994e799511e72d7d42dd839bc",
+  "webViewVisualAcceptance": "pending user installation",
+  "change": "MCP elicitation form and URL input round-trip, validation, draft preservation and resolved request cleanup"
+}

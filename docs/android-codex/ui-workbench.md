@@ -1,11 +1,12 @@
-# v0.1.3 会话工作台交接
+# 会话工作台交接（当前 v0.1.4）
 
 日期：2026-11-12。开发分支：`ui/chat-workbench`。这是待用户安装验收的预发布版本；没有把手机视觉验收或 targetSdk 36 标为完成。
 
-## 本次交付
+## 前一版 0.1.3 打包记录
 
 - 客户端源码：https://github.com/greyoak111/coxdragon/tree/ui/chat-workbench
-- 发布页：https://github.com/greyoak111/coxdragon/releases/tag/v0.1.3
+- 当前发布页：https://github.com/greyoak111/coxdragon/releases/tag/v0.1.4
+- 0.1.3 是前一版本地打包记录，未单独发布远端 tag；本次发布使用修复 MCP 输入后的 0.1.4。
 - 组件仓库：https://github.com/greyoak111/coxdragon-components
 - APK：`coxdragon-0.1.3-chat-ui.apk`，18.34 MiB，包名 `cox.dragon`，versionCode 4，targetSdk 28。
 - SHA256：`6c790612151af55d5f99a45382b740dd62b5e2856ee82868bd7c1c56d08543e2`。
@@ -49,13 +50,13 @@ node scripts/preview-codex.mjs
 常规完整源码构建仍用 `sh scripts/build.sh`，工具需求见仓库 README。界面更新重打包则使用本次新增脚本：
 
 ```sh
-# 先从上面的 v0.1.3 发布页下载 APK，核对发布的 SHA256。
+# 先从上面的 v0.1.4 发布页下载 APK，核对发布的 SHA256。
 # 签名文件由维护者自己准备，放在应用私有目录，不能提交到仓库。
-BASE_APK=/private/path/coxdragon-0.1.3-chat-ui.apk \
+BASE_APK=/private/path/coxdragon-0.1.4-mcp-input.apk \
 KEY=/private/path/coxdragon-release.json node scripts/package-ui-update.mjs
 ```
 
-该脚本也接受原 0.1.2 APK，验证基底和钥匙的正式证书后打包。产物在 `dist/`。本地 `.build-ui/`、安装包和签名文件均由 git 忽略；此发布没有上传私钥、账户凭据或会话记录。
+该脚本输出 0.1.4，也接受原 0.1.2、0.1.3 APK，验证基底和钥匙的正式证书后打包。产物在 `dist/`。本地 `.build-ui/`、安装包和签名文件均由 git 忽略；此发布没有上传私钥、账户凭据或会话记录。
 
 ## 下一步
 
@@ -63,3 +64,18 @@ KEY=/private/path/coxdragon-release.json node scripts/package-ui-update.mjs
 2. 验证真实会话的发送、停止、流式工具输出、审批和切后台恢复。
 3. 校正旧测试对 Claude/旧产品名称的假设，区分环境限制与功能缺陷；全套检查通过后再考虑稳定版及合并。
 4. targetSdk 36 仍单独验收，不从 targetSdk 28 外推结果。
+
+## 0.1.4：MCP 输入卡修复
+
+用户安装验收反馈，MCP 请求输入卡只有“拒绝”。已确认前端为该协议分支硬编码拒绝按钮，网关也没有转发 content。现按 Codex 0.166.0 的协议补齐 form、openai/form、openaiForm 和 URL 模式：
+
+- 根据 requestedSchema 渲染文字、数字、布尔、单选/多选字段，复杂 JSON 字段可填写结构化内容。提交按原 RPC id 返回 action/content/_meta；拒绝和取消返回 null 内容。
+- 表单校验或 RPC 写入失败保留待处理请求。其他审批卡变化时保留已填内容，false 和 0 不会丢失。
+- URL 由用户点击打开，另点“已完成，继续”才确认；脚本协议等地址被拒绝。
+- 按 serverRequest/resolved 的 requestId 清理已处理请求。
+
+源码新增 gateway/web/mcp-elicitation.js，浏览器与网关共用，不增加运行依赖。新增 gateway/tests/codex-elicitation.test.mjs，8 项通过；真实前端脚本在 DOM 检查中覆盖提交、重试、草稿保留、URL、转义和已解决请求清理。手机 WebView 安装验收仍需用户完成。
+
+新 APK：coxdragon-0.1.4-mcp-input.apk，versionCode 5，targetSdk 28，原正式签名。SHA256：68881ff9f75c3527a5eef77a049e546908f37f020813ce68427f6c4cdf1c2150。553 项资产清单与 543 项对应源码校验通过，dex/原生库仍沿用原已安装基底。机器记录见 release-0.1.4.json。
+
+协议参考：[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server#mcp-server-elicitation-requests)。以固定 0.166.0 schema 的 action/content/_meta 结构实现。

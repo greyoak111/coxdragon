@@ -112,6 +112,8 @@
     if (act === "login-cancel") return cancelLogin();
     if (act === "open-thread") return openThread(el.dataset.id);
     if (act === "approve") return approve(el.dataset.id, el.dataset.decision, el.closest(".cx-appr"));
+    if (act === "mcp-submit") return submitMcp(el.dataset.id, el.closest(".cx-appr"));
+    if (act === "mcp-open-url") return openMcpUrl(el.dataset.id);
     if (act === "approve-input") return approveInput(el.dataset.id, el.closest(".cx-appr"));
     if (act === "refresh") return refresh();
     if (act === "retry") return refresh();
@@ -242,7 +244,18 @@
         <div class="tiny" style="color:var(--fg3);margin-top:5px">登录完成后窗口会自动继续；不要把这个码发给任何人。</div></div>`;
     }
     for (const [id, p] of st.approvals) h += approvalHtml(id, p);
-    if (dom.apprs.innerHTML !== h) dom.apprs.innerHTML = h;
+    if (dom.apprs.innerHTML !== h) {
+      // Adding or resolving another request must not discard a form the user is filling in.
+      const drafts = new Map();
+      const key = el => JSON.stringify([el.closest("[data-appr]").dataset.appr, el.dataset.mcpField]);
+      for (const el of dom.apprs.querySelectorAll("[data-mcp-field]")) drafts.set(key(el), el.multiple ? Array.from(el.options).filter(o => o.selected).map(o => o.value) : el.value);
+      dom.apprs.innerHTML = h;
+      for (const el of dom.apprs.querySelectorAll("[data-mcp-field]")) if (drafts.has(key(el))) {
+        const value = drafts.get(key(el));
+        if (el.multiple) { for (const option of el.options) option.selected = value.includes(option.value); }
+        else el.value = value;
+      }
+    }
   }
 
   function approvalHtml(id, p) {
@@ -284,9 +297,13 @@
         <button class="no" data-act="approve" data-id="${ida}" data-decision="decline">跳过</button></div></div>`;
     }
     if (m === "mcpServer/elicitation/request") {
-      return `<div class="cx-appr" data-appr="${ida}"><div class="cx-appr-h">MCP 请求输入</div>
-        <pre>${esc(JSON.stringify(q, null, 2).slice(0, 4000))}</pre>
-        <div class="cx-appr-acts"><button class="no" data-act="approve" data-id="${ida}" data-decision="decline">拒绝</button></div></div>`;
+      const adapter = window.CXMcpElicitation;
+      const urlMode = q.mode === "url", formMode = ["form", "openai/form", "openaiForm"].includes(q.mode);
+      return `<div class="cx-appr" data-appr="${ida}"><div class="cx-appr-h">MCP 请求输入${q.serverName ? " · " + esc(q.serverName) : ""}</div>
+        <div class="cx-mcp-message">${esc(q.message || "")}</div>
+        ${urlMode ? `<div class="cx-mcp-url">${esc(q.url || "")}</div>` : formMode && adapter ? adapter.formHtml(q.requestedSchema, esc) : '<div>暂时无法显示这种输入请求。</div>'}
+        <div class="cx-appr-acts">${urlMode ? `<button data-act="mcp-open-url" data-id="${ida}">打开网页</button><button class="ok" data-act="approve" data-id="${ida}" data-decision="accept">已完成，继续</button>` : formMode && adapter ? `<button class="ok" data-act="mcp-submit" data-id="${ida}">提交并继续</button>` : ""}
+        <button class="no" data-act="approve" data-id="${ida}" data-decision="decline">拒绝</button><button data-act="approve" data-id="${ida}" data-decision="cancel">取消</button></div></div>`;
     }
     return `<div class="cx-appr" data-appr="${ida}"><div class="cx-appr-h">Codex 等待确认</div><pre>${esc(JSON.stringify(q, null, 2).slice(0, 4000))}</pre>
       <div class="cx-appr-acts"><button class="ok" data-act="approve" data-id="${ida}" data-decision="accept">允许</button>
@@ -578,7 +595,7 @@
         refreshSoon();
         break;
       case "serverRequest/resolved":
-        if (p.id != null) { st.approvals.delete(String(p.id)); paintApprovals(); }
+        if ((p.requestId ?? p.id) != null) { st.approvals.delete(String(p.requestId ?? p.id)); paintApprovals(); }
         break;
     }
   }
@@ -747,6 +764,29 @@
     if (card) card.style.opacity = ".55";
     try { await post("/api/codex/approve", { id, decision }); st.approvals.delete(String(id)); paintApprovals(); }
     catch (e) { if (card) card.style.opacity = ""; toast(e.message, true); }
+  }
+
+  async function submitMcp(id, card) {
+    const p = st.approvals.get(String(id));
+    if (!p || !card || !window.CXMcpElicitation) return toast("这条输入请求已经失效", true);
+    let content;
+    try { content = window.CXMcpElicitation.readForm(p.params.requestedSchema, card); }
+    catch (e) { return toast(e.message || "请检查填写内容", true); }
+    const button = card.querySelector('[data-act="mcp-submit"]');
+    if (button) button.disabled = true;
+    try { await post("/api/codex/approve", { id, decision: "accept", content }); st.approvals.delete(String(id)); paintApprovals(); }
+    catch (e) { if (button) button.disabled = false; toast(e.message, true); }
+  }
+
+  function openMcpUrl(id) {
+    const p = st.approvals.get(String(id));
+    if (!p || !p.params || p.params.mode !== "url") return;
+    const raw = p.params.url || "";
+    let url;
+    try { url = new URL(raw); } catch { return toast("网页地址无效", true); }
+    if (url.protocol !== "https:" && !(url.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname))) return toast("网页地址必须使用 HTTPS", true);
+    try { if (window.CCApp && CCApp.openUrl) return CCApp.openUrl(url.href); } catch {}
+    window.open(url.href, "_blank", "noopener");
   }
 
   async function approveInput(id, card) {

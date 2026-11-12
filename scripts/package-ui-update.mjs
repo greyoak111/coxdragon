@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Package a web-only update against the verified, installed APK. Native code stays byte-identical.
+// Package UI/gateway assets against a verified APK. Native code stays byte-identical.
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -23,6 +23,9 @@ const replace=(name,data)=>{
 };
 const files=['codex.css','codex.js','index.html','lang-en.js','app/13-nav-menus.js','app/19-boot.js'];
 for(const rel of files)replace('assets/app/web/'+rel,fs.readFileSync(path.join(root,'gateway/web',rel)));
+replace('assets/app/gw/codex.mjs',fs.readFileSync(path.join(root,'gateway/gw/codex.mjs')));
+const helper={name:'assets/app/web/mcp-elicitation.js',data:fs.readFileSync(path.join(root,'gateway/web/mcp-elicitation.js')),method:8};
+const existing=entries.find(e=>e.name===helper.name);if(existing)existing.data=helper.data;else entries.push(helper);
 // Increment manifest metadata using the Android binary XML structure (no resource recompilation).
 const manifest=Buffer.from(entries.find(e=>e.name==='AndroidManifest.xml').data);
 let pool=null,strings=[];
@@ -50,12 +53,12 @@ for(let off=8;off<manifest.length;){
   for(let i=0;i<count;i++){
    const a=ext+start+i*step,name=strings[manifest.readUInt32LE(a+4)]?.text;
    if(name==='versionCode'){
-    if(![3,4].includes(manifest.readUInt32LE(a+16)))throw Error('Expected coxdragon versionCode 3 or 4');
-    manifest.writeUInt32LE(4,a+16);versionPatched=true;
+    if(![3,4,5].includes(manifest.readUInt32LE(a+16)))throw Error('Expected coxdragon versionCode 3, 4 or 5');
+    manifest.writeUInt32LE(5,a+16);versionPatched=true;
    }
    if(name==='versionName'){
-    const s=strings[manifest.readUInt32LE(a+16)];if(!['0.1.2','0.1.3'].includes(s?.text))throw Error('Expected coxdragon versionName 0.1.2 or 0.1.3');
-    const data=Buffer.from('0.1.3',pool.utf8?'utf8':'utf16le');if(data.length!==s.length)throw Error('Manifest string width changed');
+    const s=strings[manifest.readUInt32LE(a+16)];if(!['0.1.2','0.1.3','0.1.4'].includes(s?.text))throw Error('Expected coxdragon versionName 0.1.2, 0.1.3 or 0.1.4');
+    const data=Buffer.from('0.1.4',pool.utf8?'utf8':'utf16le');if(data.length!==s.length)throw Error('Manifest string width changed');
     data.copy(manifest,s.p);namePatched=true;
    }
   }
@@ -73,11 +76,11 @@ const list=app.filter(e=>e.name!=='assets/app/FILES').map(e=>sha(e.data)+' '+e.n
 replace('assets/app/FILES',Buffer.from(list.join('\n')+'\n'));
 for(const e of entries)e.align=e.name==='resources.arsc'?4:e.name.endsWith('.so')?4096:0;
 const unsigned=path.join(build,'ui-unsigned.apk');fs.writeFileSync(unsigned,writeZip(entries));
-const out=path.join(root,'dist','coxdragon-0.1.3-chat-ui.apk');fs.mkdirSync(path.dirname(out),{recursive:true});
+const out=path.join(root,'dist','coxdragon-0.1.4-mcp-input.apk');fs.mkdirSync(path.dirname(out),{recursive:true});
 signApk(unsigned,out,[],keyPath);
 execFileSync('apksigner',['verify','--verbose',out],{stdio:'inherit'});
 const badging=execFileSync('aapt2',['dump','badging',out],{encoding:'utf8'}).split('\n')[0];
-if(!badging.includes("versionCode='4'")||!badging.includes("versionName='0.1.3'"))throw Error('Output version validation failed');
+if(!badging.includes("versionCode='5'")||!badging.includes("versionName='0.1.4'"))throw Error('Output version validation failed');
 // Verify all packaged files and every untouched entry after signing, using actual output bytes.
 const result=readZip(fs.readFileSync(out)),byName=new Map(result.map(e=>[e.name,e]));
 for(const e of entries)if(!byName.get(e.name)?.data.equals(e.data))throw Error('Packaged data changed: '+e.name);

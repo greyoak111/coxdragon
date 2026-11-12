@@ -199,3 +199,10 @@ html[data-theme="light"] body{
   .cx-row textarea{min-height:54px}
 }
 @media(max-height:500px){.cx-empty{margin:12px auto}.cx-greeting,.cx-empty p,.cx-suggestions{display:none}.cx-row textarea{min-height:36px}.cx-foot{margin-top:4px}.cx-head{min-height:32px}}
+.cx-mcp-message{white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 12px}
+.cx-mcp-field{display:flex;flex-direction:column;gap:5px;margin:12px 0;color:var(--fg)}
+.cx-mcp-field>small,.cx-mcp-field>span>small{color:var(--fg3);font-size:11px}
+.cx-mcp-field input,.cx-mcp-field select,.cx-mcp-field textarea{width:100%;min-height:40px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);padding:8px;font:inherit}
+.cx-mcp-field select[multiple]{min-height:100px}
+.cx-mcp-field textarea{resize:vertical}
+.cx-mcp-url{font-size:12px;overflow-wrap:anywhere;color:var(--fg2);margin:8px 0}

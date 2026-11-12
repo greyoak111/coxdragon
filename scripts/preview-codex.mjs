@@ -35,13 +35,13 @@ addEventListener('resize',resize);resize();
 `;
 let html = fs.readFileSync(path.join(web, 'index.html'), 'utf8').replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '');
 html = html.replace('</head>', `<style>:root{--lw:260px}#chat,#composer,#ctxbar{display:none!important}#side-recent{display:none}#pages{top:64px}#topbar{height:64px}#tb-tools,#tb-pins,#btn-more{display:none}.cx-main{height:100%}</style></head>`)
-  .replace('</body>', `<script>${fixture}</script><script src="/codex.js"></script></body>`);
+  .replace('</body>', `<script>${fixture}</script><script src="/mcp-elicitation.js"></script><script src="/codex.js"></script></body>`);
 const mime={'.css':'text/css','.js':'text/javascript','.woff':'font/woff','.woff2':'font/woff2','.png':'image/png'};
 const server=http.createServer((req,res)=>{
   if(req.url==='/' || req.url==='/preview.html'){res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(html);}
   // Only public web assets can be read, never arbitrary paths or application state.
   const rel=(req.url||'').split('?')[0].slice(1);
-  if(!/^(?:style\.css|codex\.(?:css|js)|fonts\/[a-zA-Z0-9._-]+|icon\.png)$/.test(rel)){res.writeHead(404);return res.end();}
+  if(!/^(?:mcp-elicitation\.js|style\.css|codex\.(?:css|js)|fonts\/[a-zA-Z0-9._-]+|icon\.png)$/.test(rel)){res.writeHead(404);return res.end();}
   try{res.setHeader('Content-Type',mime[path.extname(rel)]||'application/octet-stream');res.end(fs.readFileSync(path.join(web,rel)));}catch{res.writeHead(404);res.end();}
 });
 server.listen(Number(process.env.UI_PREVIEW_PORT||8765),'127.0.0.1',()=>console.log('Codex UI preview (simulated data): http://127.0.0.1:'+server.address().port));

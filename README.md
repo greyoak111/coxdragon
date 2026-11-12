@@ -19,9 +19,9 @@ the Codex page and the `cox.dragon` package are new.
 
 ---
 
-## Current handoff: v0.1.3 prerelease
+## Current handoff: v0.1.4 prerelease
 
-The current work is available on [`ui/chat-workbench`](https://github.com/greyoak111/coxdragon/tree/ui/chat-workbench), with an installable APK on the [v0.1.3 release page](https://github.com/greyoak111/coxdragon/releases/tag/v0.1.3). This includes the conversation-first UI and recovery of the working device's Codex code-mode-host/account fixes. See the [handoff and verification record](docs/android-codex/ui-workbench.md) before continuing development. Device visual acceptance and the full regression baseline remain open; this is a prerelease.
+The current work is available on [`ui/chat-workbench`](https://github.com/greyoak111/coxdragon/tree/ui/chat-workbench), with an installable APK on the [v0.1.4 release page](https://github.com/greyoak111/coxdragon/releases/tag/v0.1.4). MCP input requests now support submission and URL flows. This includes the conversation-first UI and recovery of the working device's Codex code-mode-host/account fixes. See the [handoff and verification record](docs/android-codex/ui-workbench.md) before continuing development. Device visual acceptance and the full regression baseline remain open; this is a prerelease.
 
 ## What it does
 

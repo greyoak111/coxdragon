@@ -15,6 +15,7 @@
 //    · 工具包里的 bash / git / rg 等只作为子进程的 PATH；Codex 本身不依赖工具包。
 // ─────────────────────────────────────────────────────────────────────
 
+import mcpElicitation from "../web/mcp-elicitation.js";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
@@ -519,6 +520,11 @@ function handleNotify(m) {
     case "error":
       if (m.params && m.params.error) S.lastError = m.params.error.message || "";
       break;
+    case "serverRequest/resolved": {
+      const id = m.params && (m.params.requestId ?? m.params.id);
+      if (id != null) S.approvals.delete(String(id));
+      break;
+    }
     case "warning":
     case "configWarning": {
       // warning 用 message；configWarning 用 summary（官方形状，见 0.166.0 的 ConfigWarningNotification）
@@ -690,10 +696,9 @@ async function logout() {
   S.account = null;
   return r;
 }
-function approve(id, decision, answers) {
+function approve(id, decision, answers, content) {
   const p = S.approvals.get(String(id));
   if (!p) throw new Error("这条确认已经失效");
-  S.approvals.delete(String(id));
   const rpc = S.rpc;
   if (!rpc) throw new Error("Codex 引擎没有在跑");
   const d = String(decision || "");
@@ -703,11 +708,12 @@ function approve(id, decision, answers) {
   } else if (p.method === "item/permissions/requestApproval") {
     rpc.respond(p.id, { permissions: {}, scope: "turn" });
   } else if (p.method === "mcpServer/elicitation/request") {
-    rpc.respond(p.id, { action: d === "accept" ? "accept" : "decline" });
+    rpc.respond(p.id, mcpElicitation.response(p.params || {}, d, content));
   } else {
     const ok = d === "accept" || d === "acceptForSession";
     rpc.respond(p.id, { decision: ok ? d : d === "cancel" ? "cancel" : "decline" });
   }
+  S.approvals.delete(String(id));
   broadcast({ type: "approval-done", id: String(id) });
 }
 
@@ -757,7 +763,7 @@ export async function routeCodex(req, res, u, p) {
       if (p === "/api/codex/login") { const r = await login(); return json(res, 200, r || {}); }
       if (p === "/api/codex/login-cancel") { const r = await loginCancel(body.loginId); return json(res, 200, r || {}); }
       if (p === "/api/codex/logout") { const r = await logout(); return json(res, 200, r || {}); }
-      if (p === "/api/codex/approve") { approve(body.id, body.decision, body.answers); return json(res, 200, { ok: true }); }
+      if (p === "/api/codex/approve") { approve(body.id, body.decision, body.answers, body.content); return json(res, 200, { ok: true }); }
       if (p === "/api/codex/settings") {
         if (typeof body.model === "string") S.model = body.model.slice(0, 200);
         if (typeof body.effort === "string") S.effort = body.effort.slice(0, 40);
