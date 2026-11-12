@@ -26,25 +26,25 @@ public final class PrivRulesTest {
         if (PrivRules.amStarted(-1, "java.lang.SecurityException")) { fail++; System.out.println("FAIL amStarted 起不来"); }
         // 0601c：免问命令点了本应用 / Shizuku 的名也要问
         names(true, "am force-stop cox.dragon");
-        names(true, "am stop-app 'cc.codro''id'");
+        names(true, "am stop-app 'cox.dr''agon'");
         names(true, "am force-stop moe.shizuku.privileged.api");
         names(false, "am force-stop com.foo");
         names(false, "dumpsys meminfo | grep -E '^ +[0-9]'");
         // 免确认下也要问的：动到本应用、Shizuku / Sui，或写法看不清（审查 0601 中-3、0601b 引号拆词）
         self(true, "pm uninstall cox.dragon");
-        self(true, "pm uninstall cc.codro\"i\"d");
+        self(true, "pm uninstall cox.dr\"a\"gon");
         self(true, "am force-stop moe.shizuku.privileged.api");
         self(true, "rm -rf /data/adb/modules");
-        self(true, "echo Y2MuY29kcm9pZA== | base64 -d | xargs pm uninstall");
-        self(true, "echo Y2MuY29kcm9pZA== | ba''se64 -d | xargs pm uninstall");
-        self(true, "echo Y2MuY29kcm9pZA== | ba\"\"se64 -d | x''args pm uninstall");
-        self(true, "echo pm uninstall cc.xodroid | sed s/x/c/ | sh");
+        self(true, "echo Y294LmRyYWdvbg== | base64 -d | xargs pm uninstall");
+        self(true, "echo Y294LmRyYWdvbg== | ba''se64 -d | xargs pm uninstall");
+        self(true, "echo Y294LmRyYWdvbg== | ba\"\"se64 -d | x''args pm uninstall");
+        self(true, "echo pm uninstall cox.drag0n | sed s/0/o/ | sh");
         self(true, "pm uninstall $P");
-        self(true, "pm uninstall cc.codr*");
+        self(true, "pm uninstall cox.drag*");
         self(true, "ev''al pm uninstall");
         // 0601c：sed 转写 / awk 拼接 / . 从管道读
         self(true, "echo abcdefghij | sed 'y/abcdefghij/pm unistl/' | . /dev/stdin");
-        self(true, "awk 'BEGIN { cmd = \"pm uninstall cc\" \".codroid\"; cmd | getline }'");
+        self(true, "awk 'BEGIN { cmd = \"pm uninstall cox\" \".dragon\"; cmd | getline }'");
         self(true, "echo x; . /sdcard/x");
         self(true, "cat /dev/fd/0");
         self(true, "echo x | { . /proc/self/fd/0; }");

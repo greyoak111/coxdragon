@@ -24,6 +24,8 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { CFG, PREFIX, log } from "./config.mjs";
 import { NEXT, readBody, sendJson } from "./http.mjs";
+import { enosysRun } from "./claude.mjs";
+import { SETTINGS } from "./settings-store.mjs";
 
 // ── 钉住的 Codex 版本 ─────────────────────────────────────────────────
 // 升级只改这里，并把新的 tar / 二进制 sha256 一起换掉。和 cccodroid 的 devkit 无关。
@@ -498,7 +500,11 @@ async function startRpc() {
   if (ca) env.SSL_CERT_FILE = ca;
   env.RUST_LOG = env.RUST_LOG || "warn";
   env.NO_COLOR = "1";
-  const child = spawn(BIN, ["--listen", "stdio://"], { cwd: isDir(S.cwd) ? S.cwd : CFG.workspace, env, stdio: ["pipe", "pipe", "pipe"] });
+  // 静态 musl 程序在 Android 14+ 会被 seccomp 拦下较新的系统调用，直接 SIGSYS；和 claude 一样套上
+  // 「静态程序兼容」的监督器（跟进子进程），让被拦的调用拿到 ENOSYS 自己退回老接口。
+  const er = SETTINGS.staticCompat !== false ? enosysRun() : "";
+  const argv = ["--listen", "stdio://"];
+  const child = spawn(er || BIN, er ? ["-f", BIN, ...argv] : argv, { cwd: isDir(S.cwd) ? S.cwd : CFG.workspace, env, stdio: ["pipe", "pipe", "pipe"] });
   const rpc = new Rpc(child, { onNotify: handleNotify, onRequest: handleRequest });
   S.child = child; S.rpc = rpc; S.stderr = ""; S.lastError = ""; S.startedAt = Date.now();
   child.on("exit", (code, signal) => {

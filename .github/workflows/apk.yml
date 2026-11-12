@@ -1,5 +1,5 @@
 # 在 GitHub 上构建 APK：每个 PR、每次推到 main 都出一个包（在这次运行的 Artifacts 里下载）。
-# 推到 main 时用正式钥匙签，能直接覆盖安装正式版。钥匙 CCCODROID_RELEASE_KEY（钥匙 JSON 的 base64）只放在
+# 推到 main 时用正式钥匙签，能直接覆盖安装正式版。钥匙 COXDRAGON_RELEASE_KEY（钥匙 JSON 的 base64）只放在
 # environment「apk-release」里，那个环境只放行 main 分支：任何 PR（包括本仓库分支开的、改了这份工作流的）都拿不到它，
 # 只能用临时生成的测试钥匙签 —— 能装，但要先卸载正式版（数据会丢），建议装在测试机上。
 name: apk
@@ -62,7 +62,7 @@ jobs:
 
       - name: 签名钥匙
         env:
-          RELEASE_KEY: ${{ secrets.CCCODROID_RELEASE_KEY }}
+          RELEASE_KEY: ${{ secrets.COXDRAGON_RELEASE_KEY }}
         run: |
           if [ -n "$RELEASE_KEY" ]; then
             printf '%s' "$RELEASE_KEY" | base64 -d > "$RUNNER_TEMP/key.json"
@@ -70,7 +70,7 @@ jobs:
             echo "SIGNED=release" >> "$GITHUB_ENV"
           else
             keytool -genkeypair -keystore "$RUNNER_TEMP/test.jks" -storepass android -keypass android \
-              -alias test -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=cccodroid test build" 2> /dev/null
+              -alias test -keyalg RSA -keysize 2048 -validity 3650 -dname "CN=coxdragon test build" 2> /dev/null
             echo "KS=$RUNNER_TEMP/test.jks" >> "$GITHUB_ENV"
             echo "SIGNED=test" >> "$GITHUB_ENV"
           fi
@@ -81,14 +81,14 @@ jobs:
           export CC_ANDROID="$ANDROID_SDK_ROOT/ndk/$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang"
           export JAVAC=javac D8="$BT/d8" AAPT2="$BT/aapt2" ANDROID_JAR="$ANDROID_SDK_ROOT/platforms/$PLATFORM/android.jar"
           export SIGN=apksigner APKSIGNER="$BT/apksigner" ZIPALIGN="$BT/zipalign"
-          # 双方案：先出 targetSdk 36 的（cccodroid-36.apk），再出默认的 28
-          TARGET_SDK=36 sh scripts/build.sh && mv dist/cccodroid.apk dist/cccodroid-36.apk
+          # 双方案：先出 targetSdk 36 的（coxdragon-36.apk），再出默认的 28
+          TARGET_SDK=36 sh scripts/build.sh && mv dist/coxdragon.apk dist/coxdragon-36.apk
           sh scripts/build.sh
           rm -f "$RUNNER_TEMP/key.json"
-          # 证书指纹：正式包必须是 README 里写的那一张（B7:03…8F:E0），对不上就别出包——
+          # 证书指纹：正式包必须是 coxdragon 发布钥匙那一张（93:F4:D8…B9:FB），对不上就别出包——
           # 钥匙被意外换掉时不会静默发出别的证书签的「正式包」（审查 v0.5.7 L12）。测试包只打出来看
-          EXPECT=b70361595dd3d8d704dd210ed596fc577014ce2272884fb6980bf69623338fe0
-          for a in dist/cccodroid.apk dist/cccodroid-36.apk; do
+          EXPECT=93f4d801b104b160140644b9d13109756d20cf8cc1d875fec58ef93835b2b9fb
+          for a in dist/coxdragon.apk dist/coxdragon-36.apk; do
             got=$("$BT/apksigner" verify --print-certs "$a" | sed -n 's/.*certificate SHA-256 digest: //p' | head -1)
             echo "$a  $got"
             if [ "$SIGNED" = release ] && [ "$got" != "$EXPECT" ]; then echo "::error::$a 的签名证书不是正式钥匙（$got）"; exit 1; fi
@@ -97,8 +97,8 @@ jobs:
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4.6.2
         with:
-          name: cccodroid-${{ env.SIGNED }}-${{ env.SHORT_SHA }}
+          name: coxdragon-${{ env.SIGNED }}-${{ env.SHORT_SHA }}
           path: |
-            dist/cccodroid.apk
-            dist/cccodroid-36.apk
+            dist/coxdragon.apk
+            dist/coxdragon-36.apk
           retention-days: 30

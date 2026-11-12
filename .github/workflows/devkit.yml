@@ -22,6 +22,9 @@ permissions:
 
 jobs:
   build:
+    # 新仓库在配好 devkit-release 环境与 INDEX_SIGNING_KEY 之前不跑：设仓库变量 DEVKIT_CI=1 才启用。
+    # 否则推 devkit-* tag 只会得到一次必然失败的运行（没有钥匙，签不了 modules.json）。钥匙绝不游离在环境之外。
+    if: vars.DEVKIT_CI == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 150
     # 签名钥匙 INDEX_SIGNING_KEY 只存在这个 Environment 里（不放仓库级 secret）：每次跑都要维护者在 Actions 页点批准，
