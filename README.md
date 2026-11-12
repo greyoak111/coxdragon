@@ -110,15 +110,15 @@ Early alpha. The protocol and login path have been exercised against the officia
 - [x] `thread/start`, `thread/list`, `thread/resume`, `turn/start`, `turn/interrupt`
 - [x] map `item/*` / `turn/*` notifications into the workbench UI
 - [x] approval cards and JSON-RPC responses
-- [ ] a dedicated `devkit-2026.11` build for `cox.dragon` (in progress)
+- [x] a dedicated `devkit-2026.11.12` build for `cox.dragon`
+- [x] a separate `coxdragon-components` market (recipes, built packages, signed index)
 - [ ] a real end-to-end turn with a logged-in ChatGPT account on device
 - [ ] targetSdk 36 validation
 - [ ] screenshots and a short video
 
-Until the `cox.dragon` devkit is published, first install points at the upstream
-cccodroid devkit. Do not use that combination for real work: its first-run scripts
-contain the old package prefix. The pin will be switched to the coxdragon devkit
-release before the first public APK.
+First install uses the `devkit-2026.11.12` release published from this repository.
+Components come from the separate `coxdragon-components` market, built against the
+same devkit base; the cccodroid market is not used.
 
 ## Build
 

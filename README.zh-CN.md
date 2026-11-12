@@ -98,14 +98,14 @@ app-server 的 stdout 按行解析。服务端发起的请求
 - [x] `thread/start`、`thread/list`、`thread/resume`、`turn/start`、`turn/interrupt`
 - [x] 把 `item/*` / `turn/*` 通知映射到工作台界面
 - [x] 审批卡片与 JSON-RPC 应答
-- [ ] 给 `cox.dragon` 单独打一版 `devkit-2026.11`（进行中）
+- [x] 给 `cox.dragon` 单独打了 `devkit-2026.11.12`
+- [x] 独立的 `coxdragon-components` 组件市场（配方、组件包、签名索引）
 - [ ] 用真实 ChatGPT 账号在真机上跑通一整轮
 - [ ] targetSdk 36 验证
 - [ ] 截图和短视频
 
-在 `cox.dragon` 工具包发布之前，首装还指着上游 cccodroid 的工具包。**不要拿这个组合
-干正事**：它的 first-run 脚本里写死了旧包名前缀。第一个公开 APK 之前会把钉子切到
-coxdragon 自己的工具包 Release。
+首装用本仓库发布的 `devkit-2026.11.12`；组件来自独立的 `coxdragon-components` 市场，
+按同一个工具包底座构建，不再使用 cccodroid 的市场。
 
 ## 构建
 

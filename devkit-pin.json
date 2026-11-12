@@ -1,26 +1,26 @@
 {
- "tag": "devkit-2026.10.28",
- "base": "https://github.com/greyoak111/cccodroid/releases/download/devkit-2026.10.28/",
+ "tag": "devkit-2026.11.12",
+ "base": "https://github.com/greyoak111/coxdragon/releases/download/devkit-2026.11.12/",
  "target": "cox.dragon",
  "compat": 1,
  "gz": {
-  "file": "devkit-cc.codroid.tar.gz",
-  "sha256": "3768afcf79a7cfb3b8db27d9d1d2951aaaade4caa79d5a1179cf495ebd14c67d",
-  "bytes": 687011283
+  "file": "devkit-cox.dragon.tar.gz",
+  "sha256": "78c411a37921e812c80611deba682397007c12eca2f3a6336d04430363f3c7c1",
+  "bytes": 670153734
  },
  "tar": {
-  "file": "devkit-cc.codroid.tar",
-  "sha256": "243b4012f91d30f618e4f4d2c3f8021b924d5f298d31dd2e7e333973106e86cb",
-  "bytes": 1897737728
+  "file": "devkit-cox.dragon.tar",
+  "sha256": "e1c1c6f5f50ed54cb3be96ad49df6b4e29e0d9f15e06d68866dd7e7e06df25ed",
+  "bytes": 1901095424
  },
  "lock": {
   "file": "devkit.lock.json",
-  "sha256": "59fdc65aa72f3376eadf2314d24d6ff81580a1786169b2fba569c414f77bed6b",
-  "bytes": 113080
+  "sha256": "2f106c877caac756708a0081fbaa66f9bc21d7babf76939c6abc5897ae3d7b85",
+  "bytes": 113609
  },
  "modules": {
   "file": "modules.json",
-  "sha256": "5a0521833f73bd7b8e5fa423ce4f7d96180afbacff9fa9710313bd87fcc64fcd",
-  "bytes": 72726
+  "sha256": "41aa512f722cce255a997605392c2a645241c6298f3c1ca7d8c6cab588f0c1a1",
+  "bytes": 72896
  }
 }

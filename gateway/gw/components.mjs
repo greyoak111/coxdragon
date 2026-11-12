@@ -29,10 +29,10 @@ import { writeAtomic } from "./statefile.mjs";
 //   · 状态：absent / downloading / verifying / installing / ok / outdated（工具包变了）/ damaged / error
 // 只在 cccodroid（有 Termux 前缀）上可用；开发端没有 $PREFIX，接口返回 supported:false。
 const COMP_INDEX = process.env.CCAPP_COMPONENTS_INDEX ||
-  "https://github.com/greyoak111/cccodroid/releases/download/components/components.json";
-// 社区组件（v0.2.0 起）：greyoak111/cccodroid-components 仓库，CI 按配方打包、出签名索引
+  "https://github.com/greyoak111/coxdragon-components/releases/download/index/official.json";
+// 社区组件：greyoak111/coxdragon-components 仓库，CI 按配方打包、出签名索引。coxdragon 不复用 cccodroid 的市场。
 const COMP_COMMUNITY_INDEX = process.env.CCAPP_COMPONENTS_COMMUNITY_INDEX ||
-  "https://github.com/greyoak111/cccodroid-components/releases/download/index/components.json";
+  "https://github.com/greyoak111/coxdragon-components/releases/download/index/components.json";
 // 索引签名公钥（ed25519）：每份索引旁边都有 <索引>.sig（对原始字节的签名，base64），验不过整份不用。
 // 索引里有每个包的 sha256，所以验了索引就等于验了包。私钥只在发布机和组件仓库的 CI 密钥里。
 const COMP_INDEX_PUBKEY = crypto.createPublicKey(
@@ -108,9 +108,9 @@ function compFetch(src, quick) {
       (e, so, se) => (e ? reject(new Error(String(se || e.message).trim().slice(0, 200))) : resolve(so)));
   });
 }
-// 备用源：cccodroid.net 镜像了两份索引（连同 .sig，逐字节同 GitHub）。主地址拉不到才用；照样验签，镜像不需要被信任
-const COMP_INDEX_MIRROR = { preset: process.env.CCAPP_COMPONENTS_INDEX_MIRROR || "https://cccodroid.net/components/official/components.json",
-  community: process.env.CCAPP_COMPONENTS_COMMUNITY_INDEX_MIRROR || "https://cccodroid.net/components/community/components.json" };   // 环境变量只给测试用
+// 备用源：coxdragon 暂时没有官网镜像，默认不设（GitHub 直连）。环境变量仍可给测试或以后自建镜像用
+const COMP_INDEX_MIRROR = { preset: process.env.CCAPP_COMPONENTS_INDEX_MIRROR || "",
+  community: process.env.CCAPP_COMPONENTS_COMMUNITY_INDEX_MIRROR || "" };   // 环境变量只给测试用
 /** 取一份索引并验签。没签名、签名不对一律拒绝；只有网关启动时带了 CCAPP_COMPONENTS_ALLOW_UNSIGNED=1（测试用）才放行。
  *  以前看私有目录里有没有 allow-unsigned 文件，应用身份跑的任何程序（包括模型自己）touch 一下就把签名关了（审查 v0.5.9 D2） */
 const allowUnsigned = () => process.env.CCAPP_COMPONENTS_ALLOW_UNSIGNED === "1";
@@ -141,7 +141,7 @@ async function compFetchIndex(src, mirror) {
   return { ...parsed, signed: !!ok, _raw: String(body), _sig: sig && sig.length === 64 ? sig.toString("base64") : "" };
 }
 
-/** 两个来源合并：预置（cccodroid 仓库）在前，社区（cccodroid-components）在后；id 撞了以预置为准。
+/** 两个来源合并：预置（official.json，目前为空）在前，社区（coxdragon-components）在后；id 撞了以预置为准。
  *  拉索引与读磁盘缓存都走这里，合并口径只有一份。 */
 function compMerge(got) {
   const components = {};
@@ -775,13 +775,9 @@ function compClearStage(id) {
   for (const n of list) if (n === id || mine.test(n)) fs.rmSync(path.join(stage, n), { recursive: true, force: true });
 }
 
-// 组件包的镜像地址：官网生成器把两份签名索引里的包同步到 dl.cccodroid.net/components/<official|community>/<文件名>
+// 组件包的镜像地址：coxdragon 暂时没有官网镜像，直接走索引里的 GitHub Release 地址
 let compMirrorFirst = false;
-function compMirrorUrl(b) {
-  const asset = b.asset || String(b.url || "").split("/").pop();
-  if (!/^https:\/\/github\.com\//.test(b.url || "") || !/^[\w.+-]+$/.test(asset)) return "";
-  return `https://dl.cccodroid.net/components/${b.source === "community" ? "community" : "official"}/${asset}`;
-}
+function compMirrorUrl() { return ""; }
 
 async function compRunInstall(id, b, job) {
   const stage = path.join(COMP_DIR, ".staging"), gz = path.join(stage, `${id}-${b.sha256.slice(0, 12)}.tar.gz`), tree = path.join(stage, id);
@@ -795,14 +791,14 @@ async function compRunInstall(id, b, job) {
   if (!fs.existsSync(gz)) {
     const part = gz + ".part";
     {
-      // 几个来源轮流试：GitHub 与 dl.cccodroid.net 镜像（逐字节同一份，内容一律按签名索引里的 sha256 把关，镜像不需要被信任）。
+      // 几个来源轮流试：GitHub、可选镜像与 gh-proxy（内容一律按签名索引里的 sha256 把关，镜像不需要被信任）。
       // 同一个 .part 接着续传；哪边成功了下回先试哪边。gh-proxy 只排最后兜底。分段并行下载见 pget.mjs
-      const urls = (compMirrorFirst ? [compMirrorUrl(b), b.url] : [b.url, compMirrorUrl(b)]).concat(ghProxy(b.url));
+      const urls = (compMirrorFirst ? [compMirrorUrl(b), b.url] : [b.url, compMirrorUrl(b)]).filter(Boolean).concat(ghProxy(b.url));
       const srcs = urls.filter(Boolean);
       let lastErr;
       for (let i = 0; i < 4 && !job.cancelled; i++) {
         const url = srcs[i % srcs.length];
-        job.via = url === b.url ? "GitHub" : url.startsWith("https://gh-proxy.com/") ? "gh-proxy.com" : "dl.cccodroid.net";
+        job.via = url === b.url ? "GitHub" : url.startsWith("https://gh-proxy.com/") ? "gh-proxy.com" : "镜像";
         const err = await pget({ curl: path.join(PREFIX, "bin", "curl"), url, file: part, total: b.bytes,
           onProgress: (d) => { job.done = d; }, cancelled: () => !!job.cancelled });
         if (!err) { lastErr = null; if (url === b.url || url === compMirrorUrl(b)) compMirrorFirst = url !== b.url; break; }

@@ -1051,7 +1051,7 @@ window.I18N_DICT["fr"] = {
   "没在加载的消息里找到「{q}」": "« {q} » introuvable dans les messages chargés",
   "选一个已经下好的工具包文件来安装": "Installer depuis un fichier de boîte à outils déjà téléchargé",
   "本地文件…": "Fichier local…",
-  "从本地文件安装开发工具包？\n\n选一个 devkit-cox.dragon.tar.gz（或 .tar），可以在 GitHub 发布页或 cccodroid.net 下载。装之前会核对它是不是已发布的版本；装的时候暂停服务 1–2 分钟。\n你用 pip / npm -g 装进工具包的东西会被保留。": "Installer la boîte à outils depuis un fichier local ?\n\nChoisissez un devkit-cox.dragon.tar.gz (ou .tar), téléchargeable depuis la page des versions GitHub ou cccodroid.net. Il est comparé aux versions publiées avant l’installation ; le service est suspendu 1 à 2 minutes pendant l’installation.\nCe que vous avez installé avec pip / npm -g est conservé.",
+  "从本地文件安装开发工具包？\n\n选一个 devkit-cox.dragon.tar.gz（或 .tar），可以在 GitHub 发布页下载。装之前会核对它是不是已发布的版本；装的时候暂停服务 1–2 分钟。\n你用 pip / npm -g 装进工具包的东西会被保留。": "Installer la boîte à outils depuis un fichier local ?\n\nChoisissez un devkit-cox.dragon.tar.gz (ou .tar), téléchargeable depuis la page des versions GitHub ou github.com/greyoak111/coxdragon/releases. Il est comparé aux versions publiées avant l’installation ; le service est suspendu 1 à 2 minutes pendant l’installation.\nCe que vous avez installé avec pip / npm -g est conservé.",
   "特权命令记录": "Journal des commandes privilégiées",
   "还没有经 priv 执行过命令": "Aucune commande n’a encore été exécutée via priv",
   "最近 {n} 条（最新的在前）。只记在本机，不上传。": "{n} dernières entrées (les plus récentes d’abord). Conservées sur cet appareil uniquement, jamais envoyées.",
