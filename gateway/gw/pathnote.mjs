@@ -60,7 +60,7 @@ export function putPathNote(sid, n) {
 
 /** 常驻规则：带上当前目录举例，模型对「全路径」才有概念 */
 export function previewHint(cwd) {
-  const eg = path.join(cwd || "/data/user/0/cc.codroid/files/home/workspace", "index.html");
+  const eg = path.join(cwd || "/data/user/0/cox.dragon/files/home/workspace", "index.html");
   return "In this app, file paths you mention in a reply are tappable and open in a file viewer, where .html files render as a live preview (relative CSS, JS and images load, and it reloads when the file changes). " +
     `Only full absolute paths are tappable: whenever you mention a file you created or changed, write its whole path starting with / (for example \`${eg}\`), never just a file name or a path relative to your working directory — the user doesn't see your working directory. ` +
     "Write the path as plain text (inline code is fine); don't wrap it in a Markdown link or a file:// URL — the app turns it into a link itself. " +

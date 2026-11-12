@@ -507,7 +507,7 @@
  "boundaries": [
   {
    "kind": "region",
-   "label": "cc.codroid app sandbox (writes only its private dirs)",
+   "label": "cox.dragon app sandbox (writes only its private dirs)",
    "wraps": [
     "ui",
     "svc",

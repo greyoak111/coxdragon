@@ -12,7 +12,7 @@ on:
     inputs:
       target:
         description: 包名（10 个字符）
-        default: cc.codroid
+        default: cox.dragon
       tag:
         description: 要发布的 tag（留空只构建不发布；测试版用 testkit-YYYY.MM.DD）
         default: ''
@@ -28,7 +28,7 @@ jobs:
     # 别的工作流引用不到它。环境的部署规则只放行 devkit-* tag 和 test 分支（测试工具包从那里手动跑）（审计 M-2b）
     environment: devkit-release
     env:
-      T: ${{ inputs.target || 'cc.codroid' }}
+      T: ${{ inputs.target || 'cox.dragon' }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4.4.0
 
@@ -84,7 +84,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ inputs.tag }}"; [ -n "$TAG" ] || TAG="${GITHUB_REF#refs/tags/}"
-          case "$T:$TAG" in cc.codroid:devkit-*) PRE="" ;; cc.codroid:*) echo "正式包名的 tag 要以 devkit- 开头"; exit 1 ;;
+          case "$T:$TAG" in cox.dragon:devkit-*) PRE="" ;; cox.dragon:*) echo "正式包名的 tag 要以 devkit- 开头"; exit 1 ;;
             *:devkit-*) echo "别的包名不能用 devkit- 开头的 tag（正式版会挑到它）"; exit 1 ;; *) PRE="--prerelease" ;; esac
           GZ_SHA=$(node -p "require('./out/devkit.lock.json').gz.sha256")
           SNAP=$(node -p "require('./out/devkit.lock.json').snapshot")

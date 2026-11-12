@@ -1,12 +1,21 @@
-cccodroid
+coxdragon
 Copyright 2026 greyoak111 and contributors
 
-This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+coxdragon is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See LICENSE for the full text.
 
-It is a third-party launcher and is not affiliated with or endorsed by Anthropic.
-Claude Code is proprietary software of Anthropic PBC; it is NOT distributed with
-this product. It is downloaded by the user from Anthropic's official channel and
-run unmodified, subject to Anthropic's terms.
+coxdragon is a fork of cccodroid (https://github.com/greyoak111/cccodroid),
+Copyright 2026 greyoak111 and contributors, which is licensed under the Apache
+License, Version 2.0. A copy of that license is kept in LICENSE-APACHE-2.0,
+and the upstream copyright and attribution notices are retained.
+
+It is a third-party launcher and is not affiliated with or endorsed by
+Anthropic or OpenAI. Claude Code is proprietary software of Anthropic PBC;
+Codex is open-source software of OpenAI. Neither is bundled with this
+product: the user downloads them from their official channels and runs them
+unmodified, subject to their respective terms.
 
 Bundled third-party components:
   - Shizuku-API 13.1.5 (MIT) — third_party/shizuku/LICENSE
@@ -18,9 +27,9 @@ Bundled third-party components:
     build recipe links in third_party/glibc/README.md
   - 7-Zip 26.06 by Igor Pavlov (GNU LGPL-2.1-or-later, parts BSD; RAR decoding
     under the unRAR license restriction), built from unmodified upstream source
-    and shipped as lib/arm64-v8a/libcc7zz.so — third_party/7zip/ (License.txt,
-    copying.txt, unRarLicense.txt; source and build recipe in README.md)
+  - The development toolkit is taken from the official Termux repositories;
+    each component keeps its own license (including GPL). The Codex app-server
+    binary is downloaded from the official openai/codex release and is not
+    bundled with this product.
 
-The developer toolkit (devkit) released alongside this project consists of
-unmodified Termux packages (path prefix rewritten in place), each distributed
-under its own license; see devkit.lock.json / SBOM.tsv in each devkit release.
+Corresponding source for coxdragon: https://github.com/greyoak111/coxdragon

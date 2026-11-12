@@ -186,7 +186,7 @@ function screencapOnce(shot) {
       // 直接走 priv 的套接字（协议见 Priv.java / priv.mjs）：界面领来的一次性截屏码放在请求里，不进命令行和环境变量
       const out = [], err = [];
       let buf = Buffer.alloc(0), code = null, got = 0;
-      const s = net.connect({ path: process.env.CCAPP_PRIV_SOCK || "/data/data/cc.codroid/files/.priv.sock" }, () => {
+      const s = net.connect({ path: process.env.CCAPP_PRIV_SOCK || "/data/data/cox.dragon/files/.priv.sock" }, () => {
         s.write(JSON.stringify({ op: "exec", argv: ["/system/bin/sh", "-c", "screencap -p"], cwd: "/", shot: String(shot || "") }) + "\n");
         s.write(Buffer.from([0, 0, 0, 0, 0]));          // 没有 stdin：空帧
       });

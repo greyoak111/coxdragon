@@ -8,7 +8,7 @@ import { SETTINGS } from "../gw/settings-store.mjs";
 
 test("密钥、凭据、设备敏感工具：要问", () => {
   const hit = [
-    ["Read", { file_path: "/data/user/0/cc.codroid/files/home/.gateway-token" }],
+    ["Read", { file_path: "/data/user/0/cox.dragon/files/home/.gateway-token" }],
     ["Read", { file_path: "/x/home/ccapp-providers.json" }],
     ["Read", { file_path: "/x/home/.cache/ccapp-key" }],
     ["Bash", { command: "cat ~/.ssh/id_ed25519" }],
@@ -60,17 +60,17 @@ test("改提示词、钩子、会话记录：写要问，读不问；CLAUDE.md �
     ["Write", { file_path: "/proj/.claude/agents/runner.md" }],
     ["Write", { file_path: "/proj/.claude/hooks/unlock.sh" }],
     ["Bash", { command: "echo {} > ~/ccapp-project-trust.json" }],
-    ["Edit", { file_path: "/data/user/0/cc.codroid/files/app/gw/integrity.mjs" }],
-    ["Bash", { command: "node self-patch.mjs /data/user/0/cc.codroid/files/app/server.mjs" }],
+    ["Edit", { file_path: "/data/user/0/cox.dragon/files/app/gw/integrity.mjs" }],
+    ["Bash", { command: "node self-patch.mjs /data/user/0/cox.dragon/files/app/server.mjs" }],
     ["Bash", { command: "claude mcp add -s user sys -- node /sdcard/x/mcp-sys.mjs" }],
     ["Bash", { command: "cd ~ && claude  config set -g disableAllHooks true" }],
     ["Bash", { command: "claude plugin install evil@market" }],
-    ["Bash", { command: "cat core.md >> /data/user/0/cc.codroid/files/app/TOOLS.md" }],
-    ["Write", { file_path: "/data/user/0/cc.codroid/files/app/archive/spec.zh.md" }],
+    ["Bash", { command: "cat core.md >> /data/user/0/cox.dragon/files/app/TOOLS.md" }],
+    ["Write", { file_path: "/data/user/0/cox.dragon/files/app/archive/spec.zh.md" }],
     ["Bash", { command: "cp x.js ~/../app/web/app/03-perm-status.js" }],
     ["Bash", { command: "echo '{}' > $HOME/.cccodroid-env.json" }],
-    ["Bash", { command: "cp evil.so /data/user/0/cc.codroid/files/gw/glibc/libc.so.6" }],
-    ["Write", { file_path: "/data/user/0/cc.codroid/files/gw/libssl.so.3" }],
+    ["Bash", { command: "cp evil.so /data/user/0/cox.dragon/files/gw/glibc/libc.so.6" }],
+    ["Write", { file_path: "/data/user/0/cox.dragon/files/gw/libssl.so.3" }],
     ["Bash", { command: "cp x ~/../gw/node" }],
   ];
   for (const [tool, inp] of hit) assert.match(judge(tool, inp)?.cat || "", /^prompt:/, `${tool} ${JSON.stringify(inp)}`);
@@ -85,9 +85,9 @@ test("改提示词、钩子、会话记录：写要问，读不问；CLAUDE.md �
     ["Bash", { command: "claude mcp list" }],
     ["Bash", { command: "claude --version" }],
     ["Write", { file_path: "/sdcard/files/apple/notes.md" }],
-    ["Read", { file_path: "/data/user/0/cc.codroid/files/app/TOOLS.md" }],
-    ["Write", { file_path: "/data/user/0/cc.codroid/files/home/workspace/gw/main.go" }],
-    ["Bash", { command: "ls /data/user/0/cc.codroid/files/gwx" }],
+    ["Read", { file_path: "/data/user/0/cox.dragon/files/app/TOOLS.md" }],
+    ["Write", { file_path: "/data/user/0/cox.dragon/files/home/workspace/gw/main.go" }],
+    ["Bash", { command: "ls /data/user/0/cox.dragon/files/gwx" }],
   ]) assert.equal(judge(tool, inp), null, `${tool} ${JSON.stringify(inp)}`);
 });
 

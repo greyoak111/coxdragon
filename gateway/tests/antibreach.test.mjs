@@ -53,10 +53,10 @@ test("guard 新规则：安全模式开关、甩掉这一层再起 claude 要问
     "claude \"--bare\" -p x", "claude '--settings' '{}' -p x", "claude \"--permission-mode=bypassPermissions\" -p x", "claude -p --allowedTools Bash x",
     "rm ~/.local/share/cccodroid/claude/2.1.311/manifest.json.sig", "ln -sfn /x ~/.local/share/cccodroid/claude/current"])
     assert.ok(judge("Bash", { command: c }), c);
-  assert.ok(judge("Write", { file_path: "/data/user/0/cc.codroid/files/home/.claude/CLAUDE.md" }));
-  assert.equal(judge("Write", { file_path: "/data/user/0/cc.codroid/files/home/workspace/.claude/CLAUDE.md" }), null, "项目的不问");
-  assert.equal(judge("Edit", { file_path: "/data/user/0/cc.codroid/files/home/workspace/CLAUDE.md" }), null);
-  assert.equal(judge("Read", { file_path: "/data/user/0/cc.codroid/files/home/.claude/CLAUDE.md" }), null, "读不问");
+  assert.ok(judge("Write", { file_path: "/data/user/0/cox.dragon/files/home/.claude/CLAUDE.md" }));
+  assert.equal(judge("Write", { file_path: "/data/user/0/cox.dragon/files/home/workspace/.claude/CLAUDE.md" }), null, "项目的不问");
+  assert.equal(judge("Edit", { file_path: "/data/user/0/cox.dragon/files/home/workspace/CLAUDE.md" }), null);
+  assert.equal(judge("Read", { file_path: "/data/user/0/cox.dragon/files/home/.claude/CLAUDE.md" }), null, "读不问");
   for (const c of ["claude --version", "claude -p 'hello'", "claude mcp list", "echo claude is nice --bare-metal"])
     assert.equal(judge("Bash", { command: c }), null, c);
 });

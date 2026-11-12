@@ -507,7 +507,7 @@
  "boundaries": [
   {
    "kind": "region",
-   "label": "cc.codroid 应用沙箱（只写私有目录）",
+   "label": "cox.dragon 应用沙箱（只写私有目录）",
    "wraps": [
     "ui",
     "svc",

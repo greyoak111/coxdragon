@@ -1,0 +1,2556 @@
+package cox.dragon;
+
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.PowerManager;
+import android.provider.Settings;
+import android.view.Gravity;
+import android.view.View;
+import android.webkit.ValueCallback;
+import android.webkit.WebChromeClient;
+import android.webkit.WebSettings;
+import android.webkit.WebView;
+import android.webkit.WebViewClient;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.concurrent.CountDownLatch;
+
+/**
+ * 启动流程：存储权限 → 开发工具包 → 官方 Claude Code → 网关代码 → 前台服务 → 界面。
+ * 每一步都能重入：装到一半被杀，下次打开从缺的那一步接着来。
+ */
+public class MainActivity extends Activity {
+
+    static final String ACTION_APPLY_DEVKIT = "cox.dragon.APPLY_DEVKIT";
+    // 内部动作的口令：MainActivity 是导出的（启动器、分享要用），别的应用也能发这些 action 让我们去下 650MB 工具包、
+    // 重装 APK（审查 v0.5.5 Android-M2）。我们自己发的 Intent / PendingIntent 都带上这个口令，对不上的一律不理。
+    // 口令不再明文落盘（0.6.10 审计 200-1-06）：由 Android Keystore 里不可导出的 HMAC 密钥派生，跨进程重启 / 应用更新都不变
+    // （通知里的 PendingIntent 才一直有效）。Keystore 用不了就退回「本次启动随机、只放内存」—— 那种情况下旧通知点了不响应，
+    // 但口令无论如何不写回磁盘。旧版本存在 shared_prefs 里的明文 k 启动时删掉
+    static final String IK = "cc.ik";
+    private static final String IK_ALIAS = "cc-ik";
+    private static volatile String ikCache;
+    static String intentKey(android.content.Context c) {
+        if (ikCache != null) return ikCache;
+        android.content.SharedPreferences sp = c.getSharedPreferences("intent", MODE_PRIVATE);
+        if (sp.contains("k")) sp.edit().remove("k").commit();   // 旧版的明文口令作废
+        String k = ikFromKeystore();
+        if (k == null) {
+            byte[] b = new byte[24]; new java.security.SecureRandom().nextBytes(b);
+            StringBuilder h = new StringBuilder(); for (byte x : b) h.append(String.format("%02x", x & 0xff));
+            k = h.toString();
+        }
+        return ikCache = k;
+    }
+    /** 从 Keystore 的 HMAC 密钥派生口令；设备不支持 / 密钥损坏时返回 null，由调用方退回内存随机 */
+    private static String ikFromKeystore() {
+        try {
+            java.security.KeyStore ks = java.security.KeyStore.getInstance("AndroidKeyStore");
+            ks.load(null);
+            javax.crypto.SecretKey key = (javax.crypto.SecretKey) ks.getKey(IK_ALIAS, null);
+            if (key == null) {
+                javax.crypto.KeyGenerator g = javax.crypto.KeyGenerator.getInstance(
+                    android.security.keystore.KeyProperties.KEY_ALGORITHM_HMAC_SHA256, "AndroidKeyStore");
+                g.init(new android.security.keystore.KeyGenParameterSpec.Builder(
+                    IK_ALIAS, android.security.keystore.KeyProperties.PURPOSE_SIGN).build());
+                key = g.generateKey();
+            }
+            javax.crypto.Mac m = javax.crypto.Mac.getInstance("HmacSHA256");
+            m.init(key);
+            byte[] d = m.doFinal("cc.ik.v1".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder h = new StringBuilder();
+            for (byte x : d) h.append(String.format("%02x", x & 0xff));
+            return h.toString();
+        } catch (Throwable e) { return null; }
+    }
+    static Intent internal(android.content.Context c, String action) {
+        return new Intent(c, MainActivity.class).setAction(action).putExtra(IK, intentKey(c));
+    }
+    private boolean fromUs(Intent i) {
+        String k = i.getStringExtra(IK);
+        return k != null && java.security.MessageDigest.isEqual(k.getBytes(), intentKey(this).getBytes());
+    }
+    static final String ACTION_UPDATE = "cox.dragon.UPDATE";
+    /** 设置页「恢复初始设置」：网关只能请求弹框（Priv 的 factory_reset），执行要用户在这里点 */
+    static final String ACTION_FACTORY_RESET = "cox.dragon.FACTORY_RESET";
+    static final String ACTION_SHIZUKU = "cox.dragon.SHIZUKU";
+    static final String ACTION_A11Y_OK = "cox.dragon.A11Y_OK";
+    static final String ACTION_PRIV_OK = "cox.dragon.PRIV_OK";
+    static final String ACTION_CONSENT = "cox.dragon.CONSENT";
+    /** 配对通知的 fullScreenIntent：只为让通知常驻顶部，真被拉起（锁屏时）也什么都不做 */
+    static final String ACTION_SHIZUKU_NOOP = "cox.dragon.SHIZUKU_NOOP";
+    /** 主界面（聊天）在前台吗：通知只在用户没盯着聊天时发 */
+    static volatile boolean visible;
+    /** 本应用有界面在前台吗（主界面或独立浏览器）：静默更新、读剪贴板这类按「用户在不在用本应用」判断（11-04 报告 A4） */
+    static boolean appForeground() { return visible || BrowserActivity.visible; }
+
+    private Env env;
+    private volatile boolean booted;
+    private Intent pending;
+    private final Handler ui = new Handler(Looper.getMainLooper());
+    private FrameLayout root;
+    private TextView log;
+    private ScrollView logScroll;
+    private ProgressBar bar;
+    private TextView stat;
+    /** 平时启动（工具包已装好）：只有居中的标识和一行小字，安装页的日志藏在 setupCol 里，出错 / 要下载 / 要选东西时才展开 */
+    private View splash;
+    private Mark splashMark;
+    private TextView splashStat;
+    private LinearLayout setupCol;
+    /** 交给网页时盖在 WebView 上的标识层，页面加载完再收起（不然中间有一下空白） */
+    private View handoff;
+    private WebView web;
+    /** 折叠屏的折痕（没有折痕的设备上一直是空的），换算成页面坐标交给网页，见 pushFold */
+    private Fold fold;
+    /** 宽屏时嵌在右侧工作区的浏览器（null = 没开）。位置、显隐全听页面的（layout.js → CCApp.paneBounds） */
+    private BrowserPane pane;
+    private volatile boolean paneCanBack;
+    private ValueCallback<Uri[]> fileCb;
+    /** 每次打开选择器分配一个批次号（BUG-A06）：后台拷贝完成时带回去，
+     *  网页据此把迟到的大文件还给当初那次选择器打开的草稿，而不是当前（可能已经换过的）草稿 */
+    private static final java.util.concurrent.atomic.AtomicLong PICK_SEQ = new java.util.concurrent.atomic.AtomicLong();
+    private volatile long pickId;
+    /** 「保存到」：等系统文件面板回来时要复制的源文件。static：挑位置期间界面被回收重建也还在 */
+    private static File savePending;
+    private static java.lang.ref.WeakReference<MainActivity> saveOwner;
+    /** 安装失败时露出来；点了从头再走 boot（每一步都会跳过已经完成的部分） */
+    private android.widget.Button retry, stuck;
+    /** 首装时「工具包从哪装」的选择面板（安装页上，平时藏着） */
+    private LinearLayout chooser, chooserFoot;
+    private ScrollView chooserScroll;
+    static final int REQ_DEVKIT = 10;
+    static final int REQ_CAMERA = 11;     // 7 网页选文件、8 保存到、9 浏览器窗格选文件、10 首装选工具包
+    /** 首装选本地文件时，boot 线程在这等系统文件选择器回来；null = 是更新卡片发起的 */
+    private volatile CountDownLatch pickWait;
+    private volatile Uri picked;
+
+    @Override protected void onCreate(Bundle b) {
+        Tr.init(this);
+        // 安装页、空白 WebView 都按界面里选的外观（浅 / 深 / 跟随系统）上色，别再"界面浅色、启动页深色"
+        setTheme(uiDark() ? android.R.style.Theme_Material_NoActionBar : android.R.style.Theme_Material_Light_NoActionBar);
+        super.onCreate(b);
+        // 启动画面结束就直接拿掉，不做淡出：淡出那半秒它压在安装页上，深浅不一致时就是一块颜色不对的区域
+        if (Build.VERSION.SDK_INT >= 31) getSplashScreen().setOnExitAnimationListener(v -> v.remove());
+        syncSplash();
+        env = new Env(this);
+        buildSetupUi(env.devkitReady() && !secondaryUser(this));
+        fold = new Fold(this, f -> pushFold());
+        fold.start();
+        pending = getIntent();
+        java.util.List<String> want = new java.util.ArrayList<>();
+        // targetSdk ≥ 30 时这两个存储权限已经不管用（分区存储），改由 askAllFiles 要「所有文件访问」，不挡启动
+        if (getApplicationInfo().targetSdkVersion < 30 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            want.add(Manifest.permission.READ_EXTERNAL_STORAGE);
+            want.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        }
+        if (want.isEmpty()) boot();
+        else requestPermissions(want.toArray(new String[0]), 1);
+    }
+
+    @Override protected void onDestroy() {
+        if (fold != null) fold.stop();
+        // 放掉这一个界面占着的东西（审查 #105 06-008）：窗格的 500ms 轮询、两个 WebView、网页的选文件回调、
+        // 静态回调里捕获的本界面（新界面 showWeb 时会换成它自己的，这里只清还指着自己的）
+        ui.removeCallbacksAndMessages(null);
+        closePane(false);
+        if (fileCb != null) { try { fileCb.onReceiveValue(null); } catch (Exception ignored) {} fileCb = null; }
+        if (web != null) { try { ((android.view.ViewGroup) web.getParent()).removeView(web); } catch (Exception ignored) {} web.destroy(); web = null; }
+        if (Env.onBoot == myOnBoot) Env.onBoot = null;
+        if (GatewayService.onSquat == mySquat) GatewayService.onSquat = null;
+        super.onDestroy();
+    }
+    private java.util.function.Consumer<String> myOnBoot;
+    private Runnable mySquat;
+
+    @Override public void onRequestPermissionsResult(int code, String[] p, int[] r) {
+        if (code == 1) boot();   // 没给也照样跑：工作区退回私有目录
+        else if (code == 2) askAllFiles();   // 通知权限问完，接着问共享存储（两个系统框别叠在一起）
+    }
+
+    /**
+     * 装在分身 / 第二空间 / 安全文件夹 / 工作资料里：私有目录是 /data/user/<N>/cox.dragon，
+     * 比等长改写的 21 字节长，工具链里写死的 /data/data/cox.dragon 又指向主用户、跨用户被拒，跑不起来。
+     * files/.force-secondary-user 存在时也当成这种情况（调试界面用）。
+     */
+    static boolean secondaryUser(Context c) {
+        String fp = c.getFilesDir().getAbsolutePath();
+        return android.os.Process.myUid() / 100000 != 0
+            || !(fp.startsWith("/data/user/0/") || fp.startsWith("/data/data/"))
+            || new File(c.getFilesDir(), ".force-secondary-user").exists();
+    }
+
+    private void boot() {
+        if (secondaryUser(this)) {
+            say(Tr.t("✗ cccodroid 只能装在手机的主空间里。"));
+            say(Tr.t("分身、第二空间、安全文件夹、工作资料里的应用目录路径不同，开发工具包跑不起来（Termux 也有同样的限制）。请卸载这里的 cccodroid，在主空间安装。"));
+            ui.post(() -> stuck.setVisibility(View.VISIBLE));
+            return;
+        }
+        // 先起前台服务再干活：安装要下载几百 MB，期间用户一切走，
+        // 没有前台服务的进程几秒内就会被冻结/回收（实测切一下前台下载就断了）。
+        GatewayService.start(this);
+        new Thread(() -> {
+            try {
+                Installer ins = new Installer(env, new Installer.Progress() {
+                    public void step(String m) { say(m); }
+                    public void bytes(long d, long t) { progress(d, t); }
+                });
+                // 上次换工具包被打断（APK 升级重启、进程被杀）：先收拾到一致状态，再判断装没装好。
+                // 只在真有残局时才停网关：界面被系统回收后重新打开也会走到这里，那时网关可能正在跑任务，
+                // 无条件停一下就把用户的任务杀了。正在替换工具包（另一个界面实例发起的）时也别插手
+                Updater upd0 = Updater.get(this);
+                if (!upd0.devkitMoving() && ins.needsRecovery()) {
+                    GatewayService.pause(true);
+                    try {
+                        if (ins.recover()) {
+                            say(Tr.t("✓ 开发工具包已恢复到一致状态"));
+                            Ledger.add(env, "recover", true, ins.recovered != null ? ins.recovered : Tr.t("收拾了上次中断留下的目录"), null);
+                        }
+                    } catch (Exception e) {
+                        Ledger.add(env, "recover", false, Tr.t("启动时恢复失败：") + e.getMessage(), null);
+                        throw e;
+                    } finally { GatewayService.pause(false); }
+                }
+                Updater.get(this).dropStagedIfInstalled();
+                ins.dropTrash();                  // 卸载删到一半被打断的残骸
+                // 界面与网关先部署：0.6.7 起 first-run 的 bash 预加载的 exec-shim-bionic 在 APK 原生库目录里，不再依赖这一步；先部署照旧无害
+                deployAssets();
+                if (!env.devkitReady()) {
+                    installFirstDevkit(ins);
+                    say(Tr.t("✓ 开发工具包就绪"));
+                    Ledger.add(env, "install", true, Tr.t("首次安装开发工具包"), null);
+                    // 旧版在首装期间可能已经按「全部模块」下好了一份同版本的更新：装好以后它就是多余的，别在下面被当成更新装上
+                    Updater.get(this).dropStagedIfInstalled();
+                } else if (ins.firstRunMissed()) {
+                    // 0.4.17 及以前首装 36 的包时 first-run 没跑成（见 Installer.firstRunMissed）：补跑一次
+                    try { ins.repairFirstRun(); Ledger.add(env, "repair", true, Tr.t("补跑了首次安装时没跑成的首次配置"), null); }
+                    catch (Exception e) { Ledger.add(env, "repair", false, Tr.t("补跑首次配置失败：") + e.getMessage(), null); }
+                }
+                // coxdragon：首装不再自动拉 Claude Code（约 275 MB）。Codex 工作台不需要它；
+                // 需要的话仍可在设置 → 更新里手动安装。这样首装只有工具包 + Codex 引擎。
+                // 上次自动下好的工具包更新：趁现在（刚打开、没有任务）装上
+                Updater upd = Updater.get(this);
+                if (upd.auto() && upd.devkitStaged()) {
+                    // 先等网关答话再问它忙不忙：刚起的网关回话慢，读超时会被当成「忙」，更新就一直装不上
+                    for (int i = 0; i < 40 && !Updater.pingGateway(); i++) Thread.sleep(250);
+                    if (!Updater.gatewayBusy()) {
+                        say(Tr.t("安装已下载的开发工具包更新…"));
+                        upd.applyDevkit(ins);
+                        say(Tr.t("✓ 开发工具包已更新"));
+                    } else say(Tr.t("开发工具包更新已下载；有任务在跑，等空闲时再装（也可在设置页手动装）"));
+                }
+                askBatteryExemption();
+                say(Tr.t("等待网关…"));
+                waitGateway(true);
+                ui.post(() -> { if (isDestroyed()) return; showWeb(); booted = true; handle(pending); pending = null; });
+                // 后台快速自检：只看文件在不在，缺了就提示修复
+                if (!upd.devkitMoving() && !upd.devkitStaged()) upd.verifyAsync(false);
+            } catch (Exception e) {
+                android.util.Log.e("cccodroid-setup", "安装失败", e);
+                say("✗ " + humanize(e));
+                say(Tr.t("（下载过的部分都留着。处理好之后点「重试」，会从这一步接着来）"));
+                ui.post(() -> { retry.setVisibility(View.VISIBLE); stuck.setVisibility(View.VISIBLE); });
+            }
+        }, "boot").start();
+    }
+
+    /** 安装失败的原因用人话说：原始异常常是一串英文，用户看不出该干什么（原文仍进 logcat） */
+    static String humanize(Throwable e) {
+        String raw = String.valueOf(e.getMessage());
+        for (Throwable c = e; c != null; c = c.getCause()) {
+            String m = String.valueOf(c.getMessage());
+            if (c instanceof Installer.NoSpace) return m;
+            if (m.contains("ENOSPC") || m.contains("No space left")) return Tr.t("存储空间不够，写到一半满了。清理出 3 GB 左右的空间后点「重试」。");
+            if (c instanceof java.net.UnknownHostException)
+                return Tr.t("连不上网络（找不到服务器）。检查 Wi-Fi / 移动数据是否能上网；开着 VPN 或代理的话，试试关掉或换个节点。");
+            if (c instanceof java.net.SocketTimeoutException || c instanceof java.net.ConnectException || c instanceof javax.net.ssl.SSLException
+                || m.contains("unexpected end of stream") || m.contains("Connection reset"))
+                return Tr.f("网络不稳，下载中断了（{0}）。换个网络或稍后点「重试」，已下载的部分会接着续传。", c.getClass().getSimpleName());
+            if (m.contains("sha256"))
+                return Tr.t("下载的文件没通过校验（可能被网络或代理改了内容），坏的那份已经删掉。点「重试」会重新下载。");
+            if (m.contains("HTTP 403") || m.contains("HTTP 429"))
+                return Tr.f("下载服务器暂时拒绝了请求（{0}），多半是访问太频繁。过几分钟再点「重试」。", m);
+        }
+        return raw;
+    }
+
+    @Override protected void onNewIntent(Intent i) {
+        super.onNewIntent(i);
+        if (booted) handle(i); else pending = i;
+    }
+
+    @Override public void onWindowFocusChanged(boolean has) {
+        super.onWindowFocusChanged(has);
+        // 只在窗口里谁都没焦点时补：应用内浏览器的地址栏 / 网页正拿着焦点时别抢
+        if (has && web != null && web.getParent() != null && getCurrentFocus() == null) web.requestFocus();
+    }
+
+    /** 帧率心跳：小米上应用自己的帧率靠广播告诉 PowerKeeper；它重启或名单被重置后，靠这里补回来 */
+    private final Runnable fpsBeat = new Runnable() {
+        @Override public void run() { FrameRate.apply(MainActivity.this); ui.postDelayed(this, 30000); }
+    };
+
+    @Override protected void onResume() { super.onResume(); visible = true; applyLandBars(); Battery.foreground(true); FrameRate.apply(this);
+        // 在后台从常驻通知点了「停止」、界面还活着：回来时把网关服务拉起来（审查 #105 06-007）。以前只有 boot 起服务，回来只能对着连不上的页面
+        if (booted && !GatewayService.serviceUp()) GatewayService.start(this);
+        Consent.runNext(this);   // 上次排着的锁屏签名（界面当时正在关、没问成）
+        ui.removeCallbacks(fpsBeat); ui.postDelayed(fpsBeat, 30000);
+        if (pane != null) pane.resume();
+        pushWall();
+        getSystemService(android.app.NotificationManager.class).cancel(41);    // Priv.toFront 的「点此回来」
+        Notify.get(this).onForeground(); }                                    // 确认卡就在眼前，通知撤掉
+    @Override protected void onPause() { ui.removeCallbacks(fpsBeat); Battery.foreground(false); super.onPause();
+        if (pane != null) pane.pause();
+        // 分屏 / 自由窗口里换个窗口点一下也会走到 onPause，可聊天还看得见：不算到后台，也不补发通知
+        // （0.6.10 审计 200-13-07）。真正看不见了由 onStop 收尾。
+        if (!isInMultiWindowMode()) { visible = false; Notify.get(this).onBackground(); } }
+    @Override protected void onStop() {
+        super.onStop();
+        // 分屏里被整个切走 / 熄屏时 onPause 没记过账，这里补上；转屏重建不算到后台
+        boolean was = visible;
+        visible = false;
+        if (was && !isChangingConfigurations()) Notify.get(this).onBackground(); }   // 还有没答的确认：现在补发通知
+
+    // ── 外观：界面（theme.js）定浅 / 深，系统夜间模式只有原生层知道 ──
+    private boolean systemNight() {
+        return (android.content.res.Resources.getSystem().getConfiguration().uiMode & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+            == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    }
+    /** 界面里选的外观：theme.js 每次定下来都经 CCApp.themePref 存一份；没存过（第一次装）= 跟随系统 */
+    private boolean uiDark() { return BrowserPane.night(this); }
+    /** 安卓 13+：下一次启动的启动画面按界面里选的外观上色（选「跟随系统」就交还系统）。系统记住这个选择，进程没起来时也生效 */
+    private void syncSplash() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        String p = getSharedPreferences("ui", MODE_PRIVATE).getString("theme", "auto");
+        int id = "auto".equals(p) ? 0 : getResources().getIdentifier("dark".equals(p) ? "LaunchDark" : "LaunchLight", "style", getPackageName());
+        try { getSplashScreen().setSplashScreenTheme(id); } catch (Exception ignored) {}
+    }
+    /** 状态栏 / 导航栏跟着界面换色；浅色时图标改深色 */
+    private void applyBars(boolean dark) {
+        android.view.Window w = getWindow();
+        int bg = BrowserPane.pal(this, dark, "bg");
+        // 状态栏保持透明（见 edgeToEdge），只换图标深浅；安卓 11+ 导航栏也透明，页面底色透上来
+        if (android.os.Build.VERSION.SDK_INT < 30) w.setNavigationBarColor(bg);
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            int m = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                  | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+            android.view.WindowInsetsController c = w.getInsetsController();
+            if (c != null) c.setSystemBarsAppearance(dark ? 0 : m, m);
+        } else {
+            View d = w.getDecorView();
+            int f = d.getSystemUiVisibility();
+            int m = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            d.setSystemUiVisibility(dark ? f & ~m : f | m);
+        }
+    }
+    /** 手机横屏（高不到 500dp、不在分屏里）藏掉状态栏：370 来高的屏，状态栏要占掉近一成；从顶上下拉可以临时唤出。
+     *  其余情况照常显示。藏起来以后系统报的顶部占位变 0，--safe-t 跟着归零，顶栏自己顶上去 */
+    private void applyLandBars() {
+        if (android.os.Build.VERSION.SDK_INT < 30) return;
+        android.content.res.Configuration c = getResources().getConfiguration();
+        boolean hide = c.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE && c.screenHeightDp < 500 && !isInMultiWindowMode();
+        android.view.WindowInsetsController ic = getWindow().getInsetsController();
+        if (ic == null) return;
+        if (hide) {
+            ic.setSystemBarsBehavior(android.view.WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+            ic.hide(android.view.WindowInsets.Type.statusBars());
+        } else ic.show(android.view.WindowInsets.Type.statusBars());
+    }
+    @Override public void onMultiWindowModeChanged(boolean on, android.content.res.Configuration cfg) {
+        super.onMultiWindowModeChanged(on, cfg);
+        applyLandBars();
+    }
+    /** 壁纸主色（安卓 12+ 的动态取色，系统 system_accent1_500）；更早的系统没有，返回空串。
+     *  按名字查资源：编译用的 SDK 不一定认得 android.R.color.system_accent1_500 这个常量 */
+    String wallColor() {
+        if (Build.VERSION.SDK_INT < 31) return "";
+        try {
+            int id = getResources().getIdentifier("system_accent1_500", "color", "android");
+            if (id == 0) return "";
+            return String.format("#%06x", getResources().getColor(id, null) & 0xffffff);
+        } catch (Exception e) { return ""; }
+    }
+    private String lastWall = null;
+    /** 回到前台时看壁纸主色变没变：变了告诉界面（「拾色」外观跟着换色）。第一次只记下，不推 */
+    void pushWall() {
+        String w = wallColor();
+        if (w.isEmpty() || w.equals(lastWall)) return;
+        boolean first = lastWall == null;
+        lastWall = w;
+        if (!first && web != null) web.evaluateJavascript(guarded("Theme.wall", "window.Theme&&Theme.wall&&Theme.wall('" + w + "')"), null);
+    }
+
+    @Override public void onConfigurationChanged(android.content.res.Configuration cfg) {
+        super.onConfigurationChanged(cfg);
+        applyLandBars();
+        pushWall();
+        if (web != null) web.evaluateJavascript(guarded("Theme.system", "window.Theme&&Theme.system(" + systemNight() + ")"), null);
+    }
+
+    private void confirmWebDebug() {
+        if (isDestroyed()) return;
+        android.app.AlertDialog d = new android.app.AlertDialog.Builder(this)
+            .setTitle(Tr.t("打开网页调试？"))
+            .setMessage(Tr.t("发现 ~/.webdebug：有人要打开 cccodroid 界面的网页调试。打开后，连上这台设备的调试工具能看到界面里的一切，包括网关令牌。\n\n不是你自己建的这个文件，就点「取消」，并删掉它。"))
+            .setPositiveButton(Tr.t("允许"), (x, w) -> { Consent.grant(this, Consent.WEBDEBUG, "1"); WebView.setWebContentsDebuggingEnabled(true); })
+            .setNegativeButton(Tr.t("取消"), null)
+            .create();
+        guard(d, android.content.DialogInterface.BUTTON_POSITIVE);
+    }
+
+    /** 第一次开读屏 / 点按前问一句（审查 v0.5.9 B4）：系统那套「此应用将能读取屏幕」的提示被我们写系统设置绕过了，这里补上 */
+    private long a11yAskAt;
+    private void confirmA11y(String mode, boolean on) {
+        boolean screen = "auto".equals(mode) || "on".equals(mode);
+        if (!screen && !on) return;
+        // 弹框的口令同 uid 的进程读得到，别让它反复弹来磨人：20 秒内只弹一次
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - a11yAskAt < 20_000) return;
+        a11yAskAt = now;
+        android.app.AlertDialog d = new android.app.AlertDialog.Builder(this)
+            .setTitle(screen ? Tr.t("允许 Claude 读屏和点按？") : Tr.t("打开设备工具？"))
+            .setMessage(screen ? Tr.t("打开后，Claude 能看到屏幕上的内容（包括别的应用里的），也能替你点按、输入。cccodroid 会直接打开无障碍服务，系统不会再提示。\n\n随时可以在 设置 → 设备工具 里关掉。")
+                : Tr.t("打开后，Claude 能读写剪贴板、发通知、打开应用、列出已装应用、分享文件。\n\n随时可以在 设置 → 设备工具 里关掉。"))
+            .setPositiveButton(Tr.t("允许"), (x, w) -> DeviceTools.a11yConfirmed(this, screen ? mode : "", on))
+            .setNegativeButton(Tr.t("取消"), null)
+            .create();
+        guard(d, android.content.DialogInterface.BUTTON_POSITIVE);
+    }
+
+    // ── 敏感确认框：显示期间设备工具不许动屏幕（DeviceTools.call），按钮一秒后才能点、被别的窗口盖住时不收触摸 ──
+    private static final java.util.concurrent.atomic.AtomicInteger GUARDED = new java.util.concurrent.atomic.AtomicInteger();
+    static boolean guarding() { return GUARDED.get() > 0; }
+    private boolean guard(android.app.AlertDialog d, int... buttons) {
+        GUARDED.incrementAndGet();
+        final boolean[] gone = { false };
+        d.setOnShowListener((x) -> {
+            for (int b : buttons) {
+                android.widget.Button btn = d.getButton(b);
+                if (btn == null) continue;
+                btn.setFilterTouchesWhenObscured(true);
+                btn.setEnabled(false);
+                ui.postDelayed(() -> btn.setEnabled(true), 1000);
+            }
+        });
+        // 监听挂在 show 之前（getDecorView 会先把窗口内容建出来），关得再快也不会漏掉这次减计数
+        d.getWindow().getDecorView().addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+            @Override public void onViewAttachedToWindow(android.view.View v) {}
+            @Override public void onViewDetachedFromWindow(android.view.View v) { if (!gone[0]) { gone[0] = true; GUARDED.decrementAndGet(); } }
+        });
+        // 弹不出来（Activity 正在销毁之类）：计数退回去，不然设备工具的屏幕操作会一直被挡着
+        try { d.show(); } catch (RuntimeException ex) { if (!gone[0]) { gone[0] = true; GUARDED.decrementAndGet(); } android.util.Log.w("cccodroid", "确认框弹不出来", ex); return false; }
+        return true;
+    }
+
+    /** 预览页想跳到外站：没开「联网」时先问一句，地址原样摆出来给用户看 */
+    private void confirmExternal(String url) {
+        String show = url == null ? "" : url.length() > 300 ? url.substring(0, 300) + "…" : url;
+        android.app.AlertDialog d = new android.app.AlertDialog.Builder(this)
+            .setTitle(Tr.t("让这个网页跳到外部浏览器？"))
+            .setMessage(show + "\n\n" + Tr.t("预览中的网页没有开「联网」。跳过去会把上面这个地址交给浏览器，地址里可能夹带它读到的内容。"))
+            .setPositiveButton(Tr.t("打开"), (x, w) -> openExternal(url))
+            .setNegativeButton(Tr.t("不打开"), null)
+            .create();
+        guard(d, android.content.DialogInterface.BUTTON_POSITIVE);
+    }
+
+    /** 白名单以外的特权命令执行前问一句（见 Priv.ask / PrivRules）：关掉、按返回都算拒绝。
+     *  按钮一秒后才能点，盖在上面的窗口挡着时不收触摸 —— 防止脚本抢在用户前面把「允许」点掉 */
+    private void confirmPriv(String id, String cmd, String who, boolean trustable, boolean sess, boolean noAskBox, boolean apk) {
+        if (id == null) return;
+        boolean clip = Tr.t("设备工具：读取剪贴板").equals(cmd);
+        // 发起方是按对方进程的环境变量认的，对方能伪造：只作参考
+        String by = "claude".equals(who) ? "Claude" : "terminal".equals(who) ? Tr.t("终端") : "cc-mem".equals(who) ? "cc-mem" : "gateway".equals(who) ? Tr.t("cccodroid 网关接口（Claude 也能调用）") : Tr.t("不明程序");
+        // 设置页打开「特权命令免确认」：整段是免责说明，标题和按钮换成对应的说法。按 Priv 给的来路认，不看正文（审查 0601 高-2）；
+        // 也写上是谁要打开的 —— 设置页之外的程序也能发这个请求，用户没在设置里点就该拒（低-8）
+        String noAskHead = Tr.t("特权命令不再逐条确认（风险自负）");
+        if (noAskBox && cmd != null && cmd.startsWith(noAskHead + "\n\n")) {
+            final boolean[] said0 = { false };
+            android.app.AlertDialog d0 = new android.app.AlertDialog.Builder(this)
+                .setTitle(noAskHead)
+                .setMessage(Tr.t("发起方（自报，仅供参考）：") + by + "\n\n" + cmd.substring(noAskHead.length() + 2))
+                .setPositiveButton(Tr.t("我了解风险，打开"), (x, w) -> { said0[0] = true; Priv.answer(id, 1); })
+                .setNegativeButton(Tr.t("不打开"), (x, w) -> { said0[0] = true; Priv.answer(id, 0); })
+                .create();
+            d0.setOnDismissListener((x) -> { PRIV_DLG.remove(id); if (!said0[0]) Priv.answer(id, 0); });
+            PRIV_DLG.put(id, d0);
+            if (!guard(d0, android.content.DialogInterface.BUTTON_POSITIVE)) { PRIV_DLG.remove(id); Priv.answer(id, 0); }
+            return;
+        }
+        final boolean[] said = { false };
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this)
+            .setTitle(clip ? Tr.t("允许读取剪贴板？") : apk ? Tr.t("安装这个应用？") : Tr.t("允许执行这条特权命令？"))
+            .setMessage(Tr.t("发起方（自报，仅供参考）：") + by + "\n\n" + (clip ? Tr.t("剪贴板里可能有你从别的应用复制的密码、验证码。不是你让 Claude 读的就拒绝。")
+                // 装 APK：正文是 Priv 从安装包里读出的应用名、包名、版本和文件位置
+                : apk ? cmd + "\n\n" + Tr.t("点「允许」后还会弹出系统的安装确认。不是你自己点的「安装」、或者不认识这个安装包，就拒绝。")
+                : cmd + "\n\n" + Tr.t("它会以 Shizuku（shell）身份运行，能装卸应用、改权限或系统设置。不认识这条命令就拒绝。")))
+            .setNegativeButton(Tr.t("拒绝"), (x, w) -> { said[0] = true; Priv.answer(id, 0); });
+        // 这个会话后面的都允许（Claude 发来的才有）：勾上再点「允许」。只在内存里，应用重启就失效
+        final android.widget.CheckBox all = sess && !clip ? new android.widget.CheckBox(this) : null;
+        if (all != null) {
+            all.setText(Tr.t("这个会话后面的特权命令都允许，不再逐条问（应用重启后失效）"));
+            int pad = (int) (20 * getResources().getDisplayMetrics().density);
+            android.widget.FrameLayout box = new android.widget.FrameLayout(this);
+            box.setPadding(pad, pad / 2, pad, 0);
+            box.addView(all);
+            b.setView(box);
+        }
+        b.setPositiveButton(Tr.t("允许"), (x, w) -> { said[0] = true; Priv.answer(id, all != null && all.isChecked() ? 3 : 1); });
+        // 命令里引用了文件的，不给「不再问」：信任的是文字，文件内容随时能换（见 Priv.trustable）
+        if (trustable) b.setNeutralButton(Tr.t("允许，这条命令 10 分钟内不再问"), (x, w) -> { said[0] = true; Priv.answer(id, 2); });
+        android.app.AlertDialog d = b.create();
+        d.setOnDismissListener((x) -> { PRIV_DLG.remove(id); if (!said[0]) Priv.answer(id, 0); });
+        PRIV_DLG.put(id, d);
+        if (!guard(d, android.content.DialogInterface.BUTTON_POSITIVE, android.content.DialogInterface.BUTTON_NEUTRAL)) { PRIV_DLG.remove(id); Priv.answer(id, 0); }
+    }
+    private static final java.util.Map<String, android.app.Dialog> PRIV_DLG = new java.util.concurrent.ConcurrentHashMap<>();
+    /** Priv.ask 等不到回答（超时）时收起对话框：别留一个点了也没用的「允许」在屏幕上 */
+    static void dropPriv(String id) {
+        new Handler(Looper.getMainLooper()).post(() -> { android.app.Dialog d = PRIV_DLG.remove(id); if (d != null) try { d.dismiss(); } catch (Exception ignored) {} });
+    }
+
+    /** 通知或设置页递过来的动作 */
+    private void handle(Intent i) {
+        String a = i == null ? null : i.getAction();
+        if (a == null) return;
+        if (Intent.ACTION_SEND.equals(a) || Intent.ACTION_SEND_MULTIPLE.equals(a)) { receiveShare(i); return; }
+        if (a.startsWith("cox.dragon.") && !fromUs(i)) { android.util.Log.w("cccodroid", "忽略外来的内部动作 " + a); return; }
+        if (ACTION_APPLY_DEVKIT.equals(a) || ACTION_UPDATE.equals(a) && "devkit".equals(i.getStringExtra("item"))) applyDevkitUi();
+        else if (ACTION_UPDATE.equals(a)) {
+            // 通知点进来的安装请求没接住（文件没了、状态对不上）：至少给一句提示，不再静默返回（#123-2）
+            org.json.JSONObject r = Updater.get(this).apply(i.getStringExtra("item"), true);
+            String msg = r == null ? "" : r.optString("message", "");
+            if (r != null && !r.optBoolean("ok", true) && !msg.isEmpty())
+                android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_LONG).show();
+        }
+        else if (ACTION_SHIZUKU.equals(a)) ShizukuSetup.get(this).activate();
+        else if (ACTION_FACTORY_RESET.equals(a)) askFactoryReset();
+        else if (ACTION_A11Y_OK.equals(a)) confirmA11y(i.getStringExtra("mode"), i.getBooleanExtra("on", false));
+        else if (ACTION_CONSENT.equals(a)) Consent.runNext(this);
+        else if (ACTION_PRIV_OK.equals(a)) confirmPriv(i.getStringExtra("id"), i.getStringExtra("cmd"), i.getStringExtra("who"), i.getBooleanExtra("trust", false), i.getBooleanExtra("sess", false), "noask".equals(i.getStringExtra("kind")), "apk".equals(i.getStringExtra("kind")));
+        else if (Notify.ACTION_OPEN.equals(a)) openSession(i.getStringExtra("session"));
+    }
+
+    // ── 分享进来的东西：文件拷进工作区的 uploads/（和网页上传同一处、同样的命名），文字插进输入框 ──
+    private void receiveShare(Intent i) {
+        java.util.ArrayList<android.net.Uri> uris = new java.util.ArrayList<>();
+        // 别的应用可以递任意 Parcelable/null：逐个确认是 Uri 再收，别让调用点的强制转换把进程带走
+        if (Intent.ACTION_SEND_MULTIPLE.equals(i.getAction())) {
+            try {
+                java.util.ArrayList<android.net.Uri> l = i.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+                if (l != null) for (android.net.Uri u : l) if (u != null) uris.add(u);
+            } catch (Throwable ignored) {}
+        } else {
+            try {
+                android.os.Parcelable p = i.getParcelableExtra(Intent.EXTRA_STREAM);
+                if (p instanceof android.net.Uri) uris.add((android.net.Uri) p);
+            } catch (Throwable ignored) {}
+        }
+        // 有的应用分享的是带格式的 CharSequence（Spanned），getStringExtra 会拿到 null（11-04 报告 A4）
+        CharSequence cs0 = i.getCharSequenceExtra(Intent.EXTRA_TEXT);
+        String text0 = cs0 == null ? null : cs0.toString();
+        // 收多少有个数：一次最多 32 个文件、文字最多 1 MB；复制时剩余空间低于 512 MB 就停，别把存储写满（审查 低12）
+        final String text = text0 != null && text0.length() > (1 << 20) ? text0.substring(0, 1 << 20) : text0;
+        if (uris.size() > 32) {
+            int more = uris.size() - 32;
+            uris.subList(32, uris.size()).clear();
+            android.widget.Toast.makeText(this, Tr.f("一次最多收 32 个文件，其余 {0} 个没收", more), android.widget.Toast.LENGTH_LONG).show();
+        }
+        i.setAction(null);                                  // 同一个意图只收一次（转屏重建时别再收）
+        if (uris.isEmpty() && (text == null || text.isEmpty())) return;
+        // 标明是哪个应用递过来的：任何应用都能直接把文字、文件递进来（审查 v0513b 低-18）。只放进输入框 / 附件，发不发由用户定
+        String from = null;
+        try {
+            android.net.Uri ref = getReferrer();
+            String pkg = ref != null && "android-app".equals(ref.getScheme()) ? ref.getHost() : null;
+            if (pkg != null && !pkg.equals(getPackageName())) {
+                from = pkg;
+                android.content.pm.PackageManager pm = getPackageManager();
+                try { from = String.valueOf(pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0))); } catch (Exception ignored) {}
+            }
+        } catch (Exception ignored) {}
+        if (uris.isEmpty()) {
+            // 只有文字：放进输入框，发不发由用户定，不落盘，用不着再问
+            if (from != null) android.widget.Toast.makeText(this, Tr.f("收到来自「{0}」的分享，发之前看一眼", from), android.widget.Toast.LENGTH_LONG).show();
+            copyShares(uris, text);
+            return;
+        }
+        // 有文件：先问再拷。任何应用都能直接递文件进来，以前不问就写进工作区、也没人清（0.6.9 审计 199-1-05）。
+        // 过 guard：按钮一秒后才能点、被盖住时不收触摸，设备工具也替用户点不了
+        String who = from != null ? from : Tr.t("来源不明的应用");
+        android.app.AlertDialog d = new android.app.AlertDialog.Builder(this)
+            .setTitle(Tr.t("收下分享的文件？"))
+            .setMessage(Tr.f("「{0}」要放 {1} 个文件进工作区的 uploads/。收下后附在输入框里，发不发由你定；从附件栏移除时会删掉拷进来的这份。", who, uris.size()))
+            .setPositiveButton(Tr.t("收下"), (x, w) -> copyShares(uris, text))
+            .setNegativeButton(Tr.t("不收"), null)
+            .create();
+        guard(d, android.content.DialogInterface.BUTTON_POSITIVE);
+    }
+
+    // ── 分享拷进来的文件记一份清单：界面从附件栏移除（或草稿丢弃）时只删清单里的、uploads/ 下的，发出去的就从清单里划掉（199-1-05）──
+    private static final Object SHARE_LOCK = new Object();
+    private void shareMade(String path) {
+        synchronized (SHARE_LOCK) {
+            SharedPreferences sp = getSharedPreferences("share", MODE_PRIVATE);
+            java.util.LinkedHashSet<String> made = new java.util.LinkedHashSet<>(sp.getStringSet("made", java.util.Collections.emptySet()));
+            made.add(path);
+            // 只记最近的：清单不是什么都得删干净的账本，删不到的顶多留个文件
+            while (made.size() > 500) { java.util.Iterator<String> it = made.iterator(); it.next(); it.remove(); }
+            sp.edit().putStringSet("made", made).apply();
+        }
+    }
+    private void shareDone(String path, boolean drop) {
+        if (path == null) return;
+        synchronized (SHARE_LOCK) {
+            SharedPreferences sp = getSharedPreferences("share", MODE_PRIVATE);
+            java.util.HashSet<String> made = new java.util.HashSet<>(sp.getStringSet("made", java.util.Collections.emptySet()));
+            if (!made.remove(path)) return;
+            sp.edit().putStringSet("made", made).apply();
+        }
+        if (!drop) return;
+        try {
+            java.io.File f = new java.io.File(path), dir = new java.io.File(env.workspace(), "uploads");
+            // 只删 uploads/ 下面的普通文件：清单是自己记的，这里再核一遍位置，软链也不跟
+            if (dir.getCanonicalPath().equals(f.getParentFile().getCanonicalPath())
+                && java.nio.file.Files.isRegularFile(f.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) f.delete();
+        } catch (Exception ignored) {}
+    }
+
+    private void copyShares(java.util.ArrayList<android.net.Uri> uris, String text) {
+        new Thread(() -> {
+          try {
+            java.io.File dir = new java.io.File(env.workspace(), "uploads");
+            dir.mkdirs();
+            int n = 0;
+            for (android.net.Uri u : uris) {
+                // 大文件在共享存储里有真实路径：直接给路径，不拷（附件大小门限，见 BIG_ATTACH）
+                String real = sizeOf(u) > BIG_ATTACH ? realPath(u) : null;
+                if (real != null) { n++; toPage("ccapp-attach", real); continue; }
+                String name = displayName(u).replaceAll("[^\\w.\\-()\\u4e00-\\u9fff]+", "_").replaceAll("^[.\\s]+", "");
+                if (name.length() > 120) name = name.substring(name.length() - 120);
+                String stamp = new java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US).format(new java.util.Date());
+                String base = name.isEmpty() ? "shared.bin" : name;
+                // 独占创建占住名字（审查 #105 06-011，同 attachBig）：两批分享同一秒进来、同名，以前都过了 exists 检查、写进同一个文件
+                java.io.File out = new java.io.File(dir, stamp + "-" + base);
+                try {
+                    for (int k = 2; !out.createNewFile(); k++) {
+                        if (k > 999) throw new java.io.IOException(Tr.t("同名文件太多了"));
+                        out = new java.io.File(dir, stamp + "-" + k + "-" + base);
+                    }
+                } catch (Exception e) {
+                    ui.post(() -> android.widget.Toast.makeText(this, Tr.f("分享的文件没收下：{0}", e.getMessage()), android.widget.Toast.LENGTH_LONG).show());
+                    continue;
+                }
+                InputStream in0;
+                try { in0 = openShared(u); }
+                catch (Exception e) {
+                    out.delete();      // 上面占名建的空文件（DeepSeek 复核 b7 低-6，同 attachBig）
+                    ui.post(() -> android.widget.Toast.makeText(this, Tr.f("分享的文件没收下：{0}", e.getMessage()), android.widget.Toast.LENGTH_LONG).show());
+                    continue;
+                }
+                try (InputStream in = in0; OutputStream o = new FileOutputStream(out)) {
+                    copyIn(in, o, dir);
+                    n++;
+                    shareMade(out.getPath());
+                    toPage("ccapp-attach", out.getPath());
+                } catch (Exception e) {
+                    out.delete();
+                    ui.post(() -> android.widget.Toast.makeText(this, Tr.f("分享的文件没收下：{0}", e.getMessage()), android.widget.Toast.LENGTH_LONG).show());
+                }
+            }
+            // 分享文件时 EXTRA_TEXT 常是标题之类的附带说明，只有单纯分享文字时才插进去
+            if (n == 0 && uris.isEmpty() && text != null) toPage("ccapp-insert", text);
+          } catch (Throwable t) { android.util.Log.w("cccodroid", "分享处理失败", t); }
+        }, "share-in").start();
+    }
+    /** 收别的应用递来的流：单个最多 4 GB；60 秒没来新数据就关掉输入流（阻塞的 read 随之返回）、算失败；
+     *  每写 64 MB 看一眼剩余空间，低于 512 MB 就停（审查 低12）。以前只有空间检查，一个不结束、或极慢的流能一直占着线程和存储（审查 v0.5.20 08-003） */
+    static final long SHARE_MAX = 4L << 30;
+    static void copyIn(InputStream in, OutputStream o, java.io.File dir) throws java.io.IOException {
+        final java.util.concurrent.atomic.AtomicLong last = new java.util.concurrent.atomic.AtomicLong(System.currentTimeMillis());
+        final java.util.concurrent.atomic.AtomicBoolean stalled = new java.util.concurrent.atomic.AtomicBoolean(), done = new java.util.concurrent.atomic.AtomicBoolean();
+        Thread dog = new Thread(() -> {
+            while (!done.get()) {
+                try { Thread.sleep(2000); } catch (InterruptedException e) { return; }
+                if (!done.get() && System.currentTimeMillis() - last.get() > 60_000) { stalled.set(true); try { in.close(); } catch (Exception ignored) {} return; }
+            }
+        }, "share-in-dog");
+        dog.setDaemon(true);
+        dog.start();
+        try {
+            byte[] buf = new byte[1 << 16];
+            long w = 0, check = 0;
+            for (int r; (r = in.read(buf)) >= 0; ) {
+                if (r == 0) continue;
+                last.set(System.currentTimeMillis());
+                o.write(buf, 0, r);
+                if ((w += r) > SHARE_MAX) throw new java.io.IOException(Tr.t("文件超过 4 GB，没收"));
+                if (w < check) continue;
+                check = w + (64L << 20);
+                if (dir.getUsableSpace() < (512L << 20)) throw new java.io.IOException(Tr.t("存储空间不够了"));
+            }
+            if (stalled.get()) throw new java.io.IOException(Tr.t("对方 60 秒没有传数据，停止接收"));
+        } catch (java.io.IOException e) {
+            if (stalled.get()) throw new java.io.IOException(Tr.t("对方 60 秒没有传数据，停止接收"));
+            throw e;
+        } finally { done.set(true); dog.interrupt(); }
+    }
+    /** 附件大小门限（与界面 05-composer.js 的 BIG_ATT 同值）：超过的不经网页上传 */
+    static final long BIG_ATTACH = 20L << 20;
+    /** content:// 对应的共享存储真实路径（系统文件选择器、下载、媒体库常见的几种）；对不上、读不了、不在 /storage 下都给 null。
+     *  只认共享存储：指向本应用私有目录的照旧走 openShared 的拦截 */
+    private String realPath(Uri u) {
+        try {
+            String p = null, sc = String.valueOf(u.getScheme());
+            if ("file".equals(sc)) p = u.getPath();
+            else if ("content".equals(sc)) {
+                String au = String.valueOf(u.getAuthority());
+                if (au.equals(getPackageName()) || au.startsWith(getPackageName() + ".")) return null;
+                if (android.provider.DocumentsContract.isDocumentUri(this, u)) {
+                    String id = android.provider.DocumentsContract.getDocumentId(u);
+                    if ("com.android.externalstorage.documents".equals(au) && id.indexOf(58) > 0) {
+                        String vol = id.substring(0, id.indexOf(58)), rel = id.substring(id.indexOf(58) + 1);
+                        if (!vol.matches("[A-Za-z0-9-]+")) return null;   // 卷名只是 primary 或 1234-ABCD 这种；后面还有 canonical 前缀核对兜底
+                        p = ("primary".equalsIgnoreCase(vol) ? android.os.Environment.getExternalStorageDirectory().getPath() : "/storage/" + vol) + "/" + rel;
+                    } else if ("com.android.providers.downloads.documents".equals(au) && id.startsWith("raw:")) p = id.substring(4);
+                }
+                // _data 只信系统的媒体库 / 下载：别的应用自己的 provider 想填什么路径都行（11-03 审查 L-13）
+                if (p == null && (au.equals("media") || au.equals("downloads") || au.equals("com.android.providers.media.documents") || au.equals("com.android.providers.downloads.documents"))) {
+                    try (android.database.Cursor c = getContentResolver().query(u, new String[]{"_data"}, null, null, null)) {
+                        if (c != null && c.moveToFirst() && !c.isNull(0)) p = c.getString(0);
+                    } catch (Exception ignored) {}
+                }
+            }
+            if (p == null) return null;
+            File f = new File(p).getCanonicalFile();
+            String c = f.getPath();
+            if (!c.startsWith("/storage/") && !c.startsWith("/sdcard/")) return null;
+            // 各应用在共享存储上的私有目录（含本应用）：不按路径直接给，照常拷一份
+            if (c.contains("/Android/data/") || c.contains("/Android/obb/")) return null;
+            return f.isFile() && f.canRead() ? c : null;
+        } catch (Exception e) { return null; }
+    }
+    /** 选择器里挑的大文件：有路径的递路径，没有的后台拷进 uploads/（不经网页）。
+     *  事件和分享进来的分开（ccapp-attach-pick）：拷的时候用户可能切了会话，网页按打开选择器时的草稿归位（#105 06-014）。
+     *  每次选择器带一个批次号（BUG-A06）：拷完时用户可能已经又开了一次选择器，光看「当前选择器」会把这一批记到新草稿上 */
+    /** big=false：不是因为大才走这里（界面重建后回调没了），别提示「文件较大」 */
+    private void attachBig(java.util.List<Uri> list, boolean big, long pick) {
+        final String id = pick > 0 ? String.valueOf(pick) : "";
+        new Thread(() -> {
+            try {
+                File dir = new File(env.workspace(), "uploads");
+                for (Uri u : list) {
+                    String real = realPath(u);
+                    if (real != null) { toPage("ccapp-attach-pick", pickEvent(id, real)); continue; }
+                    if (big) ui.post(() -> android.widget.Toast.makeText(this, Tr.t("文件较大，正在收进工作区…"), android.widget.Toast.LENGTH_SHORT).show());
+                    dir.mkdirs();
+                    String name = displayName(u).replaceAll("[^\\w.\\-()\\u4e00-\\u9fff]+", "_").replaceAll("^[.\\s]+", "");
+                    if (name.length() > 120) name = name.substring(name.length() - 120);
+                    String stamp = new java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US).format(new java.util.Date());
+                    String base = name.isEmpty() ? "upload.bin" : name;
+                    // 独占创建占住名字：同一秒附加两个同名大文件（两批分享）时，后一个不会截断前一个还在写的文件
+                    File out = new File(dir, stamp + "-" + base);
+                    try {
+                        for (int k = 2; !out.createNewFile(); k++) {
+                            if (k > 999) throw new java.io.IOException(Tr.t("同名文件太多了"));
+                            out = new File(dir, stamp + "-" + k + "-" + base);
+                        }
+                    } catch (Exception e) {
+                        ui.post(() -> android.widget.Toast.makeText(this, Tr.f("「{0}」附加失败：{1}", displayName(u), e.getMessage()), android.widget.Toast.LENGTH_LONG).show());
+                        continue;
+                    }
+                    try (InputStream in = openShared(u); OutputStream o = new FileOutputStream(out)) {
+                        copyIn(in, o, dir);
+                        toPage("ccapp-attach-pick", pickEvent(id, out.getPath()));
+                    } catch (Exception e) {
+                        out.delete();
+                        ui.post(() -> android.widget.Toast.makeText(this, Tr.f("「{0}」附加失败：{1}", displayName(u), e.getMessage()), android.widget.Toast.LENGTH_LONG).show());
+                    }
+                }
+            } finally {
+                // 后台收完了：网页那边从这一刻起可以发送（收的过程中要挡住，否则附件落到下一条，FIND-027）。
+                // 放在 finally 里：拷贝线程意外中断也要把计数放掉，不能把发送按钮永久卡住
+                if (big) toPage("ccapp-attach-copy-done", pickEvent(id, list.size()));
+            }
+        }, "attach-big").start();
+    }
+
+    /** 选择器批次事件的值：带批次号（BUG-A06）。没有批次号（界面重建后拿不到）或编码失败就退回旧格式
+     *  （纯路径 / 数字），网页仍按当前快照处理 */
+    private static String pickEvent(String id, String path) {
+        if (id == null || id.isEmpty()) return path;
+        try { return new org.json.JSONObject().put("id", id).put("path", path).toString(); } catch (Exception e) { return path; }
+    }
+    private static String pickEvent(String id, int n) {
+        if (id == null || id.isEmpty()) return String.valueOf(n);
+        try { return new org.json.JSONObject().put("id", id).put("n", n).toString(); } catch (Exception e) { return String.valueOf(n); }
+    }
+    /** 别的应用分享进来的流（审查 10-30 第九份 安卓低7）：读是在我们自己的进程里读的，
+     *  file:///data/user/0/cox.dragon/files/home/.gateway-token 这种指向我们私有目录的、或我们自己 provider 的 content://，
+     *  照收就等于把私有文件拷进 uploads 交出去。file:// 先打开、再按 /proc/self/fd 读真实路径判断，中途换软链也躲不过 */
+    private InputStream openShared(android.net.Uri u) throws java.io.IOException {
+        String sc = String.valueOf(u.getScheme()).toLowerCase(java.util.Locale.ROOT);
+        if ("content".equals(sc)) {
+            String au = String.valueOf(u.getAuthority());
+            if (au.equals(getPackageName()) || au.startsWith(getPackageName() + ".")) throw new java.io.IOException(Tr.t("不收本应用私有目录里的文件"));
+            InputStream in = getContentResolver().openInputStream(u);
+            if (in == null) throw new java.io.IOException(Tr.t("读不了这个文件"));
+            return in;
+        }
+        if (!"file".equals(sc) || u.getPath() == null) throw new java.io.IOException(Tr.t("读不了这个文件"));
+        android.os.ParcelFileDescriptor pfd = android.os.ParcelFileDescriptor.open(new File(u.getPath()), android.os.ParcelFileDescriptor.MODE_READ_ONLY);
+        String real;
+        try { real = android.system.Os.readlink("/proc/self/fd/" + pfd.getFd()); }
+        catch (Exception e) { pfd.close(); throw new java.io.IOException(Tr.t("读不了这个文件")); }
+        // 本用户、别的用户空间、设备加密区、外置扩容盘上的私有目录都算
+        String q = java.util.regex.Pattern.quote(getPackageName()), dd = getApplicationInfo().dataDir;
+        if (real.matches("(/mnt/expand/[^/]+)?/data/(data|user(_de)?/\\d+)/" + q + "(/.*)?|/mnt/expand/[^/]+/(user|user_de)/\\d+/" + q + "(/.*)?")
+                || dd != null && (real.equals(dd) || real.startsWith(dd + "/"))) {
+            pfd.close();
+            throw new java.io.IOException(Tr.t("不收本应用私有目录里的文件"));
+        }
+        return new android.os.ParcelFileDescriptor.AutoCloseInputStream(pfd);
+    }
+    /** 往页面里调代码都套一层：错误在注入代码里自己接住，连同入口名交给页面按原文显示（app.js __ccErr）。
+     *  不接的话，从注入代码里冒出去的错 WebView 只给一句「Script error.」，没有文件、行号和原因，查不出是哪一处 */
+    private static String caught(String entry) { return "catch(e){window.__ccErr&&__ccErr(" + org.json.JSONObject.quote(entry) + ",e)}"; }
+    private static String guarded(String entry, String code) { return "try{" + code + "}" + caught(entry); }
+    /** 页面可能还在启动：等 __cc 就绪再派发（app.js 里有对应的监听） */
+    private static boolean copyQuiet(File a, File b) {
+        try { java.nio.file.Files.copy(a.toPath(), b.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING); a.delete(); return true; }
+        catch (Exception e) { return false; }
+    }
+    private void toPage(String event, String value) { toPage(event, value, 0); }
+    /** 界面还没起来（进程被收掉后从选择器 / 相机回来，boot 还在走）：等一会儿再递，别丢 */
+    private void toPage(String event, String value, int n) {
+        ui.post(() -> {
+            if (web == null) { if (n < 300) ui.postDelayed(() -> toPage(event, value, n + 1), 200); return; }
+            web.evaluateJavascript("(function f(n){try{if(window.__cc&&window.__cc.view){window.dispatchEvent(new CustomEvent(" + org.json.JSONObject.quote(event)
+                + ",{detail:{value:" + org.json.JSONObject.quote(value) + "}}))}else if(n<150)setTimeout(function(){f(n+1)},200)}" + caught(event) + "})(0)", null);
+        });
+    }
+    private String displayName(android.net.Uri u) {
+        if (u == null) return "shared.bin";
+        try (android.database.Cursor c = getContentResolver().query(u, new String[]{android.provider.OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+            if (c != null && c.moveToFirst() && c.getString(0) != null) return c.getString(0);
+        } catch (Exception ignored) {}
+        String s = u.getLastPathSegment();
+        return s == null ? "shared.bin" : s.substring(s.lastIndexOf('/') + 1);
+    }
+
+    /** 从「已完成」通知点进来：切到那个会话（界面正显示它就不动）。页面可能还在启动，等 __cc 就绪 */
+    private String pendingSid;
+    private void openSession(String sid) {
+        if (web == null || sid == null || !sid.matches("[0-9A-Za-z-]{8,64}")) return;
+        // 冷启动时页面还在 about:blank / 等网关：这里塞进去的轮询会被真正的导航冲掉。先记着，网关页面落地再发（审查 #49 待确认-2）
+        if (!isOwnGateway(web.getUrl())) { pendingSid = sid; return; }
+        web.evaluateJavascript("(function f(n){var c=window.__cc;if(c&&c.view){setTimeout(function(){try{if(c.view.sessionId!==\"" + sid
+            + "\")c.openSession(\"" + sid + "\")}" + caught("openSession") + "},n?800:0)}else if(n<50)setTimeout(function(){f(n+1)},200)})(0)", null);
+    }
+
+    // ── 工具包从哪装：GitHub / cccodroid.net 镜像 / 本地文件 ──────────────────
+    /** 首装：让用户选来源，照着走。两个下载源互为备用（首选连着失败就换另一个接着续传）；本地文件没选就回到选择 */
+    private void installFirstDevkit(Installer ins) throws Exception {
+        org.json.JSONObject pin = Updater.devkitPin(this);
+        if (pin == null || pin.optJSONObject("gz") == null) throw new java.io.IOException(Tr.t("APK 里的工具包清单坏了"));
+        String file = pin.getJSONObject("gz").getString("file"), base = pin.getString("base");
+        String gh = base + file, mirror = Updater.devkitMirror(base, file);
+        // 以前共享目录里有 devkit-cox.dragon.tar.gz 就自动多一项「用共享目录里的文件」：那里任何有存储权限的应用都能放，
+        // 等于替人摆好一个诱饵（审查 v0513b 低-24）。离线装照样能走「选择本地文件…」，自己挑的文件才装
+        String local = null;
+        while (true) {
+            String c = chooseDevkitSource(pin, local);
+            if ("github".equals(c) || "mirror".equals(c)) {
+                boolean m = "mirror".equals(c);
+                // 模块化工具包（钉子里有 modules.json）：取清单、按钉子核 sha256，让用户勾模块，再按块装
+                org.json.JSONObject pm = pin.optJSONObject("modules");
+                if (pm != null) {
+                    String mf = pm.optString("file", "modules.json"), mgh = base + mf, mmir = Updater.devkitMirror(base, mf);
+                    File mj = ins.download(m ? mmir : mgh, m ? mgh : mmir, new File(env.files, mf), pm.optLong("bytes"), pm.optString("sha256"));
+                    byte[] bytes = java.nio.file.Files.readAllBytes(mj.toPath());
+                    java.util.List<String> want = chooseModules(new org.json.JSONObject(new String(bytes, java.nio.charset.StandardCharsets.UTF_8)));
+                    ins.installModules(bytes, want, base, pin.getJSONObject("gz").getString("sha256"), m);
+                    mj.delete();
+                    return;
+                }
+                File gz = ins.downloadDevkit(pin, m ? mirror : gh, m ? gh : mirror);
+                ins.installDevkit(gz.getPath());
+                gz.delete();      // 解完就删，腾出 650 MB
+                return;
+            }
+            Uri uri = "path".equals(c) ? Uri.fromFile(new File(local)) : pickDevkitBlocking();
+            if (uri == null) { say(Tr.t("没选文件")); continue; }
+            if (installLocal(ins, uri, false)) return;
+        }
+    }
+
+    /** 在安装页上摆出来源选择，等用户点一个。返回 github / mirror / local / path */
+    private String chooseDevkitSource(org.json.JSONObject pin, String local) throws InterruptedException {
+        final String[] pick = {null};
+        CountDownLatch done = new CountDownLatch(1);
+        SharedPreferences sp = getSharedPreferences("ui", MODE_PRIVATE);
+        String last = sp.getString("devkitSrc", "");
+        org.json.JSONObject gz = pin.optJSONObject("gz"), tar = pin.optJSONObject("tar");
+        File part = new File(env.files, gz.optString("file") + ".part");
+        ui.post(() -> {
+            boolean dark = uiDark();
+            int fg = BrowserPane.pal(MainActivity.this, dark, "fg"), dim = BrowserPane.pal(MainActivity.this, dark, "dim");
+            int line = BrowserPane.pal(MainActivity.this, dark, "line"), accent = BrowserPane.pal(MainActivity.this, dark, "accent");
+            chooser.removeAllViews();
+            chooserFoot.removeAllViews();
+            TextView q = new TextView(this);
+            q.setTextColor(fg);
+            q.setTextSize(14);
+            q.setPadding(0, dp(4), 0, dp(8));
+            String txt = Tr.f("开发工具包约 {0} MB（解开后约 {1} GB），从哪里装？",
+                String.valueOf(gz.optLong("bytes") >> 20), String.format(java.util.Locale.ROOT, "%.1f", (tar != null ? tar.optLong("bytes") : 0) / 1073741824.0));
+            if (part.length() > 0) txt += "\n" + Tr.f("已经下了 {0} MB，两个下载源都能接着续传。", String.valueOf(part.length() >> 20));
+            q.setText(txt);
+            chooser.addView(q);
+            String[][] opts = {
+                {"github", Tr.t("从 GitHub 下载"), Tr.t("海外网络一般最快")},
+                {"mirror", Tr.t("从 cccodroid.net 镜像下载"), Tr.t("GitHub 慢或连不上时用；文件与 GitHub 上的一致，照样核对 sha256")},
+                {"local", Tr.t("选择本地文件…"), Tr.t("已经下好的 devkit-cox.dragon.tar.gz（或 .tar）；装之前核对是不是发布版")},
+                local != null ? new String[]{"path", Tr.t("用共享目录里的文件"), local} : null,
+            };
+            for (String[] o : opts) {
+                if (o == null) continue;
+                LinearLayout card = new LinearLayout(this);
+                card.setOrientation(LinearLayout.VERTICAL);
+                card.setPadding(dp(14), dp(10), dp(14), dp(10));
+                android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+                bg.setCornerRadius(dp(10));
+                bg.setStroke(dp(1), o[0].equals(last) ? accent : line);
+                card.setBackground(bg);
+                TextView t1 = new TextView(this);
+                t1.setText(o[1] + (o[0].equals(last) ? "  · " + Tr.t("上次选的") : ""));
+                t1.setTextColor(fg);
+                t1.setTextSize(15);
+                TextView t2 = new TextView(this);
+                t2.setText(o[2]);
+                t2.setTextColor(dim);
+                t2.setTextSize(12);
+                card.addView(t1);
+                card.addView(t2);
+                card.setClickable(true);
+                card.setOnClickListener(v -> {
+                    if (pick[0] != null) return;
+                    pick[0] = o[0];
+                    sp.edit().putString("devkitSrc", o[0]).apply();
+                    showChooser(false);
+                    done.countDown();
+                });
+                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+                lp.bottomMargin = dp(8);
+                chooser.addView(card, lp);
+            }
+            showChooser(true);
+        });
+        awaitAlive(done);
+        return pick[0];
+    }
+
+    /** 选项和日志区二选一占剩余高度；选完回到日志 */
+    private void showChooser(boolean on) {
+        if (on) expandSetup();
+        chooser.setVisibility(on ? View.VISIBLE : View.GONE);
+        chooserScroll.setVisibility(on ? View.VISIBLE : View.GONE);
+        chooserFoot.setVisibility(on && chooserFoot.getChildCount() > 0 ? View.VISIBLE : View.GONE);
+        logScroll.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (on) chooserScroll.scrollTo(0, 0);
+    }
+
+    /** 首装默认勾上的模块：Claude 写代码最常用的两样。其余按需在扩展页加装 */
+    static final java.util.Set<String> DEFAULT_MODULES = new java.util.HashSet<>(java.util.Arrays.asList("cli", "build"));
+
+    /** 首装勾选表：基础必装（灰着），共享运行库按勾选自动带上；底下实时算合计下载 / 占用。返回勾上的模块 id */
+    private java.util.List<String> chooseModules(org.json.JSONObject mj) throws Exception {
+        final java.util.List<String> out = new java.util.ArrayList<>();
+        final java.util.Set<String> on = new java.util.LinkedHashSet<>(DEFAULT_MODULES);
+        CountDownLatch done = new CountDownLatch(1);
+        org.json.JSONArray all = mj.getJSONArray("modules");
+        ui.post(() -> {
+            boolean dark = uiDark();
+            int fg = BrowserPane.pal(MainActivity.this, dark, "fg"), dim = BrowserPane.pal(MainActivity.this, dark, "dim");
+            int line = BrowserPane.pal(MainActivity.this, dark, "line"), accent = BrowserPane.pal(MainActivity.this, dark, "accent");
+            chooser.removeAllViews();
+            chooserFoot.removeAllViews();
+            TextView q = new TextView(this);
+            q.setTextColor(fg); q.setTextSize(14); q.setPadding(0, dp(4), 0, dp(8));
+            q.setText(Tr.t("开发工具包按用途分成了模块。勾上要装的，以后也可以在「扩展」页随时加装或卸载。"));
+            chooser.addView(q);
+            TextView sum = new TextView(this);
+            Runnable recalc = () -> {
+                long dl = 0, inst = 0;
+                try {
+                    for (org.json.JSONObject b : Installer.moduleOrder(mj, on)) { dl += b.getJSONObject("gz").optLong("bytes"); inst += b.optLong("installed"); }
+                } catch (Exception ignored) {}
+                sum.setText(Tr.f("合计下载约 {0} MB，装好后约 {1} GB", String.valueOf(dl >> 20), String.format(java.util.Locale.ROOT, "%.1f", inst / 1073741824.0)));
+            };
+            for (int i = 0; i < all.length(); i++) {
+                org.json.JSONObject m = all.optJSONObject(i);
+                if (m == null || "shared".equals(m.optString("kind"))) continue;
+                String id = m.optString("id");
+                boolean req = m.optBoolean("required");
+                android.widget.CheckBox cb = new android.widget.CheckBox(this);
+                org.json.JSONObject d = m.optJSONObject("desc");
+                String desc = d == null ? "" : d.optString(Tr.lang().startsWith("zh") ? "zh" : "en", d.optString("zh"));
+                cb.setText(Installer.moduleName(m) + (req ? "  · " + Tr.t("必装") : "") + "  · " + Tr.f("约 {0} MB", String.valueOf(m.optLong("installed") >> 20)) + "\n" + desc);
+                cb.setTextColor(req ? dim : fg);
+                cb.setTextSize(13);
+                cb.setChecked(req || on.contains(id));
+                cb.setEnabled(!req);
+                cb.setPadding(dp(6), dp(6), 0, dp(6));
+                cb.setOnCheckedChangeListener((v, c2) -> { if (c2) on.add(id); else on.remove(id); recalc.run(); });
+                chooser.addView(cb, new LinearLayout.LayoutParams(-1, -2));
+            }
+            sum.setTextColor(dim); sum.setTextSize(12); sum.setPadding(0, dp(8), 0, dp(8));
+            chooserFoot.addView(sum);
+            recalc.run();
+            TextView go = new TextView(this);
+            go.setText(Tr.t("开始安装"));
+            go.setTextColor(accent); go.setTextSize(15); go.setGravity(Gravity.CENTER);
+            go.setPadding(dp(14), dp(10), dp(14), dp(10));
+            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+            bg.setCornerRadius(dp(10)); bg.setStroke(dp(1), accent);
+            go.setBackground(bg);
+            go.setOnClickListener(v -> {
+                if (done.getCount() == 0) return;
+                out.addAll(on);
+                showChooser(false);
+                done.countDown();
+            });
+            chooserFoot.addView(go, new LinearLayout.LayoutParams(-1, -2));
+            showChooser(true);
+        });
+        awaitAlive(done);
+        return out;
+    }
+
+    private static Intent devkitPickIntent() {
+        return new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+    }
+
+    /** 首装：弹系统文件选择器并等它回来；没选返回 null */
+    private Uri pickDevkitBlocking() throws InterruptedException {
+        CountDownLatch l = new CountDownLatch(1);
+        picked = null;
+        pickWait = l;
+        ui.post(() -> {
+            try { startActivityForResult(devkitPickIntent(), REQ_DEVKIT); }
+            catch (Exception e) { say("✗ " + e.getMessage()); l.countDown(); }
+        });
+        try { awaitAlive(l); } finally { pickWait = null; }
+        return picked;
+    }
+
+    private InputStream openUri(Uri u) throws java.io.IOException {
+        if ("file".equals(u.getScheme())) return new java.io.FileInputStream(u.getPath());
+        InputStream in = getContentResolver().openInputStream(u);
+        if (in == null) throw new java.io.IOException(Tr.t("读不了这个文件"));
+        return in;
+    }
+
+    private long sizeOf(Uri u) {
+        if (u == null) return -1;
+        if ("file".equals(u.getScheme())) return new File(u.getPath()).length();
+        try (android.database.Cursor c = getContentResolver().query(u, new String[]{android.provider.OpenableColumns.SIZE}, null, null, null)) {
+            if (c != null && c.moveToFirst() && !c.isNull(0)) return c.getLong(0);
+        } catch (Exception ignored) {}
+        return -1;
+    }
+
+    /** 后台线程里弹一个确认框并等结果 */
+    private boolean askBlocking(String msg, String yes) throws InterruptedException {
+        final boolean[] ok = {false};
+        CountDownLatch l = new CountDownLatch(1);
+        // 和 confirmPriv 一样过 guard：按钮一秒后才能点、被盖住时不收触摸（问的是装不装来源不明的工具包，11-04 报告 A4）
+        ui.post(() -> {
+            android.app.AlertDialog d = new android.app.AlertDialog.Builder(this).setMessage(msg)
+                .setPositiveButton(yes, (x, w) -> ok[0] = true)
+                .setNegativeButton(Tr.t("取消"), null)
+                .setOnDismissListener(x -> l.countDown()).create();
+            if (!guard(d, android.content.DialogInterface.BUTTON_POSITIVE)) l.countDown();
+        });
+        awaitAlive(l);
+        return ok[0];
+    }
+
+    /**
+     * 本地工具包：先读一遍算 sha256、对照已发布的清单认身份；认不出就明说风险、让用户决定；认出来但不兼容就不装。
+     * 第二遍解包时再按清单的 tar sha256 边解边核，两遍之间文件被换掉也会被拦下。
+     * @param replacing true = 更新卡片发起、替换已装的（要停网关）；false = 首装
+     * @return false = 用户取消
+     */
+    private boolean installLocal(Installer ins, Uri uri, boolean replacing) throws Exception {
+        Updater upd = Updater.get(this);
+        long total = sizeOf(uri);
+        Installer.Source src = () -> openUri(uri);
+        String[] scan = ins.scanLocal(src, total);
+        say("sha256 " + scan[0]);
+        say(Tr.t("对照已发布的工具包…"));
+        org.json.JSONObject id = upd.identifyDevkit(scan[0]);
+        if (id == null) {
+            if (!askBlocking(Tr.f("这个文件不是已发布的工具包（也可能是现在没网、查不到清单）。\n\nsha256 前 12 位：{0}\n\n只在它是你自己构建的、或者确定来源可靠时才继续：工具包里的程序能读写 cccodroid 里的一切。", scan[0].substring(0, 12)),
+                    Tr.t("仍然安装"))) { say(Tr.t("已取消")); return false; }
+            say("⚠ " + Tr.t("没核对上来源，按你的确认继续"));
+        } else {
+            String why = upd.devkitIncompatible(id);
+            if (why != null) throw new java.io.IOException(why);
+            say(Tr.f("✓ 是已发布的 {0}", id.optString("tag")));
+        }
+        boolean gzip = "gz".equals(scan[1]);
+        if (replacing) upd.applyLocalDevkit(ins, src, total, gzip, scan[0], id);
+        else ins.installDevkit(src.open(), total, gzip, id != null ? id.optString("base") : "",
+            id != null && !id.optString("sha256").isEmpty() ? id.optString("sha256") : scan[0], id != null ? id.optString("tarSha256", null) : null);
+        return true;
+    }
+
+    /** 更新卡片的「从本地文件安装」：选好文件后切到进度页，认身份、替换，装完回到界面 */
+    private void applyLocalDevkitUi(Uri uri) {
+        Updater upd = Updater.get(this);
+        new Thread(() -> {
+            if (Updater.gatewayBusy() || upd.devkitMoving()) {
+                ui.post(() -> android.widget.Toast.makeText(this, Tr.t("有任务正在跑，等它结束再更新开发工具包"), android.widget.Toast.LENGTH_LONG).show());
+                return;
+            }
+            CountDownLatch shown = new CountDownLatch(1);
+            ui.post(() -> {
+                if (web != null) { web.destroy(); web = null; }
+                booted = false;
+                buildSetupUi();
+                shown.countDown();
+            });
+            try {
+                if (!awaitShown(shown)) return;
+                say(Tr.t("从本地文件安装开发工具包…"));
+                boolean done = installLocal(new Installer(env, new Installer.Progress() {
+                    public void step(String m) { say(m); }
+                    public void bytes(long d, long t) { progress(d, t); }
+                }), uri, true);
+                if (done) say(Tr.t("✓ 开发工具包已更新，等待网关…"));
+            } catch (Exception e) {
+                say("✗ " + e.getMessage());
+                say(Tr.t("（旧的工具包已经不在了的话，划掉应用重新打开会重新安装）"));
+                try { Thread.sleep(4000); } catch (InterruptedException ignored) {}
+            }
+            try { waitGateway(true); } catch (InterruptedException ignored) {}
+            ui.post(() -> { if (!isDestroyed()) { showWeb(); booted = true; } });
+        }, "devkit-local").start();
+    }
+
+    /**
+     * 卸载开发工具包 / Claude Code（设置页，确认框页面里弹过了）。会话、工作区、登录、设置都在 home 里，不动。
+     * · 工具包：网关靠里面的 node 跑，卸了只能回首装 —— 切回安装页、停网关、删掉，再走一遍启动流程（重选来源和模块）
+     * · Claude Code：只删程序、记下「用户卸了」，不自动装回；界面照常用，设置里那一项显示「未安装 · 安装…」，由用户选版本
+     */
+    private void uninstallUi(String item) {
+        new Thread(() -> {
+            if (Updater.gatewayBusy() || Updater.get(this).devkitMoving()) {
+                toast(Tr.t("有任务正在跑，等它结束再卸载"));
+                return;
+            }
+            Installer ins = new Installer(env, new Installer.Progress() {
+                public void step(String m) { say(m); }
+                public void bytes(long d, long t) { progress(d, t); }
+            });
+            if ("claude".equals(item)) {
+                try {
+                    ins.uninstallClaude();
+                    Ledger.add(env, "uninstall", true, Tr.t("卸载 Claude Code"), null);
+                    Updater.get(this).claudeRemoved();
+                    toast(Tr.t("已卸载 Claude Code。要用时到 设置 → 更新 里点「安装…」"));
+                } catch (Exception e) {
+                    Ledger.add(env, "uninstall", false, e.getMessage(), null);
+                    toast("✗ " + e.getMessage());
+                }
+                return;
+            }
+            CountDownLatch shown = new CountDownLatch(1);
+            ui.post(() -> {
+                if (web != null) { web.destroy(); web = null; }
+                booted = false;
+                buildSetupUi();
+                shown.countDown();
+            });
+            try {
+                if (!awaitShown(shown)) return;
+                say(Tr.t("卸载开发工具包…"));
+                GatewayService.pause(true);
+                try { ins.uninstallDevkit(); }
+                finally { GatewayService.pause(false); }
+                Ledger.add(env, "uninstall", true, Tr.t("卸载开发工具包"), null);
+                say(Tr.t("✓ 已卸载。接下来重新安装开发工具包："));
+            } catch (Exception e) {
+                Ledger.add(env, "uninstall", false, e.getMessage(), null);
+                say("✗ " + e.getMessage());
+            }
+            ui.post(() -> { if (!isDestroyed()) boot(); });
+        }, "uninstall").start();
+    }
+
+    /** 等进度页换上来。界面在这之前被销毁的话（onDestroy 清掉了还没执行的 post），永远等不到：
+     *  不再干等，返回 false 让调用的放弃（DeepSeek 复核 b7 高-1：以前 DEVKIT_APPLYING 会永久卡在 true） */
+    /** boot 线程等界面上的选择：界面没了就别干等（onDestroy 会清掉还没执行的 post，倒数永远不会到），抛出去让这条线程结束（11-04 报告 A4） */
+    private void awaitAlive(CountDownLatch l) throws InterruptedException {
+        while (!l.await(500, java.util.concurrent.TimeUnit.MILLISECONDS)) if (isDestroyed()) throw new InterruptedException("界面已关闭");
+    }
+    private boolean awaitShown(CountDownLatch l) throws InterruptedException {
+        while (!l.await(500, java.util.concurrent.TimeUnit.MILLISECONDS)) if (isDestroyed()) return false;
+        return true;
+    }
+
+    private void toast(String m) { ui.post(() -> android.widget.Toast.makeText(this, m, android.widget.Toast.LENGTH_LONG).show()); }
+
+    /** 替换工具包：网关要停，界面切回进度页，装完再回来 */
+    // 已经在替换了：再来的请求（连点「安装」、两条 Priv 连接）不另起一份（审查 #105 05-007）
+    private static final java.util.concurrent.atomic.AtomicBoolean DEVKIT_APPLYING = new java.util.concurrent.atomic.AtomicBoolean();
+    private void applyDevkitUi() {
+        Updater upd = Updater.get(this);
+        if (!upd.devkitStaged()) { upd.apply("devkit", true); return; }     // 还没下：先下，下完会再走到这里
+        if (!DEVKIT_APPLYING.compareAndSet(false, true)) return;
+        new Thread(() -> { try { applyDevkitRun(upd); } finally { DEVKIT_APPLYING.set(false); } }, "devkit-apply").start();
+    }
+    private void applyDevkitRun(Updater upd) {
+        if (Updater.gatewayBusy()) {
+            ui.post(() -> android.widget.Toast.makeText(this, Tr.t("有任务正在跑，等它结束再更新开发工具包"), android.widget.Toast.LENGTH_LONG).show());
+            return;
+        }
+        CountDownLatch shown = new CountDownLatch(1);
+        ui.post(() -> {
+            if (web != null) { web.destroy(); web = null; }
+            booted = false;
+            buildSetupUi();
+            shown.countDown();
+        });
+        try {
+            if (!awaitShown(shown)) return;
+            say(Tr.t("更新开发工具包…"));
+            upd.applyDevkit(new Installer(env, new Installer.Progress() {
+                public void step(String m) { say(m); }
+                public void bytes(long d, long t) { progress(d, t); }
+            }));
+            say(Tr.t("✓ 开发工具包已更新，等待网关…"));
+        } catch (Exception e) {
+            say("✗ " + e.getMessage());
+            say(Tr.t("（旧的工具包已经不在了的话，划掉应用重新打开会重新安装）"));
+        }
+        try { waitGateway(true); } catch (InterruptedException ignored) {}
+        ui.post(() -> { if (!isDestroyed()) { showWeb(); booted = true; } });
+    }
+
+    /** 等网关答话，最多约 60 秒。网关服务正在联网取回运行库时（GatewayService.gwFetchStep）不计时：
+     *  几百 MB 在移动数据下要好几分钟，到点切到一个打不开的界面只会让人以为卡死（11-09 群友）。
+     *  show：把取回的进度显示在启动页上，并说明断了会续传、别关应用 */
+    private void waitGateway(boolean show) throws InterruptedException {
+        String shown = null;
+        for (int i = 0; i < 120 && !ping(); ) {
+            String st = GatewayService.gwFetchStep;
+            if (st == null) i++;
+            else if (show) {
+                if (!st.equals(shown)) {
+                    if (shown == null) say(Tr.t("网关自己的运行库和安装包对不上，正在联网取回（下载断了会接着下，请别关掉应用）"));
+                    say(st); shown = st;
+                }
+                long d = GatewayService.gwFetchDone, t = GatewayService.gwFetchTotal;
+                if (t > 0) progress(d, t);
+            }
+            Thread.sleep(500);
+        }
+    }
+
+    /** assets/app → files/app。内容哈希写在 TAG 里，没变、且逐个文件核对和安装包一致（见 AppFiles）就不动 */
+    private void deployAssets() throws Exception {
+        String want = readAsset("app/TAG")  /* aapt2 打包时会丢掉点开头的文件 */;
+        File tag = new File(env.app, "TAG");
+        String have = tag.isFile() ? new String(java.nio.file.Files.readAllBytes(tag.toPath())) : "";
+        java.util.List<String> bad = want.equals(have) ? AppFiles.tampered(this, env.app) : null;
+        // TAG 对不上不一定是升级：同 uid 改了 TAG 就能让整树重铺不留痕。不是首次安装、又不是刚升级（AppFiles.updatedFrom）的，按篡改记。
+        // 删掉 TAG、换成目录也一样（审查 11-05 #18）：目录里还有别的文件就不是首次安装；整个目录没了（清除数据）才按首次铺
+        String[] left = env.app.list();
+        boolean deployed = tag.exists() || (left != null && left.length > 0);
+        if (bad == null && deployed && AppFiles.updatedFrom(this, env.app) == null) bad = AppFiles.tampered(this, env.app);
+        if (bad != null && bad.isEmpty()) return;
+        if (bad != null) {
+            android.util.Log.w("cccodroid", "files/app 被改过：" + bad);
+            Ledger.add(env, "repair", true, Tr.t("界面与网关的文件被改动过，已按安装包还原：") + android.text.TextUtils.join(", ", bad), null);
+            AppFiles.noteRestored(bad);
+            say(Tr.t("界面与网关的文件被改动过，已按安装包还原"));
+        } else say(Tr.t("部署界面与网关 ") + want.trim());
+        // boot() 一开头就起了网关服务，守护线程可能已经拿旧的 server.mjs 把 node 拉起来了 ——
+        // 不停一下，升级后界面是新的、网关还是旧的（新接口全 404），直到下次重启。
+        // 只在内容哈希变了（= 刚升级，进程本来就被安装杀过）或文件被改过时走到这里
+        GatewayService.pause(true);
+        try {
+            AppFiles.deploy(this, env.app);
+        } finally {
+            // 守护线程若恰好在 pause 前一刻已经在拉 node，这里再杀一次，保证起来的一定是新文件
+            GatewayService.pause(true);
+            GatewayService.pause(false);
+        }
+    }
+
+    private String readAsset(String p) throws Exception {
+        try (InputStream in = getAssets().open(p)) {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[4096];
+            for (int n; (n = in.read(buf)) > 0; ) bo.write(buf, 0, n);
+            return bo.toString("UTF-8");
+        }
+    }
+
+    /** 电池优化会在锁屏后冻结我们 —— 只问一次，用户拒绝就不再打扰 */
+    @SuppressLint("BatteryLife")
+    private void askBatteryExemption() {
+        PowerManager pm = getSystemService(PowerManager.class);
+        SharedPreferences sp = getSharedPreferences("ui", MODE_PRIVATE);
+        if (pm.isIgnoringBatteryOptimizations(getPackageName()) || sp.getBoolean("askedBattery", false)) return;
+        ui.post(() -> {
+            // 界面在前台、真弹出来了才记「问过」：后台起 Activity 会被系统拦（36 包更严），以前先记后弹，被拦一次就永远不再问（11-04 报告 A4）
+            if (!visible || isFinishing() || isDestroyed()) return;
+            try {
+                startActivity(new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:" + getPackageName())));
+                sp.edit().putBoolean("askedBattery", true).apply();
+            } catch (Exception ignored) {}
+        });
+    }
+
+    /**
+     * 通知被关时引导去设置页开。targetSdk 28 的应用不能自己弹通知权限框（requestPermissions 会被系统直接忽略），
+     * 本该由系统在"界面在前台时建第一个通知渠道"那一刻代问 —— 但我们的渠道由前台服务建，常常错过时机，
+     * 之后系统就再也不问，通知被整个屏蔽（实测 Android 14：发了 15 条、显示 0 条）。只问一次。
+     */
+    private void askPerms() { if (!askNotifications()) askAllFiles(); }
+
+    /** @return 这次弹了东西（系统权限框或引导框） */
+    private boolean askNotifications() {
+        android.app.NotificationManager nm = getSystemService(android.app.NotificationManager.class);
+        SharedPreferences sp = getSharedPreferences("ui", MODE_PRIVATE);
+        // targetSdk ≥ 33 的包可以直接弹系统的通知权限框（28 的包不行，见上）
+        if (Build.VERSION.SDK_INT >= 33 && getApplicationInfo().targetSdkVersion >= 33
+                && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED
+                && !sp.getBoolean("askedNotifyPerm", false)) {
+            sp.edit().putBoolean("askedNotifyPerm", true).apply();
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 2);
+            return true;
+        }
+        if (nm.areNotificationsEnabled() || sp.getBoolean("askedNotifySettings", false)) return false;
+        sp.edit().putBoolean("askedNotifySettings", true).apply();
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(Tr.t("开启通知"))
+            .setMessage(Tr.t("cccodroid 在后台跑任务时靠一条常驻通知保活；任务完成或需要你确认时也通过通知提醒。\n\n系统目前屏蔽了本应用的通知，去设置里打开吧。"))
+            .setPositiveButton(Tr.t("去开启"), (d, w) -> {
+                try {
+                    startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
+                } catch (Exception e) {
+                    startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
+                }
+            })
+            .setNegativeButton(Tr.t("以后再说"), null)
+            .show();
+        return true;
+    }
+
+    /**
+     * targetSdk ≥ 30：共享目录 /sdcard/cccodroid（交付 APK、截图、本地工具包）要「所有文件访问」。
+     * 问一次，带去系统设置页（Shizuku 授权了也不代为打开，见下）。给了以后重启网关才进 CCAPP_SHARED
+     */
+    private void askAllFiles() {
+        if (getApplicationInfo().targetSdkVersion < 30 || Build.VERSION.SDK_INT < 30 || android.os.Environment.isExternalStorageManager()) return;
+        SharedPreferences sp = getSharedPreferences("ui", MODE_PRIVATE);
+        if (sp.getBoolean("askedAllFiles", false)) return;
+        sp.edit().putBoolean("askedAllFiles", true).apply();
+        // Shizuku 授权了也先问（审查 v0.5.9 B2）：以前直接 appops 给，绕过了系统的专用同意界面
+        new android.app.AlertDialog.Builder(this)
+            .setTitle(Tr.t("允许访问共享存储"))
+            .setMessage(Tr.t("cccodroid 和其他应用交换文件（交付的 APK、截图、离线工具包）用的是 /sdcard/cccodroid。这个版本的安卓要你在设置里打开「所有文件访问」才能读写它。\n\n不开也能用，只是这些文件只留在应用私有目录里。"))
+            .setPositiveButton(Tr.t("去开启"), (d, w) -> {
+                try { startActivity(new Intent("android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION", Uri.parse("package:" + getPackageName()))); }
+                catch (Exception e) { try { startActivity(new Intent("android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION")); } catch (Exception ignored) {} }
+            })
+            .setNegativeButton(Tr.t("以后再说"), null)
+            .show();
+    }
+
+    private boolean ping() {
+        try {
+            HttpURLConnection c = Env.gateway("/api/status");
+            c.setConnectTimeout(800); c.setReadTimeout(1500);
+            return c.getResponseCode() == 200;
+        } catch (Exception e) { return false; }
+    }
+
+    // ── 系统栏：铺满窗口，顶部占位交给页面自己避让 ─────────────────────
+    //  以前由系统在顶上留一条状态栏高度的底色：分屏时下半屏没有状态栏，却也留着一条灰条。
+    //  现在窗口画到状态栏底下，系统报多少顶部占位（WindowInsets）就告诉页面多少（--safe-t），
+    //  顶栏的底色自己延伸上去；分屏没有状态栏时报 0，界面就占满。
+    //  底部同理（安卓 11+）：手势条 / 三键导航那一截也画进去，高度经 --safe-b 交给页面，输入框、侧栏底的底色延伸下去；
+    //  以前这里留白，那一截只能刷导航栏色，和侧栏、输入框的底色对不上，折叠屏上看着像界面短了一截。
+    //  输入法弹起时仍由这里按键盘高度留白（adjustResize 的效果不变），这时 --safe-b 归 0。左右仍由这里留白。
+    private int insetTop = 0, insetBot = 0;
+    private void edgeToEdge() {
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
+        View d = getWindow().getDecorView();
+        int f = View.SYSTEM_UI_FLAG_LAYOUT_STABLE | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN;
+        // 安卓 11+ 连导航栏底下也画（只是「画到底下」，导航栏照常显示）；导航栏底色透明，三键导航也不另加半透明遮罩
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            f |= View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+            getWindow().setNavigationBarColor(Color.TRANSPARENT);
+            getWindow().setNavigationBarContrastEnforced(false);
+        }
+        d.setSystemUiVisibility(d.getSystemUiVisibility() | f);
+        root.setOnApplyWindowInsetsListener((v, in) -> {
+            insetTop = in.getSystemWindowInsetTop();
+            // LAYOUT_STABLE 下上面那个值在状态栏藏起来后仍报原高度；安卓 11+ 按状态栏当前是否可见取（加上挖孔）
+            if (android.os.Build.VERSION.SDK_INT >= 30)
+                insetTop = in.getInsets(android.view.WindowInsets.Type.statusBars() | android.view.WindowInsets.Type.displayCutout()).top;
+            // 安装页没有网页来避让，顶部、底部都由这里留白；界面起来以后交给 --safe-t / --safe-b
+            int padBot = in.getSystemWindowInsetBottom();
+            insetBot = 0;
+            if (android.os.Build.VERSION.SDK_INT >= 30 && web != null) {
+                int ime = in.getInsets(android.view.WindowInsets.Type.ime()).bottom;
+                int nav = in.getInsets(android.view.WindowInsets.Type.navigationBars()).bottom;
+                if (ime > 0) padBot = Math.max(ime, nav);
+                else { padBot = 0; insetBot = nav; }
+            }
+            v.setPadding(in.getSystemWindowInsetLeft(), web == null ? insetTop : 0, in.getSystemWindowInsetRight(), padBot);
+            pushInsets();
+            return in.consumeSystemWindowInsets();
+        });
+    }
+    private void pushInsets() {
+        if (web == null) return;
+        float d = getResources().getDisplayMetrics().density;
+        web.evaluateJavascript("document.documentElement.style.setProperty('--safe-t','" + insetTop / d + "px');"
+            + "document.documentElement.style.setProperty('--safe-b','" + insetBot / d + "px')", null);
+        pushFold();
+    }
+    /** 折痕交给页面：html[data-fold=none|flat|half]、data-fold-dir=v（竖折痕，左右分）|h（横折痕，上下分），
+     *  --fold-x/--fold-w 或 --fold-y/--fold-h（第一条折痕，CSS 像素，相对 WebView 左上角），data-folds=条数；
+     *  三折叠展开有两条，全部在 window.__ccFold.list 里。再发一个 ccfold 事件。
+     *  窗口变了（合上 / 展开 / 分屏）厂商会重新回调；系统栏变了走 pushInsets 顺带再算一遍 */
+    private void pushFold() {
+        if (web == null || fold == null) return;
+        StringBuilder list = new StringBuilder();
+        int[] at = new int[2];
+        web.getLocationInWindow(at);
+        float d = getResources().getDisplayMetrics().density;
+        boolean half = false;
+        for (Fold.Feat f : fold.feats) {
+            android.graphics.Rect b = f.r;
+            if (list.length() > 0) list.append(',');
+            list.append("{dir:'").append(b.height() > b.width() ? "v" : "h").append("'")   // 折痕矩形的宽或高常为 0：竖着的就是左右分
+                .append(",x:").append((b.left - at[0]) / d).append(",y:").append((b.top - at[1]) / d)
+                .append(",w:").append(b.width() / d).append(",h:").append(b.height() / d)
+                .append(",type:").append(f.type).append(",state:").append(f.state).append('}');
+            half |= f.state == 2;
+        }
+        String js = "{fold:'" + (fold.feats.isEmpty() ? "none" : half ? "half" : "flat") + "',vendor:" + fold.vendor + ",list:[" + list + "]}";
+        web.evaluateJavascript(guarded("pushFold", "var f=" + js + ",r=document.documentElement,a=f.list[0];"
+            + "if(a){f.dir=a.dir;f.x=a.x;f.y=a.y;f.w=a.w;f.h=a.h}window.__ccFold=f;r.dataset.fold=f.fold;r.dataset.folds=f.list.length;"
+            + "if(a){r.dataset.foldDir=a.dir;for(var k of ['x','y','w','h'])r.style.setProperty('--fold-'+k,a[k]+'px')}else delete r.dataset.foldDir;"
+            + "window.dispatchEvent(new CustomEvent('ccfold',{detail:f}))"), null);
+    }
+
+    // ── 界面 ───────────────────────────────────────────────────────────
+    private void buildSetupUi() { buildSetupUi(false); }
+    /** quick = 平时启动：先只露出居中的标识，安装页整套控件照样建好、藏着，需要时 expandSetup() 换上来 */
+    private void buildSetupUi(boolean quick) {
+        boolean dark = uiDark();
+        int accent = BrowserPane.pal(this, dark, "accent");
+        // 换整棵视图树（装/更新/卸工具包）前先把浏览器窗格关掉：不然 pane 还指着旧树里的那个，再开网页一片空白（审查 #50 R1）
+        if (pane != null) closePane(true);
+        root = new FrameLayout(this);
+        root.setBackgroundColor(BrowserPane.pal(this, dark, "bg"));
+        LinearLayout col = new LinearLayout(this);
+        setupCol = col;
+        col.setOrientation(LinearLayout.VERTICAL);
+        col.setPadding(dp(20), dp(40), dp(20), dp(20));
+        // 标题行：标识（一直在扫，表示还在忙）+ cccodroid
+        LinearLayout head = new LinearLayout(this);
+        head.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        head.setPadding(0, 0, 0, dp(12));
+        head.addView(new Mark(this, BrowserPane.pal(this, dark, "fg"), Mark.dotColor(this, dark)), new LinearLayout.LayoutParams(dp(34), dp(34)));
+        TextView title = new TextView(this);
+        title.setText("cccodroid");
+        title.setTextSize(24);
+        title.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        title.setPadding(dp(12), 0, 0, 0);
+        title.setTextColor(BrowserPane.pal(this, dark, "fg"));
+        head.addView(title);
+        col.addView(head);
+        bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        bar.setIndeterminate(true);
+        bar.setProgressTintList(android.content.res.ColorStateList.valueOf(accent));
+        bar.setIndeterminateTintList(android.content.res.ColorStateList.valueOf(accent));
+        bar.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(BrowserPane.pal(this, dark, "line")));
+        col.addView(bar, new LinearLayout.LayoutParams(-1, dp(8)));
+        stat = new TextView(this);
+        stat.setTextColor(BrowserPane.pal(this, dark, "fg"));
+        stat.setTextSize(12.5f);
+        stat.setPadding(0, dp(6), 0, dp(10));
+        stat.setTypeface(android.graphics.Typeface.MONOSPACE);
+        col.addView(stat);
+        log = new TextView(this);
+        log.setTextColor(BrowserPane.pal(this, dark, "dim"));   // 原始输出压暗一档，进度和结论靠上面那行
+        log.setTextSize(11.5f);
+        log.setLineSpacing(0, 1.15f);
+        log.setTypeface(android.graphics.Typeface.MONOSPACE);
+        logScroll = new ScrollView(this);
+        logScroll.addView(log);
+        col.addView(logScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        retry = new android.widget.Button(this);
+        retry.setText(Tr.t("重试"));
+        retry.setVisibility(View.GONE);
+        retry.setOnClickListener(v -> { retry.setVisibility(View.GONE); stuck.setVisibility(View.GONE); say(Tr.t("— 重试 —")); boot(); });
+        // 「我卡住了」：界面还没起来时（安装就失败了）也能把诊断包发出去
+        stuck = new android.widget.Button(this);
+        stuck.setText(Tr.t("我卡住了：分享诊断"));
+        stuck.setVisibility(View.GONE);
+        stuck.setOnClickListener(v -> new android.app.AlertDialog.Builder(this)
+            .setTitle(Tr.t("打包诊断信息"))
+            .setMessage(Share.contents())
+            .setPositiveButton(Tr.t("打包并分享"), (d, w) -> new Thread(() -> {
+                try { Share.send(this, Share.bundleLogs(this), "application/zip"); }
+                catch (Exception e) { say(Tr.t("✗ 诊断包没打成：") + e.getMessage()); }
+            }, "stuck").start())
+            .setNeutralButton(Tr.t("恢复初始设置"), (d, w) -> askFactoryReset())
+            .setNegativeButton(Tr.t("取消"), null).show());
+        chooser = new LinearLayout(this);
+        chooser.setOrientation(LinearLayout.VERTICAL);
+        chooser.setVisibility(View.GONE);
+        // 选项放 ScrollView 并占满剩余高度（权重 1，选的时候日志区收起）；「开始安装」钉在下面的 chooserFoot，不进滚动区。
+        // 0.3.10 那版给 ScrollView 用 wrap_content：前面的日志区带权重时，竖排 LinearLayout 量它不扣已用高度，
+        // 它就有整屏高、底边落在屏幕外，按钮看不见也划不到（手机竖屏，群友真机）
+        chooserScroll = new ScrollView(this);
+        chooserScroll.addView(chooser);
+        chooserScroll.setVisibility(View.GONE);
+        col.addView(chooserScroll, new LinearLayout.LayoutParams(-1, 0, 1));
+        chooserFoot = new LinearLayout(this);
+        chooserFoot.setOrientation(LinearLayout.VERTICAL);
+        chooserFoot.setPadding(0, dp(8), 0, 0);
+        chooserFoot.setVisibility(View.GONE);
+        col.addView(chooserFoot, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout acts = new LinearLayout(this);
+        acts.addView(retry, new LinearLayout.LayoutParams(-2, -2));
+        acts.addView(stuck, new LinearLayout.LayoutParams(-2, -2));
+        col.addView(acts, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(col);
+        splash = null; splashMark = null; splashStat = null;
+        if (quick) {
+            col.setVisibility(View.GONE);
+            LinearLayout sp = new LinearLayout(this);
+            sp.setOrientation(LinearLayout.VERTICAL);
+            sp.setGravity(android.view.Gravity.CENTER);
+            splashMark = new Mark(this, BrowserPane.pal(this, dark, "fg"), Mark.dotColor(this, dark));
+            sp.addView(splashMark, new LinearLayout.LayoutParams(dp(88), dp(88)));
+            splashStat = new TextView(this);
+            splashStat.setTextColor(BrowserPane.pal(this, dark, "hint"));
+            splashStat.setTextSize(12.5f);
+            splashStat.setGravity(android.view.Gravity.CENTER);
+            splashStat.setSingleLine(true);
+            splashStat.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            splashStat.setPadding(dp(24), dp(22), dp(24), 0);
+            sp.addView(splashStat, new LinearLayout.LayoutParams(-1, -2));
+            splash = sp;
+            root.addView(sp, new FrameLayout.LayoutParams(-1, -1));
+        }
+        setContentView(root);
+        applyBars(dark);
+        // 每次重建 root 都要重新挂系统栏监听：以前只在 onCreate 挂，重试 / 换工具包重建后安全区就不跟着变了（11-04 报告 A4）
+        edgeToEdge();
+        root.requestApplyInsets();
+    }
+
+    /** 平时启动途中碰上要看细节的事（出错、要下载、要选来源）：收起居中标识，换回完整的安装页 */
+    private void expandSetup() {
+        if (splash == null || splash.getVisibility() != View.VISIBLE) return;
+        splash.setVisibility(View.GONE);
+        setupCol.setVisibility(View.VISIBLE);
+    }
+
+    private void say(String m) {
+        android.util.Log.i("cccodroid-setup", m);      // 安装 / 更新出问题时，logcat 里能看到走到了哪一步
+        ui.post(() -> {
+            if (splashStat != null) splashStat.setText(m);
+            if (m.startsWith("✗")) expandSetup();
+            log.append(m + "\n");
+            if (log.getLineCount() > 400) log.setText(log.getText().subSequence(log.getText().length() / 2, log.getText().length()));
+            logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
+        });
+    }
+
+    // 下载 / 解包进度：已完成 / 总量 · 百分比 · 速度 · 剩余时间。几百 MB 走十分钟，光一根条看不出是不是卡住了
+    private long lastD = -1, lastT;
+    private double speed;                     // 字节/秒，指数平滑
+    private void progress(long d, long t) {
+        long now = System.currentTimeMillis();
+        if (d < lastD || lastD < 0) { speed = 0; lastD = d; lastT = now; }      // 新的一段（换了阶段）
+        else if (now - lastT >= 1000) {
+            double v = (d - lastD) * 1000.0 / (now - lastT);
+            speed = speed == 0 ? v : speed * 0.7 + v * 0.3;
+            lastD = d; lastT = now;
+        }
+        String txt;
+        if (t <= 0) txt = mb(d);
+        else {
+            txt = mb(d) + " / " + mb(t) + " · " + (d * 100 / t) + "%";
+            if (speed > 0 && d < t) {
+                long eta = (long) ((t - d) / speed);
+                txt += " · " + mb((long) speed) + "/s · " + (eta >= 60 ? Tr.f("剩约 {0} 分", eta / 60) : Tr.f("剩约 {0} 秒", eta));
+            }
+        }
+        final String line = txt;
+        ui.post(() -> {
+            expandSetup();
+            if (t <= 0) bar.setIndeterminate(true);
+            else { bar.setIndeterminate(false); bar.setProgress((int) (d * 100 / t)); }
+            stat.setText(line);
+        });
+    }
+    private static String mb(long b) { return String.format(java.util.Locale.ROOT, b >= 100 << 20 ? "%.0f MB" : "%.1f MB", b / 1048576.0); }
+
+    private Mark handoffMark;
+    /** 网关页面落地后收起标识层：标识收缩淡出，底色同时淡掉 */
+    private void dropHandoff() {
+        final View ho = handoff;
+        if (ho == null) return;
+        handoff = null;
+        if (handoffMark != null) handoffMark.finish(null);
+        handoffMark = null;
+        ho.animate().alpha(0).setStartDelay(120).setDuration(260).withEndAction(() -> {
+            if (ho.getParent() instanceof android.view.ViewGroup) ((android.view.ViewGroup) ho.getParent()).removeView(ho);
+        }).start();
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void showWeb() {
+        // 后台线程（首装、替换工具包）收尾时界面可能已经被划掉：别在死掉的界面上新建 WebView，
+        // 也别把新界面设好的 onBoot / onSquat 抢回来（DeepSeek 复核 b7 高-2）
+        if (isDestroyed()) return;
+        // 下面 removeAllViews 会把窗格摘掉；字段不清的话窗格从此一片空白、关不掉（同上 中-3）
+        if (pane != null) closePane(true);
+        askPerms();
+        // 网页调试默认关：开着时任何连上 adb 的电脑都能读页面（含网关令牌）。
+        // 要调试就在终端里 touch ~/.webdebug，重开应用。这个文件同 uid 的脚本也建得出来，所以光有它不算数：
+        // 第一次要在原生对话框里点头（再用锁屏验证存下来，见 Consent）；删掉文件就连同意一起撤掉（11-03 审查 L-16）
+        boolean wantDbg = new File(env.home, ".webdebug").exists();
+        if (!wantDbg) Consent.revoke(this, Consent.WEBDEBUG);
+        WebView.setWebContentsDebuggingEnabled(wantDbg && Consent.on(this, Consent.WEBDEBUG));
+        if (wantDbg && !Consent.on(this, Consent.WEBDEBUG)) ui.post(this::confirmWebDebug);
+        guardServiceWorkers();
+        web = new WebView(this) {
+            @Override public boolean dispatchTouchEvent(android.view.MotionEvent e) {
+                if (e.getActionMasked() == android.view.MotionEvent.ACTION_UP) { hangCheck(); imeCheck(); }
+                return super.dispatchTouchEvent(e);
+            }
+            @Override public android.view.inputmethod.InputConnection onCreateInputConnection(android.view.inputmethod.EditorInfo o) {
+                android.view.inputmethod.InputConnection ic = super.onCreateInputConnection(o);
+                imeNoConn = ic == null;
+                return ic;
+            }
+        };
+        WebSettings s = web.getSettings();
+        s.setJavaScriptEnabled(true);
+        s.setDomStorageEnabled(true);
+        s.setMediaPlaybackRequiresUserGesture(false);
+        // 界面全走本机网关（http），用不着 file://；预览里跑的是不可信网页，显式关掉（targetSdk 28 默认是开的）
+        s.setAllowFileAccess(false);
+        s.setAllowFileAccessFromFileURLs(false);
+        s.setAllowUniversalAccessFromFileURLs(false);
+        // content:// 也用不着（选文件走 onShowFileChooser，不经页面加载）；预览页别能导航到 content://cox.dragon.share/…（11-03 审查 L-12）
+        s.setAllowContentAccess(false);
+        web.setBackgroundColor(BrowserPane.pal(this, uiDark(), "bg"));
+        // 本机网关之外的地址一律交给系统浏览器：登录授权页、"去官网创建 Key" 之类。
+        // 在 WebView 里打开登录页会被 Google 等拒绝，而且 OAuth 回调要回到浏览器才能跳 localhost。
+        web.setWebViewClient(new WebViewClient() {
+            // 渲染进程被系统收掉 / 崩了（审查 #105 06-009）：不接的话默认把整个应用带走（网关服务、在跑的任务跟着遭殃）。
+            // 换一个新的 WebView 重新载入界面，和替换工具包后回到界面走同一条路
+            @Override public boolean onRenderProcessGone(WebView v, android.webkit.RenderProcessGoneDetail d) {
+                android.util.Log.w("cccodroid", "界面渲染进程没了 crash=" + d.didCrash());
+                if (v.getParent() instanceof android.view.ViewGroup) ((android.view.ViewGroup) v.getParent()).removeView(v);
+                v.destroy();
+                if (v != web) return true;
+                web = null;
+                // 选文件 / 拍照的回调属于死掉的那个 WebView：清掉，结果回来时走「界面重建过」那条路（放进 uploads 递给新页面，11-04 报告 A4）
+                if (fileCb != null) { try { fileCb.onReceiveValue(null); } catch (Exception ignored) {} fileCb = null; }
+                if (!isDestroyed()) ui.post(() -> { if (web == null && !isDestroyed()) showWeb(); });
+                return true;
+            }
+            // 只管整页跳转：查看器里 HTML 预览的 iframe 在里面点链接，留在预览里，别当外链甩出去
+            @Override public boolean shouldOverrideUrlLoading(WebView v, android.webkit.WebResourceRequest req) {
+                if (!req.isForMainFrame()) return false;
+                return shouldOverrideUrlLoading(v, req.getUrl().toString());
+            }
+            @Override public boolean shouldOverrideUrlLoading(WebView v, String url) {
+                // 网关起不来时的等待页 / 拦截页上的两个自救链接（页面不许跑脚本，只能靠跳转）。都只是弹原生对话框，谁点的都一样要用户确认
+                if (RESCUE_RESET.equals(url)) { askFactoryReset(); return true; }
+                if (RESCUE_LOGS.equals(url)) { stuck.performClick(); return true; }
+                if (isOwnGateway(url)) return false;
+                // 预览没开「联网」时，网页自己整页跳到外站（top.location、target=_blank）会落到这里，
+                // 交给外部浏览器就等于把地址里夹带的内容送了出去。拦截那层管不到整页跳转，这里先问一句（10-31 复核补）
+                if (pvOffline && !localHost(Uri.parse(url).getHost())) { confirmExternal(url); return true; }
+                openExternal(url);
+                return true;
+            }
+            // 界面专用地址上别的端口一律不许请求（GHSA-hwmm 第 1 项）：会话 Cookie 种在 127.0.0.2 上，Cookie 不分端口，
+            // 回复里一张 <img src="http://127.0.0.2:端口/…">、预览里的一个请求，都会把它送给在那个端口监听的应用。
+            // 这里在原生层拦，不靠 CSP —— iframe 里的文档不归界面的 CSP 管
+            @Override public android.webkit.WebResourceResponse shouldInterceptRequest(WebView v, android.webkit.WebResourceRequest req) {
+                Uri u = req.getUrl();
+                if (isUiHost(u.getHost()) && !isOwnGateway(u.toString())) return blocked();
+                // HTML 预览没开「联网」时：整个界面 WebView 不许出本机（审查 v0513b 中-5）。CSP 管得住 fetch / 图片 / 脚本，
+                // 管不住预览页把自己跳到外站（地址里带着读到的文件）；iframe 的整页跳转也走这里，在这一层一起拦
+                if (pvOffline && !localHost(u.getHost())) return blocked();
+                // 界面自己的 /api/*：先当场核一次对面还是不是本应用这次拉起的网关（0.6.10 审计 199-1-04）。
+                // 页面开着的时候网关被杀、端口被同机应用占住的空档里，冒牌的一能让事件总线 onopen（页面以为连上了），
+                // 二能收走 /api/chat 里用户输入的内容。核不过就回 502，页面按断线处理；核的时候不吃 Env 的 3 秒缓存。
+                // 静态资源已由下面的 fetchStatic 按 X-CC-Mac 核过，这里把 /api 也纳入同一道证明。
+                if (isOwnGateway(u.toString()) && u.getPath() != null && u.getPath().startsWith("/api/")
+                    && !Env.proveGateway(true)) return unavailable();
+                // 界面 WebView 用不着 Service Worker；预览页要是注册一个，它发的请求不归页面的 CSP 管（10-31 复核）。注册时取脚本这一步就拦掉
+                java.util.Map<String, String> rh = req.getRequestHeaders();
+                if (rh != null) for (java.util.Map.Entry<String, String> h : rh.entrySet())
+                    if ("service-worker".equalsIgnoreCase(h.getKey()) && "script".equalsIgnoreCase(h.getValue())) return blocked();
+                // 界面自己的页面与静态资源（/api 之外的 GET）由原生代取、核过网关的 HMAC 才交出（审查 10-29 第六份 中3）。
+                // /api 照常走 WebView：它要带 Cookie、要流式（事件总线），而且回来的是数据、界面一律转义着用
+                if (isOwnGateway(u.toString()) && "GET".equalsIgnoreCase(req.getMethod())) {
+                    String p = u.getEncodedPath();
+                    if (p == null || p.isEmpty()) p = "/";
+                    if (!p.startsWith("/api/")) {
+                        android.webkit.WebResourceResponse r = Env.fetchStatic(p + (u.getEncodedQuery() != null ? "?" + u.getEncodedQuery() : ""));
+                        if (r != null) return r;
+                        // 页面本身取不到（多半是通知栏点了「停止」、网关没了）：以前回空 502，WebView 停在 ERR_HTTP_RESPONSE_CODE_FAILURE 再没人管。
+                        // 换成一页「等待网关」，同时把服务拉起来，网关答话了重新载入（11-05 报告）
+                        if (req.isForMainFrame()) { ui.post(() -> recoverGateway(true)); return waitingPage(); }
+                        return unavailable();
+                    }
+                }
+                return null;
+            }
+            @Override public void onPageFinished(WebView v, String url) {
+                if (bounceStage != 0) {   // 冻结脱困中：跳出去那一下落地了就马上跳回来；回到网关页面才算完
+                    if (!isOwnGateway(url)) { if (bounceStage == 1) bounceBack(); return; }
+                    bounceStage = 0; web.setVisibility(View.VISIBLE);
+                }
+                // 网关页面落地就清历史：脱困跳转、看门狗重载留下的条目都没有回去的意义
+                if (isOwnGateway(url)) v.clearHistory();
+                if (isOwnGateway(url)) pvOffline = false;   // 界面重新载入了：查看器没开着，别把「不联网」留下来
+                pushInsets();
+                if (handoff != null && isOwnGateway(url)) ui.postDelayed(MainActivity.this::dropHandoff, 180);
+                if (pendingSid != null && isOwnGateway(url)) { String sid = pendingSid; pendingSid = null; openSession(sid); }
+            }
+        });
+        web.addJavascriptInterface(new Object() {
+            // 有副作用的方法第一个参数是口令 k（见 Env.BRIDGE_KEY）；界面在 theme.js 里包一层自动带上，调用处照旧写
+            @android.webkit.JavascriptInterface public boolean keyed() { return true; }
+            @android.webkit.JavascriptInterface public void openUrl(String k, String url) { if (!Env.bridgeOk(k)) return;
+                if (url != null && (url.startsWith("https://") || url.startsWith("http://"))) ui.post(() -> openExternal(url));
+            }
+            // ── 嵌入式浏览器窗格（宽屏）：页面决定开不开、摆在哪；关掉（✕）回调 __ccBrowserClosed ──
+            @android.webkit.JavascriptInterface public boolean hasPane() { return true; }
+            /** 查看器开着不联网的 HTML 预览（true）/ 关了或允许联网（false），见 shouldInterceptRequest */
+            @android.webkit.JavascriptInterface public void previewNet(String k, boolean offline) { if (!Env.bridgeOk(k)) return; pvOffline = offline; }
+            @android.webkit.JavascriptInterface public void paneOpen(String k, String url) { if (!Env.bridgeOk(k)) return;
+                if (url != null && !url.isEmpty() && !url.startsWith("https://") && !url.startsWith("http://")) return;
+                if (isGatewayUrl(url)) return;
+                ui.post(() -> openPane(url));
+            }
+            /** 页面坐标（CSS px，相对对话 WebView 左上角）；w <= 0 = 先藏起来（被别的窗格 / 浮层盖住时） */
+            @android.webkit.JavascriptInterface public void paneBounds(String k, float x, float y, float w, float h) { if (!Env.bridgeOk(k)) return;
+                ui.post(() -> placePane(x, y, w, h));
+            }
+            @android.webkit.JavascriptInterface public boolean paneCanBack() { return paneCanBack; }
+            @android.webkit.JavascriptInterface public void paneGoBack(String k) { if (!Env.bridgeOk(k)) return; ui.post(() -> { if (pane != null) pane.back(); }); }
+            @android.webkit.JavascriptInterface public void paneClose(String k) { if (!Env.bridgeOk(k)) return; ui.post(() -> closePane(false)); }
+            /** 应用内浏览器（回复里的网页链接、本机开发服务）；url 为空 = 回到上次那页 */
+            @android.webkit.JavascriptInterface public void openBrowser(String k, String url) { if (!Env.bridgeOk(k)) return;
+                if (isGatewayUrl(url)) return;
+                if (url == null || url.isEmpty() || url.startsWith("https://") || url.startsWith("http://"))
+                    ui.post(() -> BrowserActivity.open(MainActivity.this, url));
+            }
+            /** 「截屏给 Claude」：用户点了才发一次性截屏码，网关拿它去 priv 截屏（见 Priv.armShot） */
+            @android.webkit.JavascriptInterface public String privShot(String k, int delaySec) { if (!Env.bridgeOk(k)) return ""; return Priv.armShot(delaySec); }
+            /** 回复底下的「转发」：把正文交给系统分享面板 */
+            @android.webkit.JavascriptInterface public void shareText(String k, String text) { if (!Env.bridgeOk(k)) return;
+                if (text != null && !text.isEmpty()) ui.post(() -> shareTextNow(text));
+            }
+            /** 复制到剪贴板：WebView 里 navigator.clipboard.writeText 常被拒（NotAllowedError，页面没焦点或权限策略），走系统剪贴板稳 */
+            @android.webkit.JavascriptInterface public boolean copyText(String k, String text) { if (!Env.bridgeOk(k)) return false;
+                if (text == null) return false;
+                try {
+                    android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("cccodroid", text));
+                    return true;
+                } catch (Exception e) { return false; }
+            }
+            /** 冻结脱困：WebView 偶发把这个文档的触摸滚动整个吞掉，同站重载不好，跨站跳一次再回来才好。见 bounce() */
+            /** 更新卡片的「从本地文件安装」：弹系统文件选择器，选好后由 applyLocalDevkitUi 接手 */
+            @android.webkit.JavascriptInterface public void pickDevkit(String k) { if (!Env.bridgeOk(k)) return;
+                ui.post(() -> { pickWait = null; try { startActivityForResult(devkitPickIntent(), REQ_DEVKIT); } catch (Exception ignored) {} });
+            }
+            /** 设置页「卸载」：devkit / claude。确认框在页面里弹过了 */
+            @android.webkit.JavascriptInterface public void uninstall(String k, String item) { if (!Env.bridgeOk(k)) return;
+                if ("devkit".equals(item) || "claude".equals(item)) uninstallUi(item);
+            }
+            /** 界面连不上网关（事件流一直断着）：服务被停掉了就拉起来 */
+            @android.webkit.JavascriptInterface public void ensureGateway(String k) { if (!Env.bridgeOk(k)) return; ui.post(() -> recoverGateway(false)); }
+            @android.webkit.JavascriptInterface public void unfreeze(String k) { if (!Env.bridgeOk(k)) return; ui.post(() -> bounce()); }
+            /** 更新说明（见 WhatsNew）：页面启动时来取（只读、不记账，所以可以不带口令；预览页调了也压不掉更新说明，0.6.10 审计 200-1-08），
+             *  显示出来后调带口令的 whatsNewSeen 记账 */
+            @android.webkit.JavascriptInterface public String whatsNew(String lang) { return WhatsNew.pending(MainActivity.this, lang); }
+            /** 附件栏里的文件不要了（drop）或已经发出去了（!drop）：分享拷进来的那份按清单删掉 / 划掉（199-1-05） */
+            @android.webkit.JavascriptInterface public void shareDone(String k, String path, boolean drop) { if (!Env.bridgeOk(k)) return; MainActivity.this.shareDone(path, drop); }
+            @android.webkit.JavascriptInterface public void whatsNewSeen(String k) { if (!Env.bridgeOk(k)) return; WhatsNew.seen(MainActivity.this); }
+            @android.webkit.JavascriptInterface public boolean nightMode() { return systemNight(); }
+            @android.webkit.JavascriptInterface public String wallColor() { return MainActivity.this.wallColor(); }
+            /** 拾色外观算好的外壳配色：浅色、深色各 8 个 #rrggbb，顺序同 BrowserPane.pal 的键 */
+            @android.webkit.JavascriptInterface public void skinPal(String k, String light, String dark) { if (!Env.bridgeOk(k)) return;
+                String re = "#[0-9a-f]{6}(,#[0-9a-f]{6}){7}";
+                if (light == null || dark == null || !light.matches(re) || !dark.matches(re)) return;
+                getSharedPreferences("ui", MODE_PRIVATE).edit().putString("pal_light", light).putString("pal_dark", dark).apply();
+            }
+            /** 构成浅色调过纸色（theme.js gcPaint）：8 种颜色同 skinPal 的顺序；空串 = 回到原色 */
+            @android.webkit.JavascriptInterface public void gcPal(String k, String light) { if (!Env.bridgeOk(k)) return;
+                if (light == null || !(light.isEmpty() || light.matches("#[0-9a-f]{6}(,#[0-9a-f]{6}){7}"))) return;
+                getSharedPreferences("ui", MODE_PRIVATE).edit().putString("gc_pal_light", light).apply();
+            }
+            @android.webkit.JavascriptInterface public void setBars(String k, boolean dark) { if (!Env.bridgeOk(k)) return; ui.post(() -> applyBars(dark)); }
+            /** 界面里的风格（native / qiusuo / zhuyue / goucheng / shise）：状态栏、安装页、对话框、内置浏览器的颜色按它取。theme.js 在 setBars 之前调 */
+            @android.webkit.JavascriptInterface public void skinPref(String k, String s) { if (!Env.bridgeOk(k)) return;
+                if ("native".equals(s) || "qiusuo".equals(s) || "zhuyue".equals(s) || "goucheng".equals(s) || "shise".equals(s))
+                    getSharedPreferences("ui", MODE_PRIVATE).edit().putString("skin", s).commit();
+            }
+            /** 界面里自定的强调色（theme.js 按外观底色调过深浅的两份）：外壳的加载动画、安装页、对话框跟着换；空串 = 用外观原色 */
+            @android.webkit.JavascriptInterface public void accentPref(String k, String light, String dark) { if (!Env.bridgeOk(k)) return;
+                String re = "#[0-9a-f]{6}";
+                if (light == null || dark == null || !(light.isEmpty() && dark.isEmpty() || light.matches(re) && dark.matches(re))) return;
+                getSharedPreferences("ui", MODE_PRIVATE).edit().putString("accent_light", light).putString("accent_dark", dark).apply();
+            }
+            /** 界面里的外观设置（auto / light / dark），下次启动时安装页照着上色 */
+            /** 界面最终用的语言（i18n.js 解析过的 code，不是 auto）：外壳的通知、安装页、更新文案跟着换 */
+            @android.webkit.JavascriptInterface public void langPref(String k, String code) { if (!Env.bridgeOk(k)) return; Tr.set(code); }
+            @android.webkit.JavascriptInterface public void themePref(String k, String p) { if (!Env.bridgeOk(k)) return;
+                if ("auto".equals(p) || "light".equals(p) || "dark".equals(p))
+                    getSharedPreferences("ui", MODE_PRIVATE).edit().putString("theme", p).commit();
+                ui.post(MainActivity.this::syncSplash);
+                // 之后新开的系统控件（下拉框的选项窗、对话框）也跟着换深浅，不用重开应用
+                ui.post(() -> setTheme(uiDark() ? android.R.style.Theme_Material_NoActionBar : android.R.style.Theme_Material_Light_NoActionBar));
+            }
+            /** 「保存到」：弹系统文件面板（ACTION_CREATE_DOCUMENT），用户挑好位置后把文件复制过去。
+             *  不需要存储权限，也不会落进用户打不开的私有目录。结果回调页面的 __ccSaved(ok, 说明) */
+            @android.webkit.JavascriptInterface public void saveAs(String k, String path, String name, String mime) { if (!Env.bridgeOk(k)) return;
+                ui.post(() -> startSaveAs(path, name, mime));
+            }
+        }, "CCApp");
+        // 兜底：没走 saveAs 的下载链接（<a download> 指向本机网关的 /api/file）也改成「保存到」
+        web.setDownloadListener((url, ua, cd, mime, len) -> {
+            Uri u = Uri.parse(url);
+            String p = u.getQueryParameter("path");
+            if (p == null || !p.startsWith("/") || !(isOwnGateway(url) && "/api/file".equals(Uri.parse(url).getPath()))) return;
+            // 这条兜底任何 frame 都能触发（包括预览里的不可信网页），又不经网关：先拿令牌让网关按 /api/file 的规矩核一遍路径，
+            // 放行了才复制。不然预览页放个下载链接就能把 .ssh、令牌之类弹到「保存到」面板（审查 低7）
+            new Thread(() -> {
+                boolean ok = false;
+                try {
+                    java.net.HttpURLConnection c = Env.gateway("/api/file?path=" + Uri.encode(p));
+                    c.setConnectTimeout(3000); c.setReadTimeout(3000);
+                    ok = c.getResponseCode() == 200;
+                    c.disconnect();
+                } catch (Exception ignored) {}
+                final boolean pass = ok;
+                ui.post(() -> { if (pass) startSaveAs(p, new File(p).getName(), mime); else savedJs(false, "forbidden"); });
+            }, "save-check").start();
+        });
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override public boolean onShowFileChooser(WebView v, ValueCallback<Uri[]> cb, FileChooserParams p) {
+                if (fileCb != null) fileCb.onReceiveValue(null);
+                fileCb = cb;
+                // ＋ 面板「拍照」：<input capture> 直接开系统相机，不弹文件选择器
+                if (p.isCaptureEnabled() && java.util.Arrays.asList(p.getAcceptTypes()).contains("image/*")) {
+                    try {
+                        File f = Camera.newFile(MainActivity.this);
+                        getSharedPreferences("ui", MODE_PRIVATE).edit().putString("camPending", f.getPath()).apply();
+                        startActivityForResult(Camera.intent(MainActivity.this, f), REQ_CAMERA);
+                        return true;
+                    } catch (Exception e) {
+                        fileCb = null;
+                        android.widget.Toast.makeText(MainActivity.this, Tr.f("打不开相机：{0}", e.getMessage()), android.widget.Toast.LENGTH_LONG).show();
+                        return false;
+                    }
+                }
+                long pid = PICK_SEQ.incrementAndGet();
+                pickId = pid;
+                try { startActivityForResult(chooserIntent(p), 7); } catch (Exception e) { fileCb = null; return false; }
+                // 先把这次选择器的批次号交给网页：之后后台拷完的大文件按它归位，不会记到之后打开的选择器上（BUG-A06）
+                toPage("ccapp-attach-pick-start", String.valueOf(pid));
+                return true;
+            }
+            // 页面里的 alert / confirm / prompt：系统默认的对话框标题是「网址为 http://127.0.0.1 的网页显示」，
+            // 换成不带标题、跟着界面外观的对话框；按钮文字用系统自带的（随系统语言）
+            @Override public boolean onJsAlert(WebView v, String url, String msg, android.webkit.JsResult r) {
+                jsDialog(fromPage(url, msg), false, null, r, null); return true;
+            }
+            @Override public boolean onJsConfirm(WebView v, String url, String msg, android.webkit.JsResult r) {
+                jsDialog(fromPage(url, msg), true, null, r, null); return true;
+            }
+            @Override public boolean onJsPrompt(WebView v, String url, String msg, String def, android.webkit.JsPromptResult r) {
+                jsDialog(fromPage(url, msg), true, def == null ? "" : def, r, r); return true;
+            }
+        });
+        // 网关换了一个（重启、崩溃重拉）：它只认按新启动号派生的 Cookie，这里种上，界面的事件总线重连时就接上了（审查 S1）
+        Env.onBoot = myOnBoot = (v) -> ui.post(() -> {
+            android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+            cm.setCookie("http://" + Env.HOST + ":" + Env.PORT, "cc_t_" + Env.PORT + "=" + v + "; Path=/; HttpOnly; SameSite=Strict");
+            // 旧版种在 127.0.0.1 上的那份清掉：网关已经不认了，留着只会被别的端口收走
+            cm.setCookie("http://127.0.0.1:" + Env.PORT, "cc_t_" + Env.PORT + "=; Path=/; Max-Age=0");
+            cm.flush();
+            if (squatShown) { squatShown = false; loadUi(); }
+        });
+        // 守护线程发现端口被占：正开着的界面马上换成说明页；占用解除、网关起来后（onBoot）再接回界面
+        GatewayService.onSquat = mySquat = () -> ui.post(() -> { if (web != null && !squatShown && isOwnGateway(web.getUrl())) showSquatted(); });
+        loadUi();
+        // 平时启动沿用正在扫的那个标识（不重播进场）；从安装页过来就新起一个居中的
+        boolean dark = uiDark();
+        View keep = splash != null && splash.getVisibility() == View.VISIBLE ? splash : null;
+        Mark hm = keep != null ? splashMark : null;
+        root.removeAllViews();
+        root.addView(web);
+        FrameLayout ho = new FrameLayout(this);
+        ho.setBackgroundColor(BrowserPane.pal(this, dark, "bg"));
+        ho.setClickable(true);              // 收起前别让点击漏到底下还没画好的页面
+        if (keep != null) {
+            if (splashStat != null) splashStat.setText("");
+            ho.addView(keep, new FrameLayout.LayoutParams(-1, -1));
+        } else {
+            hm = new Mark(this, BrowserPane.pal(this, dark, "fg"), Mark.dotColor(this, dark));
+            ho.addView(hm, new FrameLayout.LayoutParams(dp(88), dp(88), android.view.Gravity.CENTER));
+        }
+        handoffMark = hm;
+        handoff = ho;
+        root.addView(ho, new FrameLayout.LayoutParams(-1, -1));
+        splash = null; splashMark = null; splashStat = null;
+        ui.postDelayed(this::dropHandoff, 6000);   // 页面迟迟不落地也别一直挡着
+        root.requestApplyInsets();            // 顶部留白交给页面（--safe-t）
+        // 首次启动：安装界面的原生控件刚被整个拿掉，紧接着还可能弹「开启通知」对话框。WebView 没拿到焦点时，
+        // 点输入框键盘起不来 / 字打不进去，只有脱困（整页重载）才好。这里主动要焦点，窗口回到前台时再补一次（onWindowFocusChanged）
+        web.setFocusable(true);
+        web.setFocusableInTouchMode(true);
+        web.requestFocus();
+    }
+
+    // ── 冻结脱困 ─────────────────────────────────────────────────────
+    //  2026-10-16 实测：触摸滚动冻住后 location.reload() 和切后台都不好，跳到 127.0.0.2:9 再跳回来就好 ——
+    //  卡住的是 WebView 给这个文档的手势状态，换站点才会重建。127.0.0.2:9 是浏览器直接拒绝的端口，不发任何网络请求。
+    //  loadUrl 不经过 shouldOverrideUrlLoading，不会被当外链拦掉。跳的那一下先把 WebView 藏起来，免得闪错误页。
+    // ── 输入法拿着空连接 ──
+    //  「首启打不了中文」的真因（2026-10-21 输入法事件流实测）：页面一加载完，新会话就用 JS 把焦点放进输入框，
+    //  这时没有键盘、也没人点，WebView 不会为它新建输入连接，输入法手里还是页面刚出来时那条空连接（没有可编辑处时给的）。
+    //  之后手指点输入框，焦点没变，WebView 只叫键盘出来、不重建连接，于是讯飞照常出候选，选的字却交给了空连接，一个也进不去。
+    //  英文能进，多半是输入法在没有连接时退回去发按键事件（还没单独验证）。分屏 / 切屏让窗口失焦再得焦，连接重建，所以又好了。
+    //  这里在手指抬起后看一眼：页面焦点在可编辑处、手里的连接却还是空的，就让输入法重新连一次。
+    private boolean imeNoConn = false;
+    private void imeCheck() {
+        ui.postDelayed(() -> {
+            if (web == null || !imeNoConn || !web.hasFocus()) return;
+            web.evaluateJavascript("(function(){var a=document.activeElement;return !!a&&(a.isContentEditable||/^(TEXTAREA|INPUT)$/.test(a.tagName))})()", v -> {
+                if (!"true".equals(v) || web == null || !imeNoConn) return;
+                android.view.inputmethod.InputMethodManager m = getSystemService(android.view.inputmethod.InputMethodManager.class);
+                if (m != null) m.restartInput(web);
+            });
+        }, 300);
+    }
+
+    // ── 页面卡死兜底 ──
+    //  滑动在 WebView 的合成线程上做，点按要页面的 JS 主线程处理。主线程卡住（死循环、或者等一个没显示出来的对话框）时，
+    //  内容照样能滑、什么都点不动，页面里的雪花按钮也救不了。这里在原生层看：手指抬起时问页面一句，
+    //  6 秒没回答（又没有正开着的对话框）就弹原生对话框问要不要重新载入。重新载入走 bounce()，回话在网关那边照常跑。
+    private int jsDialogs = 0;
+    private boolean hangPending = false, hangAsked = false;
+    private void hangCheck() {
+        if (hangPending || hangAsked || web == null || bounceStage != 0 || jsDialogs > 0) return;
+        hangPending = true;
+        final boolean[] alive = { false };
+        web.evaluateJavascript("1", v -> alive[0] = true);
+        ui.postDelayed(() -> {
+            hangPending = false;
+            if (alive[0] || web == null || bounceStage != 0 || jsDialogs > 0 || isFinishing()) return;
+            hangAsked = true;
+            boolean dark = uiDark();
+            try {
+                android.app.AlertDialog d = new android.app.AlertDialog.Builder(this,
+                        dark ? android.R.style.Theme_Material_Dialog_Alert : android.R.style.Theme_Material_Light_Dialog_Alert)
+                    .setMessage(Tr.t("页面没有响应，点什么都没反应？重新载入一下就好，正在进行的回复不受影响。"))
+                    .setPositiveButton(Tr.t("重新载入"), (x, w) -> bounce())
+                    .setNegativeButton(Tr.t("再等等"), null)
+                    .setOnDismissListener(x -> hangAsked = false)
+                    .show();
+                int accent = BrowserPane.pal(this, dark, "accent");
+                d.getWindow().setBackgroundDrawable(roundBg(BrowserPane.pal(this, dark, "card")));
+                for (int k : new int[] { android.app.AlertDialog.BUTTON_POSITIVE, android.app.AlertDialog.BUTTON_NEGATIVE }) {
+                    android.widget.Button bt = d.getButton(k);
+                    if (bt != null) bt.setTextColor(accent);
+                }
+            } catch (Exception e) { hangAsked = false; }
+        }, 6000);
+    }
+
+    /** 网关服务没在跑就拉起来；reload：等网关答话后重新载入界面（界面停在「等待网关」页时） */
+    private volatile boolean recovering;
+    private final long[] recoverAt = new long[3];   // 最近三次自动重新载入的时刻
+    private void recoverGateway(boolean reload) {
+        if (!booted || isFinishing()) return;
+        if (!GatewayService.serviceUp()) { android.util.Log.i("cccodroid", "界面要用网关，服务不在：拉起来"); GatewayService.start(this); }
+        if (!reload || recovering) return;
+        // 网关答话、页面却还是取不到（资源缺了、对不上 HMAC）：别一秒一次地重载下去，一分钟最多三次，之后停在等待页
+        long now = System.currentTimeMillis();
+        if (now - recoverAt[0] < 60000) { android.util.Log.w("cccodroid", "界面页面一直取不到，不再自动重新载入"); return; }
+        System.arraycopy(recoverAt, 1, recoverAt, 0, 2); recoverAt[2] = now;
+        recovering = true;
+        new Thread(() -> {
+            try { waitGateway(false); } catch (InterruptedException ignored) {}
+            ui.post(() -> { recovering = false; if (web != null && bounceStage == 0 && !isFinishing()) loadUi(); });
+        }, "recover").start();
+    }
+    private android.webkit.WebResourceResponse waitingPage() {
+        boolean night = systemNight();
+        String html = "<!doctype html><meta charset=utf-8><meta name=viewport content=\"width=device-width\"><body style=\"margin:0;height:100vh;display:flex;align-items:center;justify-content:center;font:15px sans-serif;"
+            + (night ? "background:#1b1b1b;color:#bbb" : "background:#fafafa;color:#555") + "\"><div style=\"text-align:center\">" + android.text.TextUtils.htmlEncode(Tr.t("等待网关…")) + rescueLinks(night ? "#8fb4ff" : "#2a5db0") + "</div></body>";
+        java.util.Map<String, String> h = new java.util.HashMap<>();
+        h.put("Cache-Control", "no-store");
+        h.put("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'");   // 页面只有一行字：不许脚本、不许任何子请求
+        h.put("X-Content-Type-Options", "nosniff");
+        return new android.webkit.WebResourceResponse("text/html", "utf-8", 200, "OK", h, new java.io.ByteArrayInputStream(html.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+    private int bounceStage = 0;   // 0 没在脱困 · 1 正跳出去 · 2 正跳回来
+    private void bounce() {
+        if (web == null || bounceStage != 0) return;
+        bounceStage = 1;
+        web.setVisibility(View.INVISIBLE);
+        web.loadUrl("http://127.0.0.3:9/");     // 必须跨站：界面自己在 127.0.0.2（Env.HOST），同站跳一次不管用
+        ui.postDelayed(() -> { if (bounceStage == 1) bounceBack(); }, 1500);   // 落地回调没来
+        ui.postDelayed(() -> { if (bounceStage != 0) { bounceStage = 0; if (web != null) web.setVisibility(View.VISIBLE); } }, 10000);   // 这 10 秒里渲染进程可能没了、web 已换成 null（11-04 报告 A4）
+    }
+    private void bounceBack() {
+        bounceStage = 2;
+        loadUi();
+    }
+
+    /** 打开界面。地址里带着令牌和桥口令，先在后台核网关身份，过了才交出去（审查 S1）；
+     *  端口上没人在听就照旧打开（只会显示连不上，什么也漏不出去）；有人在听却证明不了自己，换成一页说明 */
+    private void loadUi() {
+        new Thread(() -> {
+            Env.resetBoot();       // 这一次核身份一定回调 onBoot，种好 Cookie 再加载（onBoot 的 post 排在下面 loadUrl 前面）
+            boolean ok = Env.proveGateway() || !Env.portBusy();
+            ui.post(() -> {
+                if (web == null) return;
+                if (ok && GatewayService.gwBlocked == null) { web.loadUrl(Env.uiUrl()); return; }
+                showSquatted();
+            });
+        }, "ui-prove").start();
+    }
+    /** 端口被别的应用占着：界面换成一页说明，别让已经打开的页面继续把输入发过去（审查 10-29 第六份 中3）。
+     *  发行版网关运行库对不上、没起网关（GatewayService.gwBlocked）也用这一页 */
+    private void showSquatted() {
+        if (web == null) return;
+        boolean dark = uiDark();
+        String why = GatewayService.gwBlocked;
+        String html = "<meta name=viewport content=\"width=device-width\"><body style=\"font:16px/1.6 sans-serif;padding:32px;background:"
+            + css(BrowserPane.pal(this, dark, "bg")) + ";color:" + css(BrowserPane.pal(this, dark, "fg")) + "\">"
+            + android.text.TextUtils.htmlEncode(why != null ? why : Tr.f("端口 {0} 被别的应用占着，网关起不来。重启手机，或卸载最近装的可疑应用", Env.PORT)).replace("\n", "<br>")
+            + rescueLinks(dark ? "#8fb4ff" : "#2a5db0") + "</body>";
+        web.loadDataWithBaseURL(null, html, "text/html", "utf-8", null);
+        squatShown = true;
+    }
+    private boolean squatShown;
+
+    // ── 恢复初始设置（FactoryReset）：入口在设置页排障栏、启动页「我卡住了」、网关起不来时的等待页 ──
+    private static final String RESCUE_RESET = "cccodroid-rescue:reset", RESCUE_LOGS = "cccodroid-rescue:logs";
+    private static String rescueLinks(String color) {
+        String a = "style=\"color:" + color + ";display:inline-block;margin:10px 12px 0\"";
+        return "<p style=\"font-size:14px;margin-top:28px\"><a " + a + " href=\"" + RESCUE_LOGS + "\">" + android.text.TextUtils.htmlEncode(Tr.t("我卡住了：分享诊断")) + "</a>"
+            + "<a " + a + " href=\"" + RESCUE_RESET + "\">" + android.text.TextUtils.htmlEncode(Tr.t("恢复初始设置")) + "</a></p>";
+    }
+    private volatile boolean resetting;
+    /** 原生确认框：说清会挪走什么、留什么、留底在哪；勾上才连厂商配置和密钥一起挪。按钮一秒后才能点（guard） */
+    void askFactoryReset() {
+        if (resetting || isFinishing()) return;
+        android.widget.CheckBox keys = new android.widget.CheckBox(this);
+        keys.setText(Tr.t("同时清除厂商配置和密钥（恢复后要重新填）"));
+        int pad = (int) (20 * getResources().getDisplayMetrics().density);
+        android.widget.FrameLayout box = new android.widget.FrameLayout(this);
+        box.setPadding(pad, pad / 2, pad, 0);
+        box.addView(keys);
+        android.app.AlertDialog d = new android.app.AlertDialog.Builder(this)
+            .setTitle(Tr.t("恢复初始设置？"))
+            .setMessage(Tr.t("把配置恢复成刚装好的样子，用于改坏了配置、每轮都被拒或不出回答、自己救不回来的时候。") + "\n\n"
+                + Tr.t("会清掉：Claude Code 的用户级配置（CLAUDE.md、rules、技能、插件、命令、子代理、输出风格、钩子和 settings、MCP、自动记忆）、cccodroid 的设置、端侧模式配置、shell 启动文件（.bashrc 等），并退出安全模式；应用自带的文件按安装包重新铺一遍。") + "\n\n"
+                + Tr.t("不会删：清掉的东西都挪进 ~/.ccapp-reset/<时间> 留底，可以照原路径拷回去。会话记录、工作区、开发工具包和组件、ssh 与 git 配置都不动。") + "\n\n"
+                + Tr.t("期间网关会停一下，正在跑的任务会被中断。"))
+            .setView(box)
+            .setPositiveButton(Tr.t("恢复"), (x, w) -> doFactoryReset(keys.isChecked()))
+            .setNegativeButton(Tr.t("取消"), null)
+            .create();
+        guard(d, android.content.DialogInterface.BUTTON_POSITIVE);
+    }
+    private void doFactoryReset(boolean keys) {
+        if (resetting) return;
+        resetting = true;
+        say(Tr.t("正在恢复初始设置…"));
+        android.widget.Toast.makeText(this, Tr.t("正在恢复初始设置…"), android.widget.Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            String msg;
+            try { File bak = FactoryReset.run(this, keys); msg = Tr.f("已恢复初始设置。原来的配置留底在 {0}", bak.getPath()); }
+            catch (FactoryReset.Partial e) { msg = Tr.f("已恢复初始设置，但有几项没挪成：{0}。留底在 {1}", e.getMessage(), e.backup.getPath()); }
+            catch (Exception e) { android.util.Log.e("cccodroid-reset", "恢复初始设置失败", e); msg = Tr.t("恢复初始设置失败：") + e.getMessage(); }
+            say(msg);
+            final String m = msg;
+            if (!GatewayService.serviceUp()) GatewayService.start(this);
+            try { waitGateway(false); } catch (InterruptedException ignored) {}
+            ui.post(() -> {
+                resetting = false;
+                if (isFinishing()) return;
+                new android.app.AlertDialog.Builder(this).setMessage(m).setPositiveButton(Tr.t("好"), null).show();
+                if (booted && web != null) { squatShown = false; loadUi(); }
+            });
+        }, "factory-reset").start();
+    }
+    private static String css(int c) { return String.format("#%06x", c & 0xffffff); }
+
+    /** 预览里的网页弹的对话框标明出处：别让它冒充 cccodroid 要密钥、要密码（审查 v0513b 低-22） */
+    private static String fromPage(String url, String msg) {
+        if (url == null || isOwnGateway(url)) return msg;
+        String h; try { h = Uri.parse(url).getHost(); } catch (Exception e) { h = null; }
+        return Tr.f("下面是预览中的网页（{0}）弹出的，不是 cccodroid 在问：", h == null ? "?" : h) + "\n\n" + msg;
+    }
+    private void jsDialog(String msg, boolean withCancel, String def, android.webkit.JsResult r, android.webkit.JsPromptResult pr) {
+        final android.widget.EditText in = def == null ? null : new android.widget.EditText(this);
+        if (in != null) in.setText(def);
+        boolean dark = uiDark();
+        // 页面的 confirm / alert / prompt 会一直停着等这个结果。对话框要是没回答就没了（分屏、旋转、窗口重建时系统直接收走，
+        // 不走 OnCancel），页面 JS 就永远卡住：内容还能滑，所有按钮和输入框都点不动，连雪花都没用（2026-10-21 群友报）。
+        // 所以只认一次回答，对话框不管怎么消失，没回答就当取消。
+        final boolean[] answered = { false };
+        final Runnable cancel = () -> { if (!answered[0]) { answered[0] = true; r.cancel(); } };
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this,
+                dark ? android.R.style.Theme_Material_Dialog_Alert : android.R.style.Theme_Material_Light_Dialog_Alert)
+            .setMessage(msg).setCancelable(true)
+            .setOnCancelListener(d -> cancel.run())
+            .setOnDismissListener(d -> { cancel.run(); jsDialogs--; });
+        if (in != null) b.setView(in);
+        b.setPositiveButton(android.R.string.ok, (d, w) -> {
+            if (answered[0]) return;
+            answered[0] = true;
+            if (pr != null) pr.confirm(in.getText().toString()); else r.confirm();
+        });
+        if (withCancel) b.setNegativeButton(android.R.string.cancel, (d, w) -> cancel.run());
+        jsDialogs++;
+        try {
+            android.app.AlertDialog d = b.show();
+            int accent = BrowserPane.pal(this, dark, "accent");
+            d.getWindow().setBackgroundDrawable(roundBg(BrowserPane.pal(this, dark, "card")));
+            for (int k : new int[] { android.app.AlertDialog.BUTTON_POSITIVE, android.app.AlertDialog.BUTTON_NEGATIVE }) {
+                android.widget.Button bt = d.getButton(k);
+                if (bt != null) bt.setTextColor(accent);
+            }
+        } catch (Exception e) { jsDialogs = 0; cancel.run(); }
+    }
+    private android.graphics.drawable.Drawable roundBg(int color) {
+        android.graphics.drawable.GradientDrawable g = new android.graphics.drawable.GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(dp(16));
+        return new android.graphics.drawable.InsetDrawable(g, dp(16));
+    }
+
+    private void openExternal(String url) {
+        // 只放网页和邮件：别的协议（intent:、market:、content: …）整页跳转到这儿时一律不理（审查 低15）
+        String sc = url == null ? "" : String.valueOf(Uri.parse(url).getScheme()).toLowerCase(java.util.Locale.ROOT);
+        if (!sc.equals("https") && !sc.equals("http") && !sc.equals("mailto")) { android.util.Log.w("cccodroid", "openExternal: 不放行 " + sc); return; }
+        try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); }
+        catch (Exception e) { android.widget.Toast.makeText(this, Tr.t("没有可用的浏览器：") + url, android.widget.Toast.LENGTH_LONG).show(); }
+    }
+
+    private void startSaveAs(String path, String name, String mime) {
+        File f = path == null ? null : new File(path);
+        if (f == null || !f.isFile()) { savedJs(false, "missing"); return; }
+        try { Share.guard(this, f); } catch (Exception e) { savedJs(false, "forbidden"); return; }
+        // 只有一个槽：上一次还在选位置时又来一次，回来的结果会配给后一个文件，把用户选的位置写成别的文件（11-04 报告 A4）
+        // 发起那次的界面已经没了（任务被划掉、进程靠前台服务活着）：选择器的结果回不来，槽算过期，别永远「忙」（审查 11-05 #1）
+        MainActivity owner = saveOwner == null ? null : saveOwner.get();
+        if (savePending != null && owner != null && !owner.isDestroyed()) { savedJs(false, "busy"); return; }
+        savePending = f;
+        saveOwner = new java.lang.ref.WeakReference<>(this);
+        // 选位置的工夫里本进程可能被系统回收：源文件路径也落盘，回来时从这里找回（#131）
+        getSharedPreferences("ui", MODE_PRIVATE).edit().putString("savePending", f.getPath()).commit();   // 同步落盘：马上要跳去系统选择器，进程随时可能被杀（DeepSeek 复核 11-04）
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+            .setType(mime == null || mime.isEmpty() ? "application/octet-stream" : mime)
+            .putExtra(Intent.EXTRA_TITLE, name == null || name.isEmpty() ? f.getName() : name);
+        try { startActivityForResult(i, 8); }
+        catch (Exception e) { savePending = null; getSharedPreferences("ui", MODE_PRIVATE).edit().remove("savePending").apply(); savedJs(false, "nopicker"); }
+    }
+
+    /** 复制放后台线程：大文件（几百 MB 的导出包）别卡住界面 */
+    private void finishSaveAs(Uri dst) {
+        File src = savePending;
+        savePending = null;
+        SharedPreferences sp = getSharedPreferences("ui", MODE_PRIVATE);
+        String kept = sp.getString("savePending", null);
+        sp.edit().remove("savePending").apply();
+        if (src == null && kept != null) {
+            // 进程被回收重建过：按落盘的路径找回，照样过一遍分享范围的检查
+            File f = new File(kept);
+            try { if (f.isFile()) { Share.guard(this, f); src = f; } } catch (Exception ignore) {}
+        }
+        if (src == null) {
+            // 找不回要存的是哪个文件：刚建出来的空文档删掉，告诉页面没存上，别留一个空壳
+            try { android.provider.DocumentsContract.deleteDocument(getContentResolver(), dst); } catch (Exception ignore) {}
+            savedJs(false, "lost");
+            return;
+        }
+        final File from = src;
+        new Thread(() -> {
+            boolean ok = false;
+            String msg;
+            // 目标可能正是源文件（用户在选择器里选了同一个文件）：先只读打开目标，比较 dev/ino，
+            // 同一个就拒绝；否则 openOutputStream("w") 会先把源截成 0 字节（审查 11-05）
+            try (android.os.ParcelFileDescriptor pfd = getContentResolver().openFileDescriptor(dst, "r")) {
+                if (pfd != null) {
+                    android.system.StructStat a = android.system.Os.fstat(pfd.getFileDescriptor()), b = android.system.Os.stat(from.getPath());
+                    if (a.st_dev == b.st_dev && a.st_ino == b.st_ino) { ui.post(() -> savedJs(false, "same")); return; }
+                }
+            } catch (Exception ignore) {}
+            java.io.File tmp = new java.io.File(getCacheDir(), "save-as-" + System.nanoTime() + ".tmp");
+            try {
+                // 先复制到临时文件：中途失败也不会把源/目标写成半截
+                try (InputStream in = new java.io.FileInputStream(from); OutputStream o = new java.io.FileOutputStream(tmp)) {
+                    byte[] buf = new byte[1 << 16];
+                    for (int n; (n = in.read(buf)) > 0; ) o.write(buf, 0, n);
+                }
+                try (InputStream in = new java.io.FileInputStream(tmp); OutputStream out = getContentResolver().openOutputStream(dst, "w")) {
+                    if (out == null) throw new java.io.IOException(Tr.t("openOutputStream 返回 null"));
+                    byte[] buf = new byte[1 << 16];
+                    for (int n; (n = in.read(buf)) > 0; ) out.write(buf, 0, n);
+                }
+                ok = true;
+                msg = from.getName();
+            } catch (Exception e) {
+                msg = String.valueOf(e.getMessage());
+                try { android.provider.DocumentsContract.deleteDocument(getContentResolver(), dst); } catch (Exception ignore) {}
+            } finally { try { tmp.delete(); } catch (Exception ignore) {} }
+            final boolean fok = ok; final String fmsg = msg;
+            ui.post(() -> savedJs(fok, fmsg));
+        }, "save-as").start();
+    }
+
+    private void savedJs(boolean ok, String msg) {
+        if (web != null) web.evaluateJavascript(guarded("__ccSaved", "window.__ccSaved&&__ccSaved(" + ok + "," + org.json.JSONObject.quote(msg) + ")"), null);
+    }
+
+    // ── 嵌入式浏览器窗格 ──
+    private void openPane(String url) {
+        if (web == null) return;
+        if (pane == null) {
+            pane = new BrowserPane(this, new BrowserPane.Host() {
+                @Override public void onPaneClose() { closePane(true); }
+                // json 已经是 evaluateJavascript 编好的 JS 字符串字面量，原样当参数传，界面那边再 JSON.parse、只取文字
+                @Override public void onPicked(String json) { if (web != null) web.evaluateJavascript("window.__ccPickIn&&__ccPickIn(" + json + ")", null); }
+            }, 9);
+            pane.setVisibility(View.GONE);               // 等页面报来位置再显示，免得先闪一下全屏
+            root.addView(pane, new FrameLayout.LayoutParams(0, 0));
+            pane.load(url);
+            tickPaneBack();
+            // 页面先报位置、后叫开窗格（raise 里同步报，paneOpen 排在后面）：那次位置到的时候窗格还没建，被丢了，
+            // 页面那边位置没变就不会再报 —— 窗格一直藏着，看着是一片空白，拖一下边缘才出来（群友 10-23 报）
+            if (paneBox != null) placePane(paneBox[0], paneBox[1], paneBox[2], paneBox[3]);
+        } else if (url != null && !url.isEmpty()) pane.load(url);
+    }
+    private float[] paneBox;   // 页面最近一次报的位置，窗格还没建时也记着
+    private void placePane(float x, float y, float w, float h) {
+        paneBox = new float[] { x, y, w, h };
+        if (pane == null) return;
+        if (w <= 0 || h <= 0) { pane.setVisibility(View.GONE); return; }
+        float d = getResources().getDisplayMetrics().density;
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) pane.getLayoutParams();
+        lp.leftMargin = Math.round(x * d); lp.topMargin = Math.round(y * d);
+        int pw = Math.round(w * d), ph = Math.round(h * d);
+        boolean wasHidden = pane.getVisibility() != View.VISIBLE;
+        lp.width = pw; lp.height = ph;
+        pane.setLayoutParams(lp);
+        pane.setVisibility(View.VISIBLE);
+        // 从藏着（新建时 0×0、或被浮层盖住时 GONE）变成显示：WebView 常常不重画，整块空白，要拖一下边缘改了尺寸才出来
+        // （群友 10-23 报）。照着那个绕法做：先少 1px 摆一帧，下一帧再摆回真尺寸，逼它重新布局、重建画面
+        if (wasHidden && ph > 1) {
+            lp.height = ph - 1;
+            pane.setLayoutParams(lp);
+            final BrowserPane p = pane;
+            pane.postDelayed(() -> {
+                if (pane != p) return;
+                FrameLayout.LayoutParams l2 = (FrameLayout.LayoutParams) p.getLayoutParams();
+                if (l2.height != ph - 1) return;   // 这期间页面又报了新位置，以那个为准
+                l2.height = ph;
+                p.setLayoutParams(l2);
+                p.web.invalidate();
+            }, 48);
+        }
+    }
+    /** 系统分享面板。正文太长会撑爆 Binder 事务（约 1 MB），截到 100k 字符 */
+    private void shareTextNow(String text) {
+        if (text.length() > 100000) text = text.substring(0, 100000);
+        Intent i = new Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, text);
+        try { startActivity(Intent.createChooser(i, null)); }
+        catch (Exception e) { android.util.Log.w("cccodroid", "分享失败", e); }
+    }
+    /** fromPane = 用户点了窗格自己的 ✕（或渲染进程崩了）：要告诉页面把占位撤掉 */
+    private void closePane(boolean fromPane) {
+        if (pane == null) return;
+        root.removeView(pane);
+        pane.destroy();
+        pane = null;
+        paneBox = null;
+        paneCanBack = false;
+        if (fromPane && web != null) web.evaluateJavascript(guarded("__ccBrowserClosed", "window.__ccBrowserClosed&&__ccBrowserClosed()"), null);
+    }
+    /** 返回手势要同步问"网页能不能后退"，JS 桥在别的线程上，这里定时把答案备好 */
+    private void tickPaneBack() {
+        if (pane == null) return;
+        paneCanBack = pane.canBack();
+        final BrowserPane p = pane;
+        ui.postDelayed(() -> { if (pane == p) tickPaneBack(); }, 500);
+    }
+
+    @Override protected void onActivityResult(int req, int res, Intent data) {
+        if (req == 9) { if (pane != null) pane.onResult(res, data); return; }
+        if (req == REQ_DEVKIT) {
+            Uri u = res == RESULT_OK && data != null ? data.getData() : null;
+            CountDownLatch w = pickWait;
+            if (w != null) { picked = u; w.countDown(); }
+            else if (u != null) applyLocalDevkitUi(u);
+            return;
+        }
+        if (req == 8) {
+            if (res == RESULT_OK && data != null && data.getData() != null) finishSaveAs(data.getData());
+            else { savePending = null; getSharedPreferences("ui", MODE_PRIVATE).edit().remove("savePending").apply(); savedJs(false, "cancel"); }
+            return;
+        }
+        if (req == REQ_CAMERA) {
+            // 拍照回来。界面可能在拍的时候被系统收掉重建过：fileCb 没了，就照「分享进来的文件」那样放进 uploads 再递给页面
+            SharedPreferences sp = getSharedPreferences("ui", MODE_PRIVATE);
+            String path = sp.getString("camPending", null);
+            sp.edit().remove("camPending").apply();
+            ValueCallback<Uri[]> cb = fileCb;
+            fileCb = null;
+            File f = path == null ? null : new File(path);
+            if (res != RESULT_OK || f == null) { if (f != null) f.delete(); if (cb != null) cb.onReceiveValue(null); return; }
+            new Thread(() -> {
+                boolean ok = Camera.shrink(f);
+                ui.post(() -> {
+                    if (!ok) {
+                        f.delete();
+                        if (cb != null) cb.onReceiveValue(null);
+                        android.widget.Toast.makeText(this, Tr.t("没拿到照片"), android.widget.Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    if (cb != null) {
+                        try { cb.onReceiveValue(new Uri[]{Share.uriFor(this, f)}); } catch (Exception e) { cb.onReceiveValue(null); }
+                        return;
+                    }
+                    File dir = new File(env.workspace(), "uploads");
+                    dir.mkdirs();
+                    File out = new File(dir, new java.text.SimpleDateFormat("yyyyMMddHHmmss", java.util.Locale.US).format(new java.util.Date()) + "-" + f.getName());
+                    if (f.renameTo(out) || copyQuiet(f, out)) toPage("ccapp-attach", out.getPath());
+                });
+            }).start();
+            return;
+        }
+        if (req == 7 && fileCb == null) {
+            // 选文件期间界面被系统收掉重建过（审查 #105 06-010）：网页的回调没了，选的文件照大附件那样递路径 / 收进 uploads，别静默丢掉
+            // 重建后拿不到当初的批次号：按旧格式递，网页按当前快照处理
+            Uri[] all = chooserResult(this, res, data);
+            if (all != null && all.length > 0) attachBig(java.util.Arrays.asList(all), false, 0);
+            return;
+        }
+        if (req == 7) {
+            // 附件大小门限：超过 BIG_ATTACH 的不交给网页（网页要把整个文件经 fetch 送进网关，几百 MB 时界面和网关都扛不住），
+            // 在这边处理 —— 共享存储里有真实路径的只递路径，Claude 按路径自己读；没有的（云盘、别的应用私有的）在后台流式拷进 uploads/
+            Uri[] all = chooserResult(this, res, data);
+            ValueCallback<Uri[]> cb = fileCb;
+            fileCb = null;
+            final long pidN = pickId;
+            final String pid = pidN > 0 ? String.valueOf(pidN) : "";
+            if (all == null) { cb.onReceiveValue(null); toPage("ccapp-attach-pick-cancel", pickEvent(pid, 0)); return; }
+            // 查大小要问别的应用的 provider（云盘可能要联网），别在主线程上等（11-04 报告 A4）
+            new Thread(() -> {
+                java.util.ArrayList<Uri> small = new java.util.ArrayList<>(), big = new java.util.ArrayList<>();
+                for (Uri u : all) (sizeOf(u) > BIG_ATTACH ? big : small).add(u);
+                ui.post(() -> {
+                    try { cb.onReceiveValue(small.isEmpty() ? null : small.toArray(new Uri[0])); } catch (Exception ignored) {}
+                    if (big.isEmpty()) { toPage("ccapp-attach-pick-done", pickEvent(pid, 0)); return; }   // 只有小文件：这一轮到此为止（网页据此清掉选择器快照，FIND-034）
+                    // 后台收大文件之前先告诉网页有几个：收完（copy-done）之前不许发送（FIND-027）
+                    if (!isDestroyed()) { toPage("ccapp-attach-copy-start", pickEvent(pid, big.size())); attachBig(big, true, pidN); }
+                });
+            }, "attach-size").start();
+        }
+    }
+
+    /** 系统给的 createIntent() 不管网页要不要多选，一律只能选一个：<input multiple> 时补上 EXTRA_ALLOW_MULTIPLE */
+    /** 网关自己的地址不许进浏览器 / 窗格：它们和界面共用 Cookie，预览页里的脚本能借这个桥拿到网关权限 */
+    /** 浏览器认作回环 / 0.0.0.0 的 IPv4 写法：127.0.0.1、127.1、2130706433、0x7f000001、0177.0.0.1……（按 inet_aton 的规矩解析） */
+    static boolean loopbackV4(String h) {
+        long ip = ipv4(h);
+        return ip >= 0 && ((ip >>> 24) == 127 || ip == 0);
+    }
+    /** HTML 预览不联网时为 true：界面 WebView 只许连本机 */
+    static volatile boolean pvOffline;
+    /** Service Worker 发的请求不经各个 WebView 的 WebViewClient，走全进程的这一个，分不出是哪个页面的 worker：
+     *  这里只拦界面专用地址。不联网预览不靠这里 —— 预览服务不给注册 worker（gw/preview.mjs），
+     *  以前按 pvOffline 拦外网，会把应用内浏览器里正常网站的 worker 一起拦掉（#131） */
+    static void guardServiceWorkers() {
+        try {
+            android.webkit.ServiceWorkerController.getInstance().setServiceWorkerClient(new android.webkit.ServiceWorkerClient() {
+                @Override public android.webkit.WebResourceResponse shouldInterceptRequest(android.webkit.WebResourceRequest req) {
+                    Uri u = req.getUrl();
+                    if (u != null && isUiHost(u.getHost())) return blocked();
+                    return null;
+                }
+            });
+        } catch (Throwable ignored) {}
+    }
+    static boolean localHost(String h) {
+        if (h == null) return true;          // data: / blob: 之类没有主机，本来就不出网
+        h = h.toLowerCase(java.util.Locale.ROOT);
+        return h.equals("localhost") || h.equals("[::1]") || h.equals("::1") || loopbackV4(h) || isUiHost(h);
+    }
+    /** 是不是界面专用地址（Env.HOST = 127.0.0.2）：各种写法（2130706434、0x7f000002、127.2 …）浏览器都会规范成它，一并认 */
+    static boolean isUiHost(String h) {
+        if (h == null) return false;
+        h = h.toLowerCase(java.util.Locale.ROOT);
+        if (h.startsWith("[::ffff:")) {          // [::ffff:127.0.0.2] / [::ffff:7f00:2]
+            String t = h.substring(8, h.length() - (h.endsWith("]") ? 1 : 0));
+            if (t.equals("7f00:2")) return true;
+            h = t;
+        }
+        return ipv4(h) == 0x7f000002L;
+    }
+    static android.webkit.WebResourceResponse unavailable() {
+        return new android.webkit.WebResourceResponse("text/plain", "utf-8", 502, "Bad Gateway", null, new java.io.ByteArrayInputStream(new byte[0]));
+    }
+    static android.webkit.WebResourceResponse blocked() {
+        return new android.webkit.WebResourceResponse("text/plain", "utf-8", 403, "Forbidden", null, new java.io.ByteArrayInputStream(new byte[0]));
+    }
+    /** 按 inet_aton 的规矩解析 IPv4 写法，不是 IPv4 返回 -1 */
+    static long ipv4(String h) {
+        if (h == null || !h.matches("[0-9a-fx.]+")) return -1;
+        String[] p = h.split("\\.", -1);
+        if (p.length < 1 || p.length > 4) return -1;
+        long[] v = new long[p.length];
+        try {
+            for (int i = 0; i < p.length; i++) {
+                String x = p[i];
+                if (x.isEmpty()) return -1;
+                if (x.startsWith("0x")) v[i] = x.length() == 2 ? 0 : Long.parseLong(x.substring(2), 16);
+                else if (x.length() > 1 && x.startsWith("0")) v[i] = Long.parseLong(x.substring(1), 8);
+                else v[i] = Long.parseLong(x);
+            }
+        } catch (NumberFormatException e) { return -1; }
+        long ip = 0;
+        for (int i = 0; i < p.length - 1; i++) { if (v[i] > 255) return -1; ip |= v[i] << (24 - 8 * i); }
+        long last = v[p.length - 1];
+        if (last >= (1L << (8 * (5 - p.length)))) return -1;
+        return ip | last;
+    }
+
+    /** 就是本应用的网关界面（http、Env.HOST、本端口、不带用户名）：按网址解析判断，不按前缀——
+     *  前缀判断放得过 http://127.0.0.1:8791@evil.com/ 和 :87910（审查 10-29 中3） */
+    static boolean isOwnGateway(String url) {
+        if (url == null) return false;
+        try {
+            Uri u = Uri.parse(url.trim());
+            return "http".equalsIgnoreCase(u.getScheme()) && Env.HOST.equals(u.getHost()) && u.getPort() == Env.PORT && u.getUserInfo() == null;
+        } catch (Exception e) { return false; }
+    }
+
+    static boolean isGatewayUrl(String url) {
+        if (url == null || url.isEmpty()) return false;
+        try {
+            Uri u = Uri.parse(url.trim());
+            String h = u.getHost();
+            if (h == null) return false;
+            h = h.toLowerCase(java.util.Locale.ROOT);
+            boolean local = h.equals("localhost") || h.endsWith(".localhost") || h.equals("[::1]") || h.equals("::1")
+                || h.equals("[::]") || h.equals("::") || h.startsWith("[::ffff:") || loopbackV4(h);
+            return local && u.getPort() == Env.PORT;
+        } catch (Exception e) { return true; }
+    }
+
+    static Intent chooserIntent(WebChromeClient.FileChooserParams p) {
+        Intent i = p.createIntent();
+        if (p.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        return i;
+    }
+
+    /** 本应用自己的 content URI、或指向应用私有目录的 file URI：系统选择器回来的结果里出现这两种一律不认
+     *  （0.6.10 审计 199-1-02）。恶意 ACTION_GET_CONTENT 应用可以塞回 content://cox.dragon.docs/workspace/…，
+     *  界面会以本应用身份把工作区里任意文件读出来交给页面（再随对话送去模型）。正常应用给的云盘 / 共享存储 URI 不受影响。 */
+    private static boolean ownUri(android.content.Context c, Uri u) {
+        if (u == null) return false;
+        String a = u.getAuthority(), pkg = c.getPackageName();
+        if (a != null && (a.equals(pkg) || a.startsWith(pkg + "."))) return true;
+        if ("file".equals(u.getScheme())) {
+            try {
+                String p = new File(u.getPath()).getCanonicalPath(), d = c.getDataDir().getCanonicalPath();
+                return p.equals(d) || p.startsWith(d + File.separator);
+            } catch (Exception e) { return true; }   // 路径解不开的不认
+        }
+        return false;
+    }
+
+    /** 系统的 parseResult() 只读 getData()：一次选了多个时文件在 ClipData 里，它会返回空，结果一个都附加不上 */
+    static Uri[] chooserResult(android.content.Context c, int res, Intent data) {
+        if (res != RESULT_OK || data == null) return null;
+        android.content.ClipData clip = data.getClipData();
+        if (clip != null && clip.getItemCount() > 0) {
+            java.util.ArrayList<Uri> out = new java.util.ArrayList<>();
+            for (int i = 0; i < clip.getItemCount(); i++) {
+                Uri u = clip.getItemAt(i).getUri();
+                if (u != null && !ownUri(c, u)) out.add(u);
+            }
+            if (!out.isEmpty()) return out.toArray(new Uri[0]);
+        }
+        Uri one = data.getData();
+        return one != null && !ownUri(c, one) ? new Uri[] { one } : null;
+    }
+
+    @Override public void onBackPressed() {
+        if (web == null) { moveTaskToBack(true); return; }
+        // 先让页面关最上层的浮层（侧栏 / 查看器 / 终端 / 弹窗…，见 app.js __ccBack），都没开才退
+        web.evaluateJavascript(guarded("__ccBack", "window.__ccBack?__ccBack():false"), v -> {
+            if ("true".equals(v)) return;
+            // 不走 WebView 的历史：页面是单页（只用 replaceState），历史里只会有整页重载和冻结脱困跳出去的
+            // 127.0.0.2:9 —— 退回去就是「找不到网页」，再退一次整页重载，看着像网关重建了（用户 10-22 报）
+            moveTaskToBack(true);   // 返回键不结束界面，网关本来也不靠界面活着
+        });
+    }
+
+    private int dp(int v) { return Math.round(getResources().getDisplayMetrics().density * v); }
+}

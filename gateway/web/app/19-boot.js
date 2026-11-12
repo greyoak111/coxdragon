@@ -548,6 +548,7 @@
     dockIn: () => MO.spring(drawerEl.querySelector(".drawer-panel"), "snap", (p) => ({ transform: `translateX(${(MO.rtl() ? 100 : -100) * (1 - p)}%)` })) });
   window.__cc = { view, srv, state, send, abort, openSession, newConversation, openPage, bus: onBus,   // bus：测试时往前端灌事件
     openGit, openViewer, openFiles, openDrawer, showWhatsNew, mdEd: () => VW.ed, provCard: (id) => { state.provView = id; renderProvCard(); },
+    renderMd, esc, toast, api, copyText, fmtSize, relTime,   // Codex 工作台（web/codex.js）复用同一套排版与请求封装
     lin: { prof: linProfOpen, pick: linPickStart, wiz: mergeWizard, get: () => LIN } };   // 脉络：探针直接开剖面 / 多选 / 汇合向导
 
   // ── 启动 ──────────────────────────────────────────────────────────

@@ -711,9 +711,12 @@
     if (name === "sched") { renderSched(); loadSched(); loadProjects(); }
     schedPollSet(name === "sched");   // 离开就停，进来就开始补拉（195-BB.4）
     if (name === "lineage") { if (prev !== name) { linPickEnd(); linProfClose(true); } if (LIN.g) linPaint(prev !== name); else linState(t("加载中…")); loadLineage(); }   // 头一回进：图还没取回来先说一声，别空白（#38）
+    if (prev === "codex" && name !== "codex" && window.CODEX) window.CODEX.onHide();
+    if (name === "codex" && window.CODEX) window.CODEX.onOpen();
   }
   function closePage() {
     if (!curPage) return;
+    if (curPage === "codex" && window.CODEX) window.CODEX.onHide();
     curPage = null;
     schedPollSet(false);
     pageTitleOv = "";

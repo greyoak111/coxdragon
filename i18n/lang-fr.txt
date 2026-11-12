@@ -1048,7 +1048,7 @@
 1048	« {q} » introuvable dans les messages chargés
 1049	Installer depuis un fichier de boîte à outils déjà téléchargé
 1050	Fichier local…
-1051	Installer la boîte à outils depuis un fichier local ?\n\nChoisissez un devkit-cc.codroid.tar.gz (ou .tar), téléchargeable depuis la page des versions GitHub ou cccodroid.net. Il est comparé aux versions publiées avant l’installation ; le service est suspendu 1 à 2 minutes pendant l’installation.\nCe que vous avez installé avec pip / npm -g est conservé.
+1051	Installer la boîte à outils depuis un fichier local ?\n\nChoisissez un devkit-cox.dragon.tar.gz (ou .tar), téléchargeable depuis la page des versions GitHub ou cccodroid.net. Il est comparé aux versions publiées avant l’installation ; le service est suspendu 1 à 2 minutes pendant l’installation.\nCe que vous avez installé avec pip / npm -g est conservé.
 1052	Journal des commandes privilégiées
 1053	Aucune commande n’a encore été exécutée via priv
 1054	{n} dernières entrées (les plus récentes d’abord). Conservées sur cet appareil uniquement, jamais envoyées.

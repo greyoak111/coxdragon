@@ -7,8 +7,8 @@
 import net from "node:net";
 import readline from "node:readline";
 
-// 私有目录里的文件套接字：别的应用抢不走（以前的抽象套接字 \0cc.codroid.priv 谁都能先绑 —— 审查 H2）
-const SOCKET = process.env.CCAPP_PRIV_SOCK || "/data/data/cc.codroid/files/.priv.sock";
+// 私有目录里的文件套接字：别的应用抢不走（以前的抽象套接字 \0cox.dragon.priv 谁都能先绑 —— 审查 H2）
+const SOCKET = process.env.CCAPP_PRIV_SOCK || "/data/data/cox.dragon/files/.priv.sock";
 
 function app(req, timeoutMs = 20000) {
   return new Promise((resolve) => {

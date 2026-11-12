@@ -1048,7 +1048,7 @@
 1048	Tidak menemukan "{q}" di pesan yang dimuat
 1049	Pilih file devkit yang sudah diunduh untuk dipasang
 1050	File lokal…
-1051	Pasang devkit dari file lokal?\n\nPilih devkit-cc.codroid.tar.gz (atau .tar); Anda bisa mengunduhnya dari halaman rilis GitHub atau cccodroid.net. Sebelum dipasang, file akan dicocokkan dengan rilis yang sudah diterbitkan; layanan berhenti selama 1–2 menit saat pemasangan.\nApa pun yang Anda pasang ke devkit dengan pip / npm -g akan dipertahankan.
+1051	Pasang devkit dari file lokal?\n\nPilih devkit-cox.dragon.tar.gz (atau .tar); Anda bisa mengunduhnya dari halaman rilis GitHub atau cccodroid.net. Sebelum dipasang, file akan dicocokkan dengan rilis yang sudah diterbitkan; layanan berhenti selama 1–2 menit saat pemasangan.\nApa pun yang Anda pasang ke devkit dengan pip / npm -g akan dipertahankan.
 1052	Log perintah istimewa
 1053	Belum ada perintah yang dijalankan lewat priv
 1054	{n} entri terakhir (terbaru di atas). Hanya disimpan di perangkat ini, tidak diunggah.

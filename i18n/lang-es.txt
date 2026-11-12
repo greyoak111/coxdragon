@@ -1048,7 +1048,7 @@
 1048	No se encontró «{q}» en los mensajes cargados
 1049	Instalar desde un archivo de kit ya descargado
 1050	Archivo local…
-1051	¿Instalar el kit de desarrollo desde un archivo local?\n\nElige un devkit-cc.codroid.tar.gz (o .tar); puedes descargarlo de la página de versiones de GitHub o de cccodroid.net. Se compara con las versiones publicadas antes de instalar; el servicio se pausa 1–2 minutos durante la instalación.\nLo que instalaste en el kit con pip / npm -g se conserva.
+1051	¿Instalar el kit de desarrollo desde un archivo local?\n\nElige un devkit-cox.dragon.tar.gz (o .tar); puedes descargarlo de la página de versiones de GitHub o de cccodroid.net. Se compara con las versiones publicadas antes de instalar; el servicio se pausa 1–2 minutos durante la instalación.\nLo que instalaste en el kit con pip / npm -g se conserva.
 1052	Registro de comandos privilegiados
 1053	Todavía no se ha ejecutado ningún comando con priv
 1054	Últimas {n} entradas (las más recientes primero). Solo se guardan en este dispositivo; nunca se suben.

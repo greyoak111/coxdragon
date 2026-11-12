@@ -46,6 +46,7 @@ import { API_KEY, PROVIDER, routeProviders } from "./gw/providers.mjs";
 import { fetchModels, normEffort, routeModels } from "./gw/models.mjs";
 import { listSessions, routeSessions } from "./gw/sessions.mjs";
 import { bridgeProc, killTree, reapOrphans, routeClaude } from "./gw/claude.mjs";
+import { routeCodex } from "./gw/codex.mjs";
 import { expireTrash } from "./gw/sessionops.mjs";
 import { routeCaps, builtinCommands } from "./gw/caps.mjs";
 import { NEXT, sendJson, serveStatic } from "./gw/http.mjs";
@@ -92,7 +93,7 @@ import { COOKIE, SESSION, UI_HOST, cookieHostOk, denyLog, denyReason, localAddr,
 import { startWorkIsland, stopWorkIslandSync } from "./gw/work-island.mjs";
 
 // 各模块的路由函数，按原来分支的先后排；返回 NEXT 表示不归它管
-const ROUTES = [routeClaude, routeFeedback, routeUsage, routeCaps, routeProviders, routeSettings, routeProjects, routeBookmarks, routeFonts, commandRoutes(builtinCommands), routeUi, routeSched, routeSessModel, routeBackfill, routeMerge, routeProfile, routeLineage, routeArchive, routeSessions, routeExtensions, routeModels, routeTerminal, routeComponents, routeModules, routeOrphans, routeStorage, routeCustom, routeGit, routeLocal, routeOffice, routeArc, routeFiles, routePreview, routeBus, routeQueue, routeDevside, routeLogin, routeRun, routeNotices, routeReconcile];
+const ROUTES = [routeCodex, routeClaude, routeFeedback, routeUsage, routeCaps, routeProviders, routeSettings, routeProjects, routeBookmarks, routeFonts, commandRoutes(builtinCommands), routeUi, routeSched, routeSessModel, routeBackfill, routeMerge, routeProfile, routeLineage, routeArchive, routeSessions, routeExtensions, routeModels, routeTerminal, routeComponents, routeModules, routeOrphans, routeStorage, routeCustom, routeGit, routeLocal, routeOffice, routeArc, routeFiles, routePreview, routeBus, routeQueue, routeDevside, routeLogin, routeRun, routeNotices, routeReconcile];
 
 // ── 路由 ──────────────────────────────────────────────────────────────
 const server = http.createServer(async (req, res) => {

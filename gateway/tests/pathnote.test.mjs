@@ -3,7 +3,7 @@ import "../gw/config.mjs";   // 放最前：没走 scripts/test.mjs 就在这里
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-const W = "/data/user/0/cc.codroid/files/home/workspace";
+const W = "/data/user/0/cox.dragon/files/home/workspace";
 const asst = (content, extra = {}) => ({ type: "assistant", message: { role: "assistant", content }, ...extra });
 const write = (p, name = "Write") => ({ type: "tool_use", id: "t" + Math.random(), name, input: { file_path: p } });
 const say = (text) => ({ type: "text", text });

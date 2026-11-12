@@ -85,6 +85,7 @@
   }
 
   const PAGES = {
+    codex: { name: tk("Codex"), icon: '<path d="M4 7l8-4 8 4-8 4-8-4z"/><path d="M4 12l8 4 8-4M4 17l8 4 8-4"/>' },
     sessions: { name: tk("对话"), icon: '<path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z"/>' },
     settings: { name: tk("设置"), icon: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>' },
     projects: { name: tk("项目"), icon: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>' },
@@ -97,7 +98,7 @@
     bookmarks: { name: tk("书签"), icon: '<path d="M7 3.5h10a1 1 0 0 1 1 1V20l-6-4.2L6 20V4.5a1 1 0 0 1 1-1z"/>' },
     changelog: { name: tk("更新日志"), icon: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>' },
   };
-  const NAV_ITEMS = ["sessions", "projects", "lineage", "sched", "bookmarks", "ext", "caps", "usage", "help", "changelog"];          // 侧栏「去哪」里能放的；设置走底部账户行
+  const NAV_ITEMS = ["codex", "sessions", "projects", "lineage", "sched", "bookmarks", "ext", "caps", "usage", "help", "changelog"];          // 侧栏「去哪」里能放的；设置走底部账户行
   var curPage = null;   // var：openSession 在启动早期就会调 closePage，别撞上 let 的暂时性死区
   // 轮询（下载进度、配对状态…）只在那一页开着时继续：整页关了、换页了就停
   function pageOn(name) { return name === "settings" ? setOpen : curPage === name && !$("pages").classList.contains("hidden"); }
@@ -105,7 +106,7 @@
   // 0.4.10 加了「脉络」：已有的固定项里补上它（只补一次，用户之后取消了不再加回来）
   (function () { try { const p = JSON.parse(localStorage.getItem("cc.navPins")); if (Array.isArray(p) && !localStorage.getItem("cc.navPinsV3") && !p.includes("lineage")) localStorage.setItem("cc.navPins", JSON.stringify([...p, "lineage"])); localStorage.setItem("cc.navPinsV3", "1"); } catch {} })();
   // 0.4.20 起存进 ccapp-ui.json（uiGet / uiSet，见 01-core.js）；以前存在本地的 cc.navPins 照读
-  const navPins = () => { const p = uiGet("navPins", "cc.navPins"); if (Array.isArray(p)) return NAV_ITEMS.filter((k) => p.includes(k)); return ["sessions", "projects", "lineage", "sched"]; };
+  const navPins = () => { const p = uiGet("navPins", "cc.navPins"); if (Array.isArray(p)) return NAV_ITEMS.filter((k) => p.includes(k)); return ["codex", "sessions", "projects", "lineage", "sched"]; };
   document.addEventListener("cc:ui", (e) => { if (e.detail.key === "navPins") renderSideNav(); });
   var navEdit = false;
   function renderSideNav() {

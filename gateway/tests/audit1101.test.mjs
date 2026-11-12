@@ -367,8 +367,8 @@ test("B23 旧组件卸载：新底座已接管的同名文件留下，组件自�
   fs.mkdirSync(path.join(P, "bin"), { recursive: true });
   for (const f of ["bin/b23-demo", "bin/b23-own"]) fs.writeFileSync(path.join(P, f), "x");
   // 底座的包清单认领 bin/b23-demo；组件自己带的 .list 认领 bin/b23-own（不能算底座的）
-  fs.writeFileSync(path.join(info, "b23-base.list"), `/data/data/cc.codroid/files/usr/bin/b23-demo\n`);
-  fs.writeFileSync(path.join(info, "b23-comp.list"), `/data/data/cc.codroid/files/usr/bin/b23-own\n`);
+  fs.writeFileSync(path.join(info, "b23-base.list"), `/data/data/cox.dragon/files/usr/bin/b23-demo\n`);
+  fs.writeFileSync(path.join(info, "b23-comp.list"), `/data/data/cox.dragon/files/usr/bin/b23-own\n`);
   fs.mkdirSync(COMP_DIR, { recursive: true });
   fs.writeFileSync(path.join(COMP_DIR, "b23old.json"), JSON.stringify({ id: "b23old", files: ["bin/b23-demo", "bin/b23-own", "var/lib/dpkg/info/b23-comp.list"], shared: [] }));
   const r = await compRemove("b23old");

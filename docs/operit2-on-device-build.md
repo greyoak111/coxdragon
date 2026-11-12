@@ -44,14 +44,14 @@ Neither layer alone is enough: the Ubuntu container has no usable Android build 
 proot only exposes explicitly bound paths. The login command used was:
 
 ```sh
-P=/data/user/0/cc.codroid/files/usr
-W=/data/user/0/cc.codroid/files/home/workspace
+P=/data/user/0/cox.dragon/files/usr
+W=/data/user/0/cox.dragon/files/home/workspace
 
 proot-distro login ubuntu --shared-tmp \
   -b /system:/system \
   -b /apex:/apex \
-  -b $P:/data/data/cc.codroid/files/usr \
-  -b $P:/data/user/0/cc.codroid/files/usr \
+  -b $P:/data/data/cox.dragon/files/usr \
+  -b $P:/data/user/0/cox.dragon/files/usr \
   -b $W:/workspace -- /bin/bash -lc '<command>'
 ```
 
@@ -107,7 +107,7 @@ A clang 21 driver with clang 19 `include` fails on builtin headers such as NEON 
 ```sh
 NDK=/workspace/dl/android-ndk-r28c
 mkdir -p /workspace/dl/clang-merged
-ln -s /data/data/cc.codroid/files/usr/lib/clang/21/include /workspace/dl/clang-merged/include
+ln -s /data/data/cox.dragon/files/usr/lib/clang/21/include /workspace/dl/clang-merged/include
 ln -s $NDK/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/19/lib /workspace/dl/clang-merged/lib
 ```
 
@@ -143,9 +143,9 @@ head -c 1200 libapp.so | strings -n 20 | grep -o "product .*pointers"
 The fix is the official x86_64 `gen_snapshot` from the Android artifacts (`android-arm64-release/linux-x64/gen_snapshot`), run through qemu:
 
 ```sh
-#!/data/data/cc.codroid/files/usr/bin/bash
+#!/data/data/cox.dragon/files/usr/bin/bash
 unset LD_PRELOAD
-exec /data/data/cc.codroid/files/usr/bin/qemu-x86_64 \
+exec /data/data/cox.dragon/files/usr/bin/qemu-x86_64 \
   -L /workspace/dl/amd64-rootfs \
   /workspace/flutter-sdk/bin/cache/artifacts/engine/android-arm64-release/linux-x64/gen_snapshot "$@"
 ```
@@ -178,8 +178,8 @@ The Android SDK needs build-tools 35.0.0, platforms;android-36 and NDK 28.2.1367
 For API 23 (repeat for the other API levels):
 
 ```sh
-#!/data/data/cc.codroid/files/usr/bin/bash
-exec /data/data/cc.codroid/files/usr/bin/clang \
+#!/data/data/cox.dragon/files/usr/bin/bash
+exec /data/data/cox.dragon/files/usr/bin/clang \
   --target=aarch64-linux-android23 \
   --sysroot=/workspace/dl/android-ndk-r28c/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
   -resource-dir=/workspace/dl/clang-merged "$@"
@@ -191,14 +191,14 @@ Replace `llvm-ar`, `llvm-ranlib`, `llvm-strip`, etc. with scripts forwarding to 
 
 ```sh
 # android-sdk/cmake/3.22.1/bin/cmake
-#!/data/data/cc.codroid/files/usr/bin/bash
+#!/data/data/cox.dragon/files/usr/bin/bash
 exec /workspace/dl/cmake-3.31.6-linux-aarch64/bin/cmake "$@"
 ```
 
 ```sh
 # android-sdk/cmake/3.22.1/bin/ninja
-#!/data/data/cc.codroid/files/usr/bin/bash
-exec /data/data/cc.codroid/files/usr/bin/ninja "$@"
+#!/data/data/cox.dragon/files/usr/bin/bash
+exec /data/data/cox.dragon/files/usr/bin/ninja "$@"
 ```
 
 Reason: row 9 above — Flutter's Gradle plugin attaches an empty CMake project to the app to trigger the NDK download (`forceNdkDownload`), so CMake must work even when the project has no C++.
@@ -216,10 +216,10 @@ Operit2-specific adaptations (see its repository for details):
 
 ```sh
 #!/bin/bash
-export PATH=/data/data/cc.codroid/files/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export JAVA_HOME=/data/data/cc.codroid/files/usr/lib/jvm/java-21-openjdk
+export PATH=/data/data/cox.dragon/files/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export JAVA_HOME=/data/data/cox.dragon/files/usr/lib/jvm/java-21-openjdk
 export FLUTTER_OHOS_STORAGE_BASE_URL=https://storage.googleapis.com
-export OPERIT_LIBCLANG_DIR=/data/data/cc.codroid/files/usr/lib
+export OPERIT_LIBCLANG_DIR=/data/data/cox.dragon/files/usr/lib
 export ANDROID_HOME=/workspace/android-sdk
 export ANDROID_SDK_ROOT=/workspace/android-sdk
 export LANG=C.UTF-8

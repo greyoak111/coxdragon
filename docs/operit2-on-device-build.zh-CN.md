@@ -44,14 +44,14 @@
 proot 只会暴露显式绑定的路径。实际使用的登录命令：
 
 ```sh
-P=/data/user/0/cc.codroid/files/usr
-W=/data/user/0/cc.codroid/files/home/workspace
+P=/data/user/0/cox.dragon/files/usr
+W=/data/user/0/cox.dragon/files/home/workspace
 
 proot-distro login ubuntu --shared-tmp \
   -b /system:/system \
   -b /apex:/apex \
-  -b $P:/data/data/cc.codroid/files/usr \
-  -b $P:/data/user/0/cc.codroid/files/usr \
+  -b $P:/data/data/cox.dragon/files/usr \
+  -b $P:/data/user/0/cox.dragon/files/usr \
   -b $W:/workspace -- /bin/bash -lc '<命令>'
 ```
 
@@ -107,7 +107,7 @@ clang 21 的驱动配 clang 19 的 `include`，会在 NEON 等内置头文件上
 ```sh
 NDK=/workspace/dl/android-ndk-r28c
 mkdir -p /workspace/dl/clang-merged
-ln -s /data/data/cc.codroid/files/usr/lib/clang/21/include /workspace/dl/clang-merged/include
+ln -s /data/data/cox.dragon/files/usr/lib/clang/21/include /workspace/dl/clang-merged/include
 ln -s $NDK/toolchains/llvm/prebuilt/linux-x86_64/lib/clang/19/lib /workspace/dl/clang-merged/lib
 ```
 
@@ -143,9 +143,9 @@ head -c 1200 libapp.so | strings -n 20 | grep -o "product .*pointers"
 解决办法是使用官方 Android 构建产物里的 x86_64 `gen_snapshot`（`android-arm64-release/linux-x64/gen_snapshot`），通过 qemu 运行：
 
 ```sh
-#!/data/data/cc.codroid/files/usr/bin/bash
+#!/data/data/cox.dragon/files/usr/bin/bash
 unset LD_PRELOAD
-exec /data/data/cc.codroid/files/usr/bin/qemu-x86_64 \
+exec /data/data/cox.dragon/files/usr/bin/qemu-x86_64 \
   -L /workspace/dl/amd64-rootfs \
   /workspace/flutter-sdk/bin/cache/artifacts/engine/android-arm64-release/linux-x64/gen_snapshot "$@"
 ```
@@ -177,8 +177,8 @@ Android SDK 需要 build-tools 35.0.0、platforms;android-36、NDK 28.2.13676358
 以 API 23 为例（其余 API 同理）：
 
 ```sh
-#!/data/data/cc.codroid/files/usr/bin/bash
-exec /data/data/cc.codroid/files/usr/bin/clang \
+#!/data/data/cox.dragon/files/usr/bin/bash
+exec /data/data/cox.dragon/files/usr/bin/clang \
   --target=aarch64-linux-android23 \
   --sysroot=/workspace/dl/android-ndk-r28c/toolchains/llvm/prebuilt/linux-x86_64/sysroot \
   -resource-dir=/workspace/dl/clang-merged "$@"
@@ -190,14 +190,14 @@ exec /data/data/cc.codroid/files/usr/bin/clang \
 
 ```sh
 # android-sdk/cmake/3.22.1/bin/cmake
-#!/data/data/cc.codroid/files/usr/bin/bash
+#!/data/data/cox.dragon/files/usr/bin/bash
 exec /workspace/dl/cmake-3.31.6-linux-aarch64/bin/cmake "$@"
 ```
 
 ```sh
 # android-sdk/cmake/3.22.1/bin/ninja
-#!/data/data/cc.codroid/files/usr/bin/bash
-exec /data/data/cc.codroid/files/usr/bin/ninja "$@"
+#!/data/data/cox.dragon/files/usr/bin/bash
+exec /data/data/cox.dragon/files/usr/bin/ninja "$@"
 ```
 
 原因见上表第 9 项：Flutter 的 Gradle 插件会强行给 app 挂一个空 CMake 工程来触发 NDK 下载，所以即使项目没有 C++，也必须让 CMake 可用。
@@ -215,10 +215,10 @@ Operit2 自己的适配（细节见其仓库）：
 
 ```sh
 #!/bin/bash
-export PATH=/data/data/cc.codroid/files/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-export JAVA_HOME=/data/data/cc.codroid/files/usr/lib/jvm/java-21-openjdk
+export PATH=/data/data/cox.dragon/files/usr/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export JAVA_HOME=/data/data/cox.dragon/files/usr/lib/jvm/java-21-openjdk
 export FLUTTER_OHOS_STORAGE_BASE_URL=https://storage.googleapis.com
-export OPERIT_LIBCLANG_DIR=/data/data/cc.codroid/files/usr/lib
+export OPERIT_LIBCLANG_DIR=/data/data/cox.dragon/files/usr/lib
 export ANDROID_HOME=/workspace/android-sdk
 export ANDROID_SDK_ROOT=/workspace/android-sdk
 export LANG=C.UTF-8

@@ -1,7 +1,7 @@
 {
  "tag": "devkit-2026.10.28",
  "base": "https://github.com/greyoak111/cccodroid/releases/download/devkit-2026.10.28/",
- "target": "cc.codroid",
+ "target": "cox.dragon",
  "compat": 1,
  "gz": {
   "file": "devkit-cc.codroid.tar.gz",

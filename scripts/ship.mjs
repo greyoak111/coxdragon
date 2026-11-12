@@ -145,7 +145,7 @@ const S = {
   },
   verify() {
     const b = badging(), m = mani();
-    if (b.pkg !== "cc.codroid") throw new Error(`包名是 ${b.pkg}`);
+    if (b.pkg !== "cox.dragon") throw new Error(`包名是 ${b.pkg}`);
     if (b.code !== m.code || b.name !== m.name) throw new Error(`包里是 ${b.name}（${b.code}），清单是 ${m.name}（${m.code}）`);
     if (!DEV && b.name !== VER) throw new Error(`包里版本 ${b.name}，要发的是 ${VER}`);
     if (b.sdk !== 28) throw new Error(`cccodroid.apk 的 targetSdk 是 ${b.sdk}，应为 28`);
@@ -226,19 +226,19 @@ function siteVerify() {
 Object.assign(S, {
   install() {
     // 本机装着哪套就装哪套：别因为发版把 36 的机器换回 28
-    const cur = sh("priv", ["dumpsys package cc.codroid | grep -m1 -o 'targetSdk=[0-9]*' || true"]);
+    const cur = sh("priv", ["dumpsys package cox.dragon | grep -m1 -o 'targetSdk=[0-9]*' || true"]);
     const apk = /targetSdk=(\d+)/.test(cur) && +cur.match(/targetSdk=(\d+)/)[1] >= 29 && fs.existsSync(APK36) ? APK36 : APK;
     const size = fs.statSync(apk).size;
     console.log(`  装 ${path.basename(apk)}`);
     // 安装包从本进程经标准输入交给 priv：priv 是 shell 身份（uid 2000），读不到应用私有目录里的文件（0.6.8 发版时 cat 报 Permission denied）
     const fd = fs.openSync(apk, "r");
     try { run("priv", [`pm install -r -S ${size}`], { stdio: [fd, "inherit", "inherit"] }); } finally { fs.closeSync(fd); }
-    const v = sh("priv", ["dumpsys package cc.codroid | grep -m1 versionName"]);
+    const v = sh("priv", ["dumpsys package cox.dragon | grep -m1 versionName"]);
     console.log("  已装：" + v.trim());
     // 装完把应用打开（和应用内更新一样）：刚装完系统可能还在做安装后扫描、头一次启动会被丢掉，起不来就再拉
     for (let i = 1; i <= 3; i++) {
       spawnSync("sleep", ["2"]);
-      sh("priv", ["am start -n cc.codroid/.MainActivity >/dev/null 2>&1"]);
+      sh("priv", ["am start -n cox.dragon/.MainActivity >/dev/null 2>&1"]);
       spawnSync("sleep", ["2"]);
       if (/ResumedActivity.*cc\.codroid\//.test(sh("priv", ["dumpsys activity activities | grep ResumedActivity"]))) { console.log("  已打开"); return; }
     }

@@ -1,7 +1,7 @@
 // pkg —— 在 cccodroid 里装 Termux 仓库的包。
 //
-// Termux 的包把路径写死成 /data/data/com.termux/…，而 cc.codroid 和 com.termux 一样长（10 个字符），
-// 所以和打工具包时一样，逐字节把 /data/data/com.termux/ 换成 /data/data/cc.codroid/ 就能原样跑，
+// Termux 的包把路径写死成 /data/data/com.termux/…，而 cox.dragon 和 com.termux 一样长（10 个字符），
+// 所以和打工具包时一样，逐字节把 /data/data/com.termux/ 换成 /data/data/cox.dragon/ 就能原样跑，
 // 不用 patchelf、不用 proot。zip 类归档（.jar/.whl…）里面是压缩过的，要解开改完再压回去。
 //
 // 规矩：

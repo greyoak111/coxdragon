@@ -2,6 +2,40 @@
 
 English | [中文](#中文)
 
+## Codex-specific notes (coxdragon)
+
+coxdragon adds an OpenAI Codex app-server on top of the cccodroid shell. The following
+are specific to this fork:
+
+- **The engine is the official binary.** `codex-app-server` is downloaded from the
+  `openai/codex` GitHub release, and both the archive and the extracted binary are
+  checked against pinned SHA-256 values in `gateway/gw/codex.mjs`. It is never patched.
+- **It runs as the app uid.** No root, no Shizuku, no `su`. The app's Android sandbox is
+  the outer boundary.
+- **`sandbox: "danger-full-access"` is deliberate.** bubblewrap cannot create user
+  namespaces on most Android devices (on the test device every sandboxed command fails
+  with `Permission denied`), so the in-process sandbox is not available. The protection
+  is the approval policy (`untrusted`): trusted/read-only operations may run, and
+  everything else produces an approval request that the UI must answer. Because the
+  engine runs as the app uid, an approved command can read the app's private files,
+  including the ChatGPT credentials under `~/.codex`. Read the command before approving.
+- **The approval channel must not be bypassable.** A report that can make the gateway
+  auto-approve a command, forge an approval response, or hide an approval from the UI is
+  in scope.
+- **The local proxy is authenticated.** It binds `127.0.0.1` on a random port and
+  requires a random `user:password`; another app using it without the password is a bug.
+- **No API key is shipped.** Login uses ChatGPT device code; credentials are stored by
+  the official app-server under `~/.codex`.
+
+Not in scope for coxdragon: prompt injection that the user then approves, bugs in the
+official Codex binary (report them to OpenAI), and anything that requires a rooted or
+already-compromised phone.
+
+Report privately at
+<https://github.com/greyoak111/coxdragon/security/advisories/new>.
+
+coxdragon is AGPL-3.0. Corresponding source: <https://github.com/greyoak111/coxdragon>.
+
 ## Maintainer
 
 - Security maintainer: greyoak111 (SUN,XIFENG)

@@ -9,8 +9,8 @@ import { claudeEnv, currentModelInfo } from "../gw/claude.mjs";
 test("组件环境：留下加载器要的变量，别的不带（#66 第 3 项）", () => {
   const src = {
     LANG: "C.UTF-8", LD_PRELOAD: "/a/lib/exec-shim-bionic.so:/u/lib/libtermux-exec-linker-ld-preload.so",
-    TERMUX_APP__DATA_DIR: "/data/user/0/cc.codroid", TERMUX_APP__LEGACY_DATA_DIR: "/data/data/cc.codroid",
-    TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE: "force", NODE_OPTIONS: "--require=/data/user/0/cc.codroid/files/app/lib/execpath.cjs",
+    TERMUX_APP__DATA_DIR: "/data/user/0/cox.dragon", TERMUX_APP__LEGACY_DATA_DIR: "/data/data/cox.dragon",
+    TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE: "force", NODE_OPTIONS: "--require=/data/user/0/cox.dragon/files/app/lib/execpath.cjs",
     ANTHROPIC_API_KEY: "secret", CCAPP_TOKEN: "t", PATH: "/evil",
   };
   const env = componentEnv("/h", "/u", src);

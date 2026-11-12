@@ -248,7 +248,7 @@ async function checkMarket(gz = state.done.fetch.gz) {
 step.chromium = async () => {
   const D = path.join(W, "chromium");
   fs.rmSync(D, { recursive: true, force: true }); fs.mkdirSync(D, { recursive: true });
-  run("node", [path.join(ROOT, "devkit/devkit.mjs"), "component", "chromium", "--target", "cc.codroid", "--base", path.join(REL, "devkit.lock.json"), "--out", D, "--cache", CHROM_CACHE], { cwd: path.join(ROOT, "devkit") });
+  run("node", [path.join(ROOT, "devkit/devkit.mjs"), "component", "chromium", "--target", "cox.dragon", "--base", path.join(REL, "devkit.lock.json"), "--out", D, "--cache", CHROM_CACHE], { cwd: path.join(ROOT, "devkit") });
   const meta = json(path.join(D, "component-chromium.json"));
   if (meta.base.gz !== state.done.fetch.gz) fail(`浏览器组件打在了 ${meta.base.gz.slice(0, 12)} 上`);
   // 线上那份索引会被合并后重签：先验它的签名，不然有仓库写权限的人改一下 Release 附件，就能借发布机的钥匙签出「官方」组件（11-03 审查 M-4）
@@ -259,7 +259,7 @@ step.chromium = async () => {
   if (!verifySig(body, fs.readFileSync(path.join(D, "components.json.sig"), "utf8"))) fail("新签的预置组件索引验不过");
   const b = JSON.parse(body).components.chromium.builds.find((x) => x.base === state.done.fetch.gz);
   if (!b) fail("新索引里没有这版工具包的浏览器构建");
-  const tgz = path.join(D, "component-chromium-cc.codroid.tar.gz"), h = await shaFile(tgz);
+  const tgz = path.join(D, "component-chromium-cox.dragon.tar.gz"), h = await shaFile(tgz);
   if (h !== b.sha256 || fs.statSync(tgz).size !== b.bytes) fail(`浏览器包 ${h.slice(0, 12)} 和索引 ${b.sha256.slice(0, 12)} 对不上`);
   const asset = path.join(D, b.asset);
   fs.copyFileSync(tgz, asset);
