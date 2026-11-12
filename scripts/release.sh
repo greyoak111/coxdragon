@@ -61,7 +61,7 @@ const read = (p) => (p ? fs.readFileSync(p, "utf8").trim() + "\n\n" : "");
 const devkitLink = "[" + DEVKIT + "](https://github.com/" + REPO + "/releases/tag/" + DEVKIT + ")";
 const body = "**简体中文** · [English](#english)\n\n" + read(NOTES) + [
   "### 安装",
-  "下载 `coxdragon.apk` 安装（系统提示「与此版本的安卓不兼容」、装不上时，改装 `coxdragon-36.apk`）。首次打开先勾选要装的工具包模块（默认约 330 MB，全部约 700 MB，断点续传），再下载官方 Codex 引擎（约 84 MB）。",
+  "下载 `coxdragon.apk` 安装。首次打开先勾选要装的工具包模块（默认约 330 MB，全部约 700 MB，断点续传），再下载官方 Codex 引擎（约 84 MB）。",
   "",
   "### 校验",
   "- `coxdragon.apk` sha256：`" + SHA + "`",
@@ -70,7 +70,7 @@ const body = "**简体中文** · [English](#english)\n\n" + read(NOTES) + [
   "- 源码提交：" + COMMIT,
 ].join("\n") + "\n\n---\n\n## English\n\n" + read(NOTES_EN) + [
   "### Install",
-  "Download and install `coxdragon.apk` (if Android says it isn’t compatible and won’t install it, use `coxdragon-36.apk` instead). On first launch you pick toolchain modules (about 330 MB by default, about 700 MB for all, resumable), then the official Codex engine is downloaded (about 84 MB).",
+  "Download and install `coxdragon.apk`. On first launch you pick toolchain modules (about 330 MB by default, about 700 MB for all, resumable), then the official Codex engine is downloaded (about 84 MB).",
   "",
   "### Verification",
   "- `coxdragon.apk` sha256: `" + SHA + "`",
