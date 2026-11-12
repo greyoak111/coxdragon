@@ -34,6 +34,12 @@ app-server 放进一个普通安卓应用里，用本机网关把它护住，再
 - **cccrodroid 的外壳照旧可用。** 前台服务、终端、文件浏览器、文档查看器、Shizuku
   集成、通知和原来的设置页都在。
 
+## 组件
+
+可选工具（GitHub 命令行、文档转换、电路仿真、本地模型推理等）来自独立的
+[coxdragon-components](https://github.com/greyoak111/coxdragon-components) 市场。
+配方按本仓库的工具包底座构建，用签名索引发布；coxdragon 不读 cccodroid 的组件市场。
+
 ## 架构
 
 ```

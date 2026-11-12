@@ -40,6 +40,14 @@ the Codex page and the `cox.dragon` package are new.
   document viewer, Shizuku integration, notifications, and the existing settings pages
   are still there.
 
+## Components
+
+Optional tools (GitHub CLI, document conversion, circuit simulators, local model
+runners, …) come from the separate
+[coxdragon-components](https://github.com/greyoak111/coxdragon-components) market.
+Recipes are built against this repository's devkit base and published with a signed
+index; coxdragon does not read the cccodroid market.
+
 ## Architecture
 
 ```
