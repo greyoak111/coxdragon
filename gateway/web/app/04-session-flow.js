@@ -687,7 +687,7 @@
   function setConn(ok) {
     srv.connected = ok;
     // 浏览器从 127.0.0.1 / localhost 打开：网关在线，只是来源不对，别说「断开」盖掉「请在应用里打开」（195-G.6 真机）
-    if (!ok) setStatus(srv.foreign ? t("请在 cccodroid 应用里打开") : t("与网关断开，正在重连…（生成不受影响）"), "warn");
+    if (!ok) setStatus(srv.foreign ? t("请在 coxdragon 应用里打开") : t("与网关断开，正在重连…（生成不受影响）"), "warn");
     // 刚问过、网关确实不在：每次重拨失败不要把「网关离线」又盖回「生成不受影响」。
     // 45 秒盖住最长的 30 秒退避；连上（onopen）就清零，重新按原文案说（FIND-018）
     if (!ok && !srv.foreign && Date.now() - gwDeadAt < 45000) setStatus(t("网关离线"), "err");

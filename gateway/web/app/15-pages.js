@@ -2,12 +2,16 @@
   var setOpen = false;
   var setCatShown = "-";   // 上次画的是哪一类：null = 窄屏的分类列表，"-" = 刚打开还没画过
   let setFrom = null;
+  // Codex 单核：接口与型号 / Claude 行为 / 后台与并行 / 用量与耗电都是 Claude 引擎的配置，入口不再露出。
+  // 页面里那几块 HTML 留着（共用的样式和脚本还在），只是分类按钮不画、也点不进去。
+  const CLAUDE_CATS = new Set(["provider", "claude", "run", "usage"]);
   function openSettings(cat) {
     setFrom = document.activeElement;
     OV.closeAll();
     setOpen = true;
     MO.cancel($("set-ov"));
     $("set-ov").classList.remove("hidden");
+    if (cat && CLAUDE_CATS.has(cat)) cat = "general";
     setCatOpen = cat || (pagesNarrow() ? null : setCatOpen || "general");
     loadQuota().catch(() => {});
     paintSetCats();
@@ -15,7 +19,7 @@
     closeDrawer();
     // 每次打开设置页都重取设置（loadSettings 里也会重拉厂商和型号）：启动时那一次失败/竞态，
     // 以前就一直显示默认或旧值（195-E.8）
-    loadSettings(); loadPriv(); loadUpd(); loadNotify(); loadDev(); loadReconcile(false); loadEnvFacts(); loadFonts(); renderTbList(); renderAccent(); renderMsgActs();
+    loadSettings(); loadPriv(); loadUpd(); loadCxUpd(); loadNotify(); loadDev(); loadReconcile(false); loadEnvFacts(); loadFonts(); renderTbList(); renderAccent(); renderMsgActs();
     // 焦点进模态：不然键盘 / 读屏还停在被盖住的背景上（审查 P2-12）
     // 窄屏的分类列表没有选中项、关闭键也藏着：落到第一个看得见的控件（审查 #52 P2-12）
     requestAnimationFrame(() => { if (setOpen) focusInto($("set-ov"), $("set-cats").querySelector("button.on:not(.hidden)")); });
@@ -150,8 +154,8 @@
     const narrow = pagesNarrow(), cats = [...document.querySelectorAll("#set-cats [data-cat]")];
     // 一类里一项都没显示（比如开发端没有通知 / 更新）就连分类一起藏起来
     const empty = (k) => ![...document.querySelectorAll(`.set-cat[data-cat="${k}"] > :is(.srow, .sblock)`)].some((f) => !f.classList.contains("hidden"));
-    cats.forEach((b) => b.classList.toggle("hidden", empty(b.dataset.cat)));
-    if (!narrow && (!setCatOpen || empty(setCatOpen))) setCatOpen = "general";
+    cats.forEach((b) => b.classList.toggle("hidden", CLAUDE_CATS.has(b.dataset.cat) || empty(b.dataset.cat)));
+    if (!narrow && (!setCatOpen || CLAUDE_CATS.has(setCatOpen) || empty(setCatOpen))) setCatOpen = "general";
     $("tab-settings").classList.toggle("set-list", narrow && !setCatOpen);
     $("tab-settings").classList.toggle("set-one", narrow && !!setCatOpen);
     cats.forEach((b) => b.classList.toggle("on", b.dataset.cat === setCatOpen));
@@ -195,7 +199,7 @@
 
 
   // ── 交流群与参与：帮助页最后一节、更新说明卡片底部共用。群号为主，二维码点开才显示 ──
-  const COMMUNITY = { qq: "1062538743", repo: "https://github.com/greyoak111/cccodroid", discord: "https://discord.gg/jE6KW8kwpe" };
+  const COMMUNITY = { qq: "1062538743", repo: "https://github.com/greyoak111/coxdragon", discord: "https://discord.gg/jE6KW8kwpe" };
   function communityHtml(compact) {
     const R = COMMUNITY.repo, zh = isZh();
     return `<div class="cm-box${compact ? " compact" : ""}">

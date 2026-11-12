@@ -37,7 +37,7 @@ async function issueDraft(lang) {
   const row = (k, v) => (v ? `| ${k} | ${String(v).replace(/[|\n]/g, " ")} |` : "");
   const dev = [
     "| | |", "|---|---|",
-    row("cccodroid", ver("app") || (PREFIX ? "?" : "dev")),
+    row("coxdragon", ver("app") || (PREFIX ? "?" : "dev")),
     row("Toolchain", ver("devkit") || devkitVersion(dk)),
     row("Claude Code", ver("claude")),
     row("Android", `${g("ro.build.version.release")} (SDK ${g("ro.build.version.sdk")})`),

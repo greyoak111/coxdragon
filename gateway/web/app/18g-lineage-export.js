@@ -4,7 +4,7 @@
   // 都落到导出目录（POST /api/lineage/export，gw/profile.mjs），再给「预览 / 保存到 / 分享」。
   const LX = { busy: false };
   const lxStamp = () => { const d = new Date(), p = (x) => String(x).padStart(2, "0"); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; };
-  const lxFoot = () => "cccodroid · " + t("脉络") + " · " + new Date().toLocaleString(I18N.lang);
+  const lxFoot = () => "coxdragon · " + t("脉络") + " · " + new Date().toLocaleString(I18N.lang);
 
   $("lin-export").addEventListener("click", (e) => {
     if (!LIN.map || !LIN.model) return;
@@ -19,7 +19,7 @@
     const btn = $("lin-export");
     LX.busy = true; btn.classList.add("on");
     try {
-      const name = `cccodroid-lineage-${lxStamp()}.${kind}`;
+      const name = `coxdragon-lineage-${lxStamp()}.${kind}`;
       let data;
       if (kind === "html") data = await lxHtml();
       else {

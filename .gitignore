@@ -13,3 +13,10 @@ android/assets/gwpin.json
 
 /.cache/
 /devkit-out/
+
+/.build-ui/
+
+# Signing material stays outside source control.
+coxdragon-release.json
+*.jks
+*.keystore

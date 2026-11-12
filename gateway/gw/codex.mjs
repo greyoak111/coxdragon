@@ -15,6 +15,7 @@
 //    · 工具包里的 bash / git / rg 等只作为子进程的 PATH；Codex 本身不依赖工具包。
 // ─────────────────────────────────────────────────────────────────────
 
+import mcpElicitation from "../web/mcp-elicitation.js";
 import fs from "node:fs";
 import path from "node:path";
 import http from "node:http";
@@ -37,12 +38,21 @@ const CODEX = {
   sha256: "3bc8dce2c2d8df023574736e7439ff834c3825d584dc79aa9b1f642023555bb1",
   binSha256: "f21b0b95117d4f32151abe78d8030cc1175e877fe741deaaea46451f2b51ade2",
   binName: "codex-app-server",
+  // 代码模式宿主：官方单独发的包。0.166.0 的 app-server 在自已旁边找不到 codex-code-mode-host 时，
+  // 读文件 / 跑命令会直接失败（真机报「缺少执行文件 …/codex/codex-code-mode-host」），所以两件一起装。
+  hostAsset: "codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz",
+  hostUrl: "https://github.com/openai/codex/releases/download/rust-v0.166.0/codex-code-mode-host-aarch64-unknown-linux-musl.tar.gz",
+  hostSize: 27023046,
+  hostSha256: "ac98d1f878e353a16cba711fd47bfef2f6c814109bdd819ee2b6b6d6a19701e7",
+  hostBinSha256: "587436a943a59c18cabdbe83f07800d237b60ddd2e0f54d05b23d8b37a0b36f4",
+  hostBinName: "codex-code-mode-host",
 };
 // 国内 GitHub 直连不顺时的第三方加速；内容照样按钉住的 sha256 核。仅在直连失败时用。
 const PROXY_PREFIX = "https://gh-proxy.com/";
 
 const ROOT = path.join(CFG.home, ".local", "share", "coxdragon", "codex");
 const BIN = path.join(ROOT, CODEX.binName);
+const HOST = path.join(ROOT, CODEX.hostBinName);   // app-server 按这个固定文件名在自已旁边找
 const CODEX_HOME = process.env.CCAPP_CODEX_HOME || path.join(CFG.home, ".codex");
 const CACHE = path.join(CFG.home, ".cache", "coxdragon");
 const LOG_LIMIT = 24 * 1024;
@@ -85,6 +95,11 @@ function binInfo() {
   try { st = fs.statSync(BIN); } catch { return { installed: false }; }
   return { installed: st.isFile(), size: st.size, mtime: st.mtimeMs, path: BIN, version: CODEX.version };
 }
+function hostInfo() {
+  let st;
+  try { st = fs.statSync(HOST); } catch { return { installed: false }; }
+  return { installed: st.isFile(), size: st.size, path: HOST };
+}
 
 /** 装好以后核一次二进制自己的哈希；文件没变就复用上次结果 */
 async function verifyBin() {
@@ -97,15 +112,24 @@ async function verifyBin() {
   if (!binCache.ok) throw new Error(binCache.error);
 }
 
-function broadcastInstall() {
-  broadcast({ type: "install", install: { ...INSTALL, installed: binInfo().installed, version: CODEX.version } });
+/** 代码模式宿主也按钉住的 sha256 核；缺了 / 坏了由调用方重装 */
+async function verifyHost() {
+  const info = hostInfo();
+  if (!info.installed) throw new Error("Codex 代码模式组件还没安装");
+  const got = await sha256File(HOST);
+  if (got !== CODEX.hostBinSha256)
+    throw new Error(`Codex 代码模式组件的 sha256 是 ${got}，钉的是 ${CODEX.hostBinSha256}；请重新安装`);
 }
 
-async function downloadTo(url, dest, onProgress) {
+function broadcastInstall() {
+  broadcast({ type: "install", install: { ...INSTALL, installed: binInfo().installed, ready: binInfo().installed && hostInfo().installed, host: hostInfo(), version: CODEX.version } });
+}
+
+async function downloadAsset(url, dest, size, sha, label, onProgress) {
   const part = dest + ".part";
   let start = 0;
   try { start = fs.statSync(part).size; } catch {}
-  if (start > CODEX.size) { try { fs.rmSync(part); } catch {} start = 0; }
+  if (start > size) { try { fs.rmSync(part); } catch {} start = 0; }
   const headers = { "user-agent": "coxdragon-codex/0.1" };
   if (start > 0) headers.range = `bytes=${start}-`;
   let res;
@@ -115,10 +139,10 @@ async function downloadTo(url, dest, onProgress) {
     throw e;
   }
   if (res.status === 416) { try { fs.rmSync(part); } catch {} throw new Error("续传位置无效，已重新开始"); }
-  if (!res.ok) throw new Error(`下载 Codex 引擎失败：HTTP ${res.status}`);
+  if (!res.ok) throw new Error(`下载${label}失败：HTTP ${res.status}`);
   let append = start > 0 && res.status === 206;
   if (!append) start = 0;
-  const total = Number(res.headers.get("content-length") || 0) + start || CODEX.size;
+  const total = Number(res.headers.get("content-length") || 0) + start || size;
   INSTALL.total = total;
   const fh = await fs.promises.open(part, append ? "a" : "w");
   let done = start;
@@ -136,16 +160,16 @@ async function downloadTo(url, dest, onProgress) {
     await fh.sync();
   } finally { await fh.close(); }
   const got = await sha256File(part);
-  if (got !== CODEX.sha256) {
+  if (got !== sha) {
     try { fs.rmSync(part); } catch {}
-    throw new Error(`Codex 引擎包的 sha256 是 ${got}，与钉住的 ${CODEX.sha256} 不符`);
+    throw new Error(`${label}包的 sha256 是 ${got}，与钉住的 ${sha} 不符`);
   }
   fs.renameSync(part, dest);
   return dest;
 }
 
 /** 流式解 gzip tar 里的那个 codex-app-server，别的条目跳过。不走 tar 命令，少一个依赖。 */
-async function extractAppServer(tarGz, outFile) {
+async function extractBin(tarGz, outFile, match, wantSha, label) {
   const input = fs.createReadStream(tarGz).pipe(zlib.createGunzip());
   let buf = Buffer.alloc(0);
   let state = "header";   // header | data | skip | pad | done
@@ -166,7 +190,7 @@ async function extractAppServer(tarGz, outFile) {
           if (!name) { state = "done"; break; }
           rem = size;
           pad = (512 - (size % 512)) % 512;
-          if ((type === 0 || type === 48) && /(^|\/)codex-app-server/.test(name)) {
+          if ((type === 0 || type === 48) && match.test(name)) {
             fd = fs.openSync(tmp, "w", 0o755);
             found = true;
             state = "data";
@@ -188,14 +212,47 @@ async function extractAppServer(tarGz, outFile) {
       if (state === "done") break;
     }
   } finally { closeOut(); try { input.destroy(); } catch {} }
-  if (!found) { try { fs.rmSync(tmp, { force: true }); } catch {} throw new Error("下载的包里没有 codex-app-server"); }
+  if (!found) { try { fs.rmSync(tmp, { force: true }); } catch {} throw new Error(`下载的包里没有${label}`); }
   const got = await sha256File(tmp);
-  if (got !== CODEX.binSha256) {
+  if (got !== wantSha) {
     try { fs.rmSync(tmp, { force: true }); } catch {}
-    throw new Error(`解出来的 Codex 引擎 sha256 是 ${got}，与钉住的 ${CODEX.binSha256} 不符`);
+    throw new Error(`解出来的${label} sha256 是 ${got}，与钉住的 ${wantSha} 不符`);
   }
   fs.chmodSync(tmp, 0o755);
   fs.renameSync(tmp, outFile);
+}
+const extractAppServer = (tar, out) => extractBin(tar, out, /(^|\/)codex-app-server/, CODEX.binSha256, "Codex 引擎");
+const extractHost = (tar, out) => extractBin(tar, out, /(^|\/)codex-code-mode-host/, CODEX.hostBinSha256, "Codex 代码模式组件");
+
+/** 依次试直连和加速前缀，第一个成功就返回；全失败抛最后一条错误。 */
+async function fetchFirst(urls, dest, size, sha, label, phase) {
+  let last = "";
+  for (const u of urls) {
+    try {
+      INSTALL.phase = phase; broadcastInstall();
+      await downloadAsset(u, dest, size, sha, label, (d, t) => {
+        INSTALL.done = d; INSTALL.total = t;
+        if (d === t || d % (4 << 20) < (1 << 20)) broadcastInstall();
+      });
+      return;
+    } catch (e) { last = errMsg(e); INSTALL.phase = "下载失败，换线路重试"; broadcastInstall(); }
+  }
+  throw new Error(last || `下载${label}失败`);
+}
+
+async function doInstallHost() {
+  mkdir(ROOT); mkdir(CACHE);
+  INSTALL.state = "installing"; INSTALL.phase = "下载 Codex 代码模式组件（约 26 MB）";
+  INSTALL.done = 0; INSTALL.total = CODEX.hostSize; INSTALL.error = ""; INSTALL.startedAt = Date.now(); INSTALL.finishedAt = 0;
+  broadcastInstall();
+  const tar = path.join(CACHE, CODEX.hostAsset);
+  await fetchFirst([CODEX.hostUrl, PROXY_PREFIX + CODEX.hostUrl], tar, CODEX.hostSize, CODEX.hostSha256, "Codex 代码模式组件", "下载 Codex 代码模式组件（约 26 MB）");
+  INSTALL.phase = "解包并校验"; INSTALL.done = 0; INSTALL.total = 0; broadcastInstall();
+  await extractHost(tar, HOST);
+  try { fs.rmSync(tar, { force: true }); } catch {}
+  await verifyHost();
+  INSTALL.state = "done"; INSTALL.phase = "已就绪"; INSTALL.finishedAt = Date.now();
+  broadcastInstall();
 }
 
 async function doInstall() {
@@ -203,31 +260,25 @@ async function doInstall() {
   INSTALL.state = "installing"; INSTALL.phase = "下载官方 Codex 引擎（约 84 MB）"; INSTALL.done = 0; INSTALL.total = CODEX.size; INSTALL.error = ""; INSTALL.startedAt = Date.now(); INSTALL.finishedAt = 0;
   broadcastInstall();
   const tar = path.join(CACHE, CODEX.asset);
-  let ok = false;
-  const urls = [CODEX.url, PROXY_PREFIX + CODEX.url];
-  let last = "";
-  for (const u of urls) {
-    try {
-      await downloadTo(u, tar, (d, t) => { INSTALL.done = d; INSTALL.total = t; if (d === t || d % (4 << 20) < (1 << 20)) broadcastInstall(); });
-      ok = true; break;
-    } catch (e) { last = errMsg(e); INSTALL.phase = "下载失败，换线路重试"; broadcastInstall(); }
-  }
-  if (!ok) throw new Error(last || "下载 Codex 引擎失败");
+  await fetchFirst([CODEX.url, PROXY_PREFIX + CODEX.url], tar, CODEX.size, CODEX.sha256, "Codex 引擎", "下载官方 Codex 引擎（约 84 MB）");
   INSTALL.phase = "解包并校验"; INSTALL.done = 0; INSTALL.total = 0; broadcastInstall();
   await extractAppServer(tar, BIN);
   try { fs.rmSync(tar, { force: true }); } catch {}
   binCache = { key: "", ok: false, error: "" };
   await verifyBin();
+  // 老版本只装过 app-server：把代码模式宿主补齐
+  try { await verifyHost(); } catch { await doInstallHost(); }
   INSTALL.state = "done"; INSTALL.phase = "已就绪"; INSTALL.finishedAt = Date.now();
   broadcastInstall();
 }
 
 function startInstall() {
   if (INSTALL.state === "installing") return;
-  if (binInfo().installed) { INSTALL.state = "done"; INSTALL.phase = "已就绪"; INSTALL.done = INSTALL.total = 0; broadcastInstall(); return; }
-  INSTALL.state = "installing"; INSTALL.phase = "准备下载"; INSTALL.error = ""; INSTALL.done = 0; INSTALL.total = CODEX.size;
+  const bin = binInfo().installed, host = hostInfo().installed;
+  if (bin && host) { INSTALL.state = "done"; INSTALL.phase = "已就绪"; INSTALL.done = INSTALL.total = 0; broadcastInstall(); return; }
+  INSTALL.state = "installing"; INSTALL.phase = "准备下载"; INSTALL.error = ""; INSTALL.done = 0; INSTALL.total = bin ? CODEX.hostSize : CODEX.size;
   broadcastInstall();
-  installTask = doInstall().catch((e) => {
+  installTask = (bin ? doInstallHost() : doInstall()).catch((e) => {
     INSTALL.state = "error"; INSTALL.phase = "安装失败"; INSTALL.error = errMsg(e); INSTALL.finishedAt = Date.now();
     log("[codex] 安装失败：" + errMsg(e));
     broadcastInstall();
@@ -408,12 +459,14 @@ function status() {
   const acc = S.account && S.account.account;
   return {
     installed: binInfo().installed,
+    ready: binInfo().installed && hostInfo().installed,
+    host: hostInfo(),
     version: CODEX.version,
     install: { ...INSTALL },
     server: !!S.rpc,
     account: acc ? {
       type: acc.type, email: acc.email || "", planType: acc.planType || "",
-      workspaceName: acc.workspaceName || "", userId: S.account.userId || "",
+      workspaceName: acc.workspaceName || "",
       requiresOpenaiAuth: !!S.account.requiresOpenaiAuth,
     } : null,
     models: S.models.map(slimModel),
@@ -438,8 +491,18 @@ async function refreshAccount() {
 }
 async function refreshModels() {
   if (!S.rpc) return [];
-  try { const r = await S.rpc.request("model/list", {}); S.models = Array.isArray(r && r.data) ? r.data : []; }
-  catch (e) { log("[codex] model/list 失败：" + errMsg(e)); }
+  try {
+    // 官方 model/list 带分页（nextCursor）；只拿第一页会在模型多起来的账号上少列。
+    const all = [];
+    let cursor = null;
+    for (let i = 0; i < 10; i++) {
+      const r = await S.rpc.request("model/list", cursor ? { limit: 100, cursor } : { limit: 100 }, 30000);
+      all.push(...(Array.isArray(r && r.data) ? r.data : []));
+      cursor = r && r.nextCursor;
+      if (!cursor) break;
+    }
+    S.models = all;
+  } catch (e) { log("[codex] model/list 失败：" + errMsg(e)); }
   return S.models;
 }
 
@@ -457,10 +520,18 @@ function handleNotify(m) {
     case "error":
       if (m.params && m.params.error) S.lastError = m.params.error.message || "";
       break;
-    case "warning":
-    case "configWarning":
-      if (m.params && m.params.message) log("[codex] " + m.params.message);
+    case "serverRequest/resolved": {
+      const id = m.params && (m.params.requestId ?? m.params.id);
+      if (id != null) S.approvals.delete(String(id));
       break;
+    }
+    case "warning":
+    case "configWarning": {
+      // warning 用 message；configWarning 用 summary（官方形状，见 0.166.0 的 ConfigWarningNotification）
+      const w = m.params && (m.params.message || m.params.summary);
+      if (w) log("[codex] " + w);
+      break;
+    }
   }
   broadcast({ type: "rpc", method: m.method, params: m.params });
 }
@@ -484,6 +555,10 @@ function handleRequest(m) {
 
 async function startRpc() {
   await verifyBin();
+  // 0.166.0 的代码模式要同目录的 codex-code-mode-host；缺了它，读文件 / 跑命令会直接失败。
+  // 已经有一个安装在跑就等它，别同时开两份下载。
+  if (INSTALL.state === "installing" && installTask) await installTask.catch(() => {});
+  try { await verifyHost(); } catch { await doInstallHost(); }
   mkdir(CODEX_HOME); mkdir(CACHE); mkdir(path.join(CACHE, "tmp"));
   const px = await ensureProxy();
   const ca = ensureCa();
@@ -596,8 +671,16 @@ async function interruptTurn() {
 }
 async function listThreads() {
   const rpc = await ensureRpc();
-  const r = await rpc.request("thread/list", { limit: 50 }, 30000);
-  return (r && r.data || []).map(slimThread).filter(Boolean);
+  // thread/list 同样分页；最多翻 10 页，防止异常的 cursor 把界面拖住。
+  const all = [];
+  let cursor = null;
+  for (let i = 0; i < 10; i++) {
+    const r = await rpc.request("thread/list", cursor ? { limit: 50, cursor } : { limit: 50 }, 30000);
+    all.push(...(r && r.data || []));
+    cursor = r && r.nextCursor;
+    if (!cursor) break;
+  }
+  return all.map(slimThread).filter(Boolean);
 }
 async function login() {
   const rpc = await ensureRpc();
@@ -613,10 +696,9 @@ async function logout() {
   S.account = null;
   return r;
 }
-function approve(id, decision, answers) {
+function approve(id, decision, answers, content) {
   const p = S.approvals.get(String(id));
   if (!p) throw new Error("这条确认已经失效");
-  S.approvals.delete(String(id));
   const rpc = S.rpc;
   if (!rpc) throw new Error("Codex 引擎没有在跑");
   const d = String(decision || "");
@@ -626,11 +708,12 @@ function approve(id, decision, answers) {
   } else if (p.method === "item/permissions/requestApproval") {
     rpc.respond(p.id, { permissions: {}, scope: "turn" });
   } else if (p.method === "mcpServer/elicitation/request") {
-    rpc.respond(p.id, { action: d === "accept" ? "accept" : "decline" });
+    rpc.respond(p.id, mcpElicitation.response(p.params || {}, d, content));
   } else {
     const ok = d === "accept" || d === "acceptForSession";
     rpc.respond(p.id, { decision: ok ? d : d === "cancel" ? "cancel" : "decline" });
   }
+  S.approvals.delete(String(id));
   broadcast({ type: "approval-done", id: String(id) });
 }
 
@@ -663,6 +746,14 @@ export async function routeCodex(req, res, u, p) {
       let body = {};
       try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return json(res, 400, { error: "请求体不是 JSON" }); }
       if (p === "/api/codex/install") { startInstall(); return json(res, 200, { ok: true, install: { ...INSTALL } }); }
+      // 重装：先停引擎，删掉二进制，再按钉住的 sha256 重新下载。登录状态在 CODEX_HOME 里，不受影响。
+      if (p === "/api/codex/reinstall") {
+        stopServer();
+        try { fs.rmSync(BIN, { force: true }); } catch {}
+        binCache = { key: "", ok: false, error: "" };
+        startInstall();
+        return json(res, 200, { ok: true, install: { ...INSTALL } });
+      }
       if (p === "/api/codex/stop") { stopServer(); return json(res, 200, { ok: true }); }
       if (p === "/api/codex/thread") { const r = await startThread(body.cwd); return json(res, 200, { thread: slimThread(r && r.thread) }); }
       if (p === "/api/codex/open-thread") { const r = await resumeThread(body.threadId); return json(res, 200, { thread: slimThread(r && r.thread) }); }
@@ -672,7 +763,7 @@ export async function routeCodex(req, res, u, p) {
       if (p === "/api/codex/login") { const r = await login(); return json(res, 200, r || {}); }
       if (p === "/api/codex/login-cancel") { const r = await loginCancel(body.loginId); return json(res, 200, r || {}); }
       if (p === "/api/codex/logout") { const r = await logout(); return json(res, 200, r || {}); }
-      if (p === "/api/codex/approve") { approve(body.id, body.decision, body.answers); return json(res, 200, { ok: true }); }
+      if (p === "/api/codex/approve") { approve(body.id, body.decision, body.answers, body.content); return json(res, 200, { ok: true }); }
       if (p === "/api/codex/settings") {
         if (typeof body.model === "string") S.model = body.model.slice(0, 200);
         if (typeof body.effort === "string") S.effort = body.effort.slice(0, 40);

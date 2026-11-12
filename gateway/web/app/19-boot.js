@@ -187,7 +187,10 @@
   async function refreshStatus() {
     const ok = latest("status");   // 迟到的旧快照不许把厂商 / 安全模式 / 状态文字画回去（0.6.9 审计 195-BB.3）
     try {
-      const s = await api("/api/status", { timeout: 10000 });
+      const [s, cx] = await Promise.all([
+        api("/api/status", { timeout: 10000 }),
+        api("/api/codex/status", { timeout: 10000 }).catch(() => null),
+      ]);
       if (!ok()) return;
       clearStatusRetry();
       if (uiTag != null && s.uiTag && s.uiTag !== uiTag) {
@@ -205,44 +208,42 @@
       }
       state.serverStatus = s;
       state.safeMode = !!s.safeMode;      // 权限下拉按它算实际生效的那档（0.6.9 审计 P1-12 前端半）
+      cxAcct = cx;                        // 抽屉底部改看 Codex 的登录态（见 13-nav-menus 的 paintAcct）
       paintAcct(s);
       paintSafeMode(s.safeMode);
       recheckSetup();
-      // 日志分享靠安卓壳（cccodroid）打包、弹分享面板；旧版应用没有
-      // 打包诊断、到 GitHub 反馈只有 cccodroid 有：整行藏起来
-      $("btn-share-logs").closest(".srow").classList.toggle("hidden", s.product !== "cccodroid");
-      $("btn-issue").closest(".srow").classList.toggle("hidden", s.product !== "cccodroid");
+      // 日志分享靠安卓壳（coxdragon）打包、弹分享面板；旧版应用没有
+      // 打包诊断、到 GitHub 反馈只有 coxdragon 有：整行藏起来
+      $("btn-share-logs").closest(".srow").classList.toggle("hidden", s.product !== "coxdragon");
+      $("btn-issue").closest(".srow").classList.toggle("hidden", s.product !== "coxdragon");
       $("btn-ledger").classList.toggle("hidden", !s.hasLedger);
       paintModel(curModel() || s.model || "—");
       state.model = s.model;
-      // 登录态以 /api/status 的 auth 为准：配了「官方账户」不等于真的还登着；问不出（unknown）不算未登录，
-      // stale 是沿用上次问到的结果，要标出来（0.6.9 审计 195-G.3）
-      const auth = s.keyMode === "login" ? s.auth : null;
-      const credTxt = s.keyMode !== "login" ? (s.hasKey ? t("已配置密钥") : t("未配置"))
-        : !auth ? t("官方登录态")
-        : auth.unknown ? t("官方登录态 · 问不出登录状态")
-        : auth.stale ? (auth.loggedIn ? t("官方登录态 · 上次问到时已登录") : t("官方登录态 · 上次问到时未登录"))
-        : auth.loggedIn ? t("官方登录态 · 已登录") : t("官方登录态 · 未登录");
-      const needLogin = !!auth && auth.loggedIn === false && !auth.unknown;
+      // 运行状态改成看 Codex 引擎：这个应用不再装 Claude Code，「运行时缺失」是旧引擎的说法。
+      const cxAcc = cx && cx.account;
+      const cxModels = (cx && cx.models) || [];
+      const cxCur = cxModels.find((m) => m.id === (cx && cx.model)) || cxModels.find((m) => m.isDefault) || cxModels[0];
+      const cxIns = (cx && cx.install) || {};
+      const cxEngine = !cx ? t("问不出状态")
+        : !cx.installed ? t("未安装")
+        : cxIns.state === "installing" ? t("安装中 {p}%", { p: cxIns.total ? Math.floor((cxIns.done || 0) * 100 / cxIns.total) : 0 })
+        : cx.server ? t("已启动 · v{v}", { v: cx.version }) : t("已安装 · v{v}（未启动）", { v: cx.version });
       $("status-box").textContent =
-                `${t("网关")}     ${s.version} (pid ${s.pid})\n` +
-        `${t("运行时")}   ${s.ready ? t("就绪") : t("缺失")}\n` +
-        `${t("厂商")}     ${provName(s)}\n` +
-        `${t("上游")}     ${s.upstream}\n` +
-        `${t("凭据")}     ${credTxt}\n` +
-        `${t("DNS 桥")}   ${s.bridge ? t("已连接") : t("未启动")}\n` +
-        `${t("模型")}     ${s.model || t("(由 claude 决定)")}\n` +
-        `${t("生成")}     ${s.busy ? t("进行中") : t("空闲")}${s.queued ? t(" · 排队 {n} 条", { n: s.queued }) : ""}\n` +
-        `${t("工作区")}   ${s.workspace}`;
+                `${t("网关")}       ${s.version} (pid ${s.pid})\n` +
+        `Codex 引擎   ${cxEngine}\n` +
+        `${t("登录")}       ${cxAcc ? (cxAcc.email || (cxAcc.type === "apiKey" ? "API Key" : t("已登录"))) : t("未登录")}\n` +
+        `${t("模型")}       ${cxCur ? (cxCur.displayName || cxCur.id) : "—"}\n` +
+        `${t("线程")}       ${cx && cx.activeTurn ? t("正在运行") : t("空闲")}\n` +
+        `${t("工作区")}     ${(cx && cx.cwd) || s.workspace}`;
       if (es && !srv.connected) {
         // SSE 断了但 HTTP 还通：这里以前画成「就绪」，把「正在重连」盖掉（0.6.9 审计 195-BB.2）。
         // 同时用 /api/state 补一份快照，别让徽标、权限条、工具卡冻结在断线前
         setStatus(t("与网关断开，正在重连…（生成不受影响）"), "warn");
         api("/api/state").then(applyState).catch(() => {});
-      } else if (!s.busy) {
-        // 官方账户实际没登录（或上次问到时没登）就别再说「就绪」：一发消息就失败（0.6.9 审计 195-G.3）
-        setStatus(needLogin ? t("需要登录账户") : s.ready && s.hasKey ? t("就绪") : s.hasKey ? t("运行时缺失") : t("需要配置密钥"),
-          s.ready && s.hasKey && !needLogin ? "ok" : "warn");
+      } else {
+        setStatus(!cx ? t("Codex 引擎状态问不出") : !cx.installed ? t("Codex 引擎未安装")
+          : cxAcc ? t("Codex 就绪") : t("需要登录 ChatGPT"),
+          cx && cx.installed && cxAcc ? "ok" : "warn");
       }
     } catch (e) {
       if (!ok()) return;
@@ -252,8 +253,8 @@
         clearTimeout(busWatch); busWatch = 0;
         if (es) { try { es.close(); } catch {} es = null; }
         clearStatusRetry();
-        $("status-box").textContent = t("请在 cccodroid 应用里打开");
-        setStatus(t("请在 cccodroid 应用里打开"), "warn");
+        $("status-box").textContent = t("请在 coxdragon 应用里打开");
+        setStatus(t("请在 coxdragon 应用里打开"), "warn");
         return;
       }
       $("status-box").textContent = t("无法连接网关：{msg}", { msg: e.message });
@@ -539,7 +540,11 @@
     }
     for (const [id, close] of steps) {
       if (id === "drawer" && L && L.docked()) continue;
-      if (open(id)) { close(); return true; }
+      if (open(id)) {
+        // Codex 单核：工作台就是主界面，底下没有可回的 Claude 聊天；返回键直接退到后台
+        if (id === "pages" && curPage === "codex") return false;
+        close(); return true;
+      }
     }
     return false;
   });
@@ -547,12 +552,33 @@
     // 常驻栏展开：面板从左边弹进来（右边内容已经让出位置）
     dockIn: () => MO.spring(drawerEl.querySelector(".drawer-panel"), "snap", (p) => ({ transform: `translateX(${(MO.rtl() ? 100 : -100) * (1 - p)}%)` })) });
   window.__cc = { view, srv, state, send, abort, openSession, newConversation, openPage, bus: onBus,   // bus：测试时往前端灌事件
-    openGit, openViewer, openFiles, openDrawer, showWhatsNew, mdEd: () => VW.ed, provCard: (id) => { state.provView = id; renderProvCard(); },
-    renderMd, esc, toast, api, copyText, fmtSize, relTime,   // Codex 工作台（web/codex.js）复用同一套排版与请求封装
+    openGit, openViewer, openFiles, openDrawer, closeDrawer, showWhatsNew, mdEd: () => VW.ed, provCard: (id) => { state.provView = id; renderProvCard(); },
+    renderMd, enhanceMd, onCopyBtn, onPathLink, actBtn, esc, toast, api, copyText, fmtSize, relTime,   // Codex 工作台（web/codex.js）复用同一套排版与请求封装
     lin: { prof: linProfOpen, pick: linPickStart, wiz: mergeWizard, get: () => LIN } };   // 脉络：探针直接开剖面 / 多选 / 汇合向导
+
+  /**
+   * Codex 单核：把 Claude 聊天那一层的入口收掉。
+   * 聊天 DOM 还留着给 Codex 页复用排版，但顶栏「新对话」、抽屉里的新会话和最近对话都不再露出来；
+   * 侧栏「去哪」只留和 Codex 有关的几页（扩展里装的是给 Codex 用的工具）。
+   */
+  function trimClaudeChrome() {
+    for (const id of ["btn-new", "side-recent"]) { const el = $(id); if (el) el.classList.add("hidden"); }
+    const keep = new Set(["codex", "ext", "help", "changelog"]);
+    NAV_ITEMS.splice(0, NAV_ITEMS.length, ...NAV_ITEMS.filter((k) => keep.has(k)));
+    renderSideNav();
+  }
+
+  // Codex 登录 / 退出后，Codex 工作台会发这个事件：顶栏、抽屉底部的账户行跟着即时刷新
+  addEventListener("cc:codex-account", () => { refreshStatus(); });
 
   // ── 启动 ──────────────────────────────────────────────────────────
   (async function boot() {
+    // Codex 工作台是主界面：等本轮脚本（codex.js 在本文件之后加载）挂好以后直接打开。
+    // 这样 Claude 那边的「正在连接 / 运行时缺失」不会露在标题栏里，也不需要用户自己点进 Codex。
+    setTimeout(() => {
+      try { trimClaudeChrome(); if (!curPage) openPage("codex"); }
+      catch (e) { console.warn("[codex] 工作台没打开", e); }
+    }, 0);
     view.sessionId = loadUiState();      // 上次的会话号与用量，先捞回来
     draftLoad(view.sessionId);           // 进程被杀前没发的草稿也捞回来（0.6.9 审计 195-D.3）
     updateCtx(state.ctxUsed, state.ctxTotal);

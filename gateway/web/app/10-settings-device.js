@@ -2,7 +2,7 @@
   const PRIV_TEXT = {
         not_installed: ["warn", t("没装 Shizuku")],
         not_running: ["warn", t("Shizuku 已安装，但服务没在运行（重启手机后需要在 Shizuku 里重新启动）")],
-        no_permission: ["warn", t("Shizuku 在运行，还没授权给 cccodroid")],
+        no_permission: ["warn", t("Shizuku 在运行，还没授权给 coxdragon")],
         unreachable: ["err", t("连不上应用的后台服务")],
   };
   const SETUP_BUSY = ["downloading", "installing", "connecting", "pairing", "starting", "permission"];
@@ -24,17 +24,17 @@
         oppo: t("OPPO / 一加 / 真我：应用信息 → 耗电管理 → <b>允许后台行为</b>、<b>允许自启动</b>（常见路径）"),
         oneplus: t("OPPO / 一加 / 真我：应用信息 → 耗电管理 → <b>允许后台行为</b>、<b>允许自启动</b>（常见路径）"),
         realme: t("OPPO / 一加 / 真我：应用信息 → 耗电管理 → <b>允许后台行为</b>、<b>允许自启动</b>（常见路径）"),
-        vivo: t("vivo / iQOO：设置 → 电池 → 后台耗电管理 → cccodroid <b>允许后台高耗电</b>；i管家里允许<b>自启动</b>（常见路径）"),
-        huawei: t("华为 / 荣耀：设置 → 应用启动管理 → cccodroid 关闭「自动管理」，手动允许<b>自启动</b>和<b>后台活动</b>（常见路径）"),
-        honor: t("华为 / 荣耀：设置 → 应用启动管理 → cccodroid 关闭「自动管理」，手动允许<b>自启动</b>和<b>后台活动</b>（常见路径）"),
+        vivo: t("vivo / iQOO：设置 → 电池 → 后台耗电管理 → coxdragon <b>允许后台高耗电</b>；i管家里允许<b>自启动</b>（常见路径）"),
+        huawei: t("华为 / 荣耀：设置 → 应用启动管理 → coxdragon 关闭「自动管理」，手动允许<b>自启动</b>和<b>后台活动</b>（常见路径）"),
+        honor: t("华为 / 荣耀：设置 → 应用启动管理 → coxdragon 关闭「自动管理」，手动允许<b>自启动</b>和<b>后台活动</b>（常见路径）"),
   };
   function renderBg(fz) {
     const show = fz && fz.count > 0;
     $("bg-field").classList.toggle("hidden", !show);
     if (!show) return;
-        $("bg-state").textContent = t("检测到 cccodroid 在后台被系统冻结过 {n} 次（最近一次约 {sec} 秒，{at}）。", { n: fz.count, sec: Math.round(fz.ms / 1000), at: new Date(fz.at).toLocaleString() }) +
+        $("bg-state").textContent = t("检测到 coxdragon 在后台被系统冻结过 {n} 次（最近一次约 {sec} 秒，{at}）。", { n: fz.count, sec: Math.round(fz.ms / 1000), at: new Date(fz.at).toLocaleString() }) +
       t("冻结期间网关和正在跑的任务全部停住，回到前台才继续。前台服务挡不住这类厂商冻结器。");
-    $("bg-how").innerHTML = BG_HOW[fz.vendor] || t("在系统设置里给 cccodroid 允许后台运行、关闭电池优化、允许自启动（各家叫法不同）。");
+    $("bg-how").innerHTML = BG_HOW[fz.vendor] || t("在系统设置里给 coxdragon 允许后台运行、关闭电池优化、允许自启动（各家叫法不同）。");
   }
   $("bg-actions").addEventListener("click", async (e) => {
     const act = e.target.dataset && e.target.dataset.act;
@@ -74,22 +74,22 @@
         <a class="btn sm ghost" href="https://shizuku.rikka.app/download/" target="_blank" rel="noopener">${t("手动下载")} ↗</a>` :
       st.state === "not_running" ? (wl ? `<button class="btn sm" data-act="activate" ${busy ? "disabled" : ""}>${t("一键激活（无线调试）")}</button>` : "") +
         `<button class="btn sm ghost" data-act="open">${t("打开 Shizuku")}</button>` :
-      st.state === "no_permission" ? `<button class="btn sm" data-act="request">${t("授权给 cccodroid")}</button>` : "";
+      st.state === "no_permission" ? `<button class="btn sm" data-act="request">${t("授权给 coxdragon")}</button>` : "";
     // Shizuku 在跑，但没有（或已失效的）无线调试配对：重启后就没法自动激活。这种情况平时看不出来，主动提示
     if (st.state === "ok" && wl && !st.paired && !busy) {
       se.classList.remove("hidden");
       se.className = "prov-state warn";
       se.textContent = st.pairOk === 0
-                ? t("无线调试里 cccodroid 的配对已被取消：现在还能用，但重启手机后没法自动激活。")
-        : t("Shizuku 不是由 cccodroid 激活的：重启手机后 cccodroid 没法自动激活它。配对一次即可。");
+                ? t("无线调试里 coxdragon 的配对已被取消：现在还能用，但重启手机后没法自动激活。")
+        : t("Shizuku 不是由 coxdragon 激活的：重启手机后 coxdragon 没法自动激活它。配对一次即可。");
       $("priv-actions").insertAdjacentHTML("afterbegin", `<button class="btn sm" data-act="repair">${st.pairOk === 0 ? t("重新配对") : t("配对")}</button>`);
     }
     // 说的是「这次开机」，允许了自启动也要等下次开机才会消失；点「已允许」就收起到下次开机
     if (st.bootMissed && !(st.bootAt && Math.abs(st.bootAt - (+localStorage.getItem("cc.bootAck") || 0)) <= 1)) {
       se.classList.remove("hidden");
       se.className = "prov-state warn";
-      se.textContent = t("这次开机系统没通知 cccodroid（被系统的「自启动」管理拦了），所以开机没能自动激活；打开 cccodroid 时会补上。") +
-        t("想开机就激活：在应用详情里允许 cccodroid 自启动 / 后台启动，下次开机生效。");
+      se.textContent = t("这次开机系统没通知 coxdragon（被系统的「自启动」管理拦了），所以开机没能自动激活；打开 coxdragon 时会补上。") +
+        t("想开机就激活：在应用详情里允许 coxdragon 自启动 / 后台启动，下次开机生效。");
       $("priv-actions").insertAdjacentHTML("beforeend", `<button class="btn sm ghost" data-act="appsettings">${t("去允许自启动")}</button>` +
         (st.bootAt ? `<button class="btn sm ghost" data-act="bootack" data-boot="${esc(st.bootAt)}">${t("已允许，下次开机再看")}</button>` : ""));
     }
@@ -124,7 +124,7 @@
     if (busy && pageOn("settings")) privPoll = setTimeout(loadPriv, 1500);
   }
   // 经 priv 执行过的命令（谁发起、命令、退出码、用时）。再点一次收起
-  const privBy = (k) => ({ claude: "Claude", terminal: t("终端"), gateway: "cccodroid", "cc-mem": t("内存管家"), other: t("其他") })[k] || k;
+  const privBy = (k) => ({ claude: "Claude", terminal: t("终端"), gateway: "coxdragon", "cc-mem": t("内存管家"), other: t("其他") })[k] || k;
   async function togglePrivAudit() {
     const box = $("priv-audit");
     if (!box.classList.contains("hidden")) { box.classList.add("hidden"); return; }
@@ -218,10 +218,11 @@
     catch (e) { return updFailed(e.message || "?"); }
     if (st && st.ok === false && st.message) return updFailed(st.message);
     if (!st || !st.ok || !st.items) return;          // 旧版 / 开发端：确实没有这项
-    lastUpd = st;
+    // Codex 单核：外壳的更新清单里还带着 Claude Code，这里不再露出来，也不再让它自动更新。
+    const items = st.items.filter((it) => it.id !== "claude");
+    lastUpd = { ...st, items };
     $("upd-field").classList.remove("hidden");
     $("upd-auto").checked = !!st.auto;
-    $("upd-channel").value = st.channel === "pinned" ? "pinned" : st.channel || "stable";
     // 安装包方案（28 / 36）：老外壳没有这几个字段就不显示
     $("upd-flavor-row").classList.toggle("hidden", !st.flavor);
     if (st.flavor) {
@@ -231,9 +232,8 @@
       if (st.only36) now += " · " + t("系统已不让装 targetSdk 28，只能用 36");
       $("upd-flavor-now").textContent = now;
     }
-    $("upd-channel").querySelector("option[value=pinned]").textContent = st.channel === "pinned" && st.pin ? t("CLI：固定 {v}", { v: st.pin }) : t("CLI：固定版本…");
     let moving = st.checking;
-    $("upd-items").innerHTML = st.items.map((it) => {
+    $("upd-items").innerHTML = items.map((it) => {
       const busy = it.state === "downloading" || it.state === "installing" || it.state === "verifying";
       moving ||= busy;
       const ver = esc(it.current || "?") + (it.latest && it.latest !== it.current && it.state !== "uptodate" ? " → " + esc(it.latest) : "");
@@ -344,7 +344,7 @@
       return;
     }
     if (act === "local") {
-      if (!confirm(t("从本地文件安装开发工具包？\n\n选一个 devkit-cox.dragon.tar.gz（或 .tar），可以在 GitHub 发布页或 cccodroid.net 下载。装之前会核对它是不是已发布的版本；装的时候暂停服务 1–2 分钟。\n你用 pip / npm -g 装进工具包的东西会被保留。"))) return;
+      if (!confirm(t("从本地文件安装开发工具包？\n\n选一个 devkit-cox.dragon.tar.gz（或 .tar），可以在 GitHub 发布页下载。装之前会核对它是不是已发布的版本；装的时候暂停服务 1–2 分钟。\n你用 pip / npm -g 装进工具包的东西会被保留。"))) return;
       CCApp.pickDevkit();
       return;
     }
@@ -360,7 +360,7 @@
     toast(r.message || (r.ok ? t("开始") : t("失败")), !r.ok);
     followUpd(); setTimeout(loadUpd, 500);
   });
-  // ── 通知（只有 cccodroid：GatewayService 订阅事件流发通知）──
+  // ── 通知（只有 coxdragon：GatewayService 订阅事件流发通知）──
   async function loadNotify() {
     let st;
     try { st = await api("/api/app/notify_status"); }
@@ -392,7 +392,7 @@
   // 去系统设置里改完通知权限再回来，设置页不会重新打开：状态要自己重拉一次，不然一直显示改之前的（稳定性报告 FIND-031）
   document.addEventListener("visibilitychange", () => { if (!document.hidden && setOpen) loadNotify(); });
 
-  // ── 设备工具（只有 cccodroid：DeviceTools.java + A11y.java，经 device-mcp.mjs 给 Claude）──
+  // ── 设备工具（只有 coxdragon：DeviceTools.java + A11y.java，经 device-mcp.mjs 给 Claude）──
   const devName = (n) => ({
     device_status: t("设备状态"), notify: t("发通知"), clipboard_read: t("读剪贴板"), clipboard_write: t("写剪贴板"),
     open: t("打开应用 / 链接 / 日历…"), share_file: t("分享文件"), app_list: t("已装应用列表"),
@@ -421,7 +421,7 @@
     s.textContent = a.connected ? t("无障碍服务：已连接") : a.mode === "off" ? t("无障碍服务：关") : t("无障碍服务：现在没开（用到时再开）");
     // 自己开不了（没 WRITE_SECURE_SETTINGS）时，只能让用户去系统设置里开；安卓 13+ 侧载的应用还要先「允许受限设置」
     $("dev-a11y-how").textContent = a.mode !== "off" && !a.canToggle
-      ? t("还没激活 Shizuku，应用没法自己开关无障碍：去系统无障碍设置里手动打开 cccodroid。安卓 13 起，侧载的应用要先在 应用信息 → 右上角菜单 → 允许受限设置。")
+      ? t("还没激活 Shizuku，应用没法自己开关无障碍：去系统无障碍设置里手动打开 coxdragon。安卓 13 起，侧载的应用要先在 应用信息 → 右上角菜单 → 允许受限设置。")
       : "";
     if (st.message) toast(st.message, true);
   }
@@ -464,11 +464,59 @@
   // 打开更新页时自动查一次：正在查、正在下/装，或 20 秒内刚查过就只刷新显示
   async function updOnOpen() {
     await loadUpd();
+    loadCxUpd();
     const busy = (lastUpd.items || []).some((it) => ["downloading", "installing", "verifying"].includes(it.state));
     if (lastUpd.checking || busy || Date.now() - (lastUpd.lastCheck || 0) < 20000) return;
     await post("/api/app/upd_check").catch(() => {});
     followUpd(); setTimeout(loadUpd, 300);
   }
+
+  // ── Codex 引擎：官方 codex-app-server 的版本、下载进度与重装 ──
+  let lastCx = null, cxUpdTimer = 0;
+  async function loadCxUpd() {
+    const info = $("cx-upd-info"), state = $("cx-upd-state"), btn = $("cx-upd-act");
+    if (!info || !state || !btn) return;
+    let s = null;
+    try { s = await api("/api/codex/status"); } catch (e) { s = null; }
+    if (!s) { info.textContent = t("取不到 Codex 引擎状态"); state.textContent = ""; btn.disabled = false; return; }
+    lastCx = s;
+    const ins = s.install || {}, installing = ins.state === "installing";
+    const ready = !!s.ready;
+    if (s.installed && ready) {
+      info.textContent = t("已安装 {v}", { v: s.version || "" });
+      state.textContent = ins.state === "error" ? "✗ " + (ins.error || t("安装失败"))
+        : t("官方 codex-app-server 与代码模式组件；随应用更新，登录和会话数据都在本机。");
+    } else if (s.installed) {
+      info.textContent = t("缺少代码模式组件");
+      if (installing) {
+        const pct = ins.total ? Math.floor((ins.done || 0) * 100 / ins.total) : 0;
+        state.textContent = ins.total ? t("下载中 {p}%（{done} / {total}）", { p: pct, done: fmtSize(ins.done) || "0 MB", total: fmtSize(ins.total) }) : t("准备下载…");
+      } else {
+        state.textContent = ins.state === "error" ? "✗ " + (ins.error || t("安装失败")) : t("没有它，Codex 读不了文件、也跑不了命令。");
+      }
+    } else {
+      info.textContent = t("未安装");
+      if (installing) {
+        const pct = ins.total ? Math.floor((ins.done || 0) * 100 / ins.total) : 0;
+        state.textContent = ins.total ? t("下载中 {p}%（{done} / {total}）", { p: pct, done: fmtSize(ins.done) || "0 MB", total: fmtSize(ins.total) }) : t("准备下载…");
+      } else {
+        state.textContent = ins.state === "error" ? "✗ " + (ins.error || t("安装失败")) : t("首次打开应用时会自动下载；也可以现在装。");
+      }
+    }
+    btn.disabled = installing;
+    btn.textContent = installing ? t("下载中…") : ready ? t("重新安装…") : s.installed ? t("下载组件") : t("下载并安装");
+    clearTimeout(cxUpdTimer);
+    if (installing && pageOn("settings")) cxUpdTimer = setTimeout(loadCxUpd, 1200);
+  }
+  $("cx-upd-act").addEventListener("click", async () => {
+    const ready = !!(lastCx && lastCx.ready);
+    if (ready && !confirm(t("重新下载官方 Codex 引擎（约 84 MB）并覆盖安装？登录状态和会话都保留。"))) return;
+    try {
+      await post(ready ? "/api/codex/reinstall" : "/api/codex/install");
+      toast(t("开始下载 Codex 引擎"));
+      loadCxUpd();
+    } catch (e) { toast(e.message, true); }
+  });
   $("upd-check").addEventListener("click", async () => {
     // 200 + {ok:false} 也是失败，以前只接网络错误，按钮像没反应（195-M.8）
     let r = null;
@@ -488,14 +536,9 @@
     followUpd(); loadUpd();
   });
   // 存不上（网关回 ok:false 或断了）：开关先退回上次读到的值，再重读（审查 #52 D-05）
-  const updBack = (msg) => { toast(msg || t("保存失败"), true); if (lastUpd && lastUpd.items) { $("upd-auto").checked = !!lastUpd.auto; $("upd-channel").value = lastUpd.channel === "pinned" ? "pinned" : lastUpd.channel || "stable"; } loadUpd(); };
+  const updBack = (msg) => { toast(msg || t("保存失败"), true); if (lastUpd && lastUpd.items) $("upd-auto").checked = !!lastUpd.auto; loadUpd(); };
   $("upd-auto").addEventListener("change", (e) => post("/api/app/upd_set", { auto: e.target.checked })
     .then((r) => (r && r.ok === false ? updBack(r.message) : loadUpd())).catch((e2) => updBack(e2.message)));
-  $("upd-channel").addEventListener("change", (e) => {
-    // 固定版本要先挑一版：开选单，下拉框先退回原样，挑完 loadUpd 会刷新成「固定 x.y.z」
-    if (e.target.value === "pinned") { e.target.value = (lastUpd && lastUpd.channel) || "stable"; openClaudeVersions(); return; }
-    followUpd(); post("/api/app/upd_set", { channel: e.target.value }).then((r) => (r && r.ok === false ? updBack(r.message) : loadUpd())).catch((e2) => updBack(e2.message));
-  });
   $("priv-ka").addEventListener("change", async (e) => {
     const on = e.target.checked;
     if (on && !confirm(t("开启后台保活增强？\n\n会改几项系统设置：幽灵进程上限（影响所有应用）、本应用的电池白名单与后台运行限制。关掉开关会恢复前两项。"))) {
@@ -676,7 +719,7 @@
     h += enChart(t("本应用 CPU 时间"), "", enBars(d.bars, [["c", ""]], (v) => fmtDur(v * 1000), every));
     if (d.native) h += enChart(t("亮屏时间"), enDot("s", t("亮屏")) + enDot("f", t("本应用在前台")), enBars(d.bars, [["s", "s"], ["f", "f"]], (v) => fmtDur(v * 1000), every));
     if (empty) h += `<div class="tiny">${esc(t("刚开始记录，每 5 分钟采一次，过一会儿再来看。"))}</div>`;
-    if (!d.native) h += `<div class="tiny">${esc(t("这个版本没有原生层，只记 CPU 时间（电量、亮屏、前台时长要 cccodroid）。"))}</div>`;
+    if (!d.native) h += `<div class="tiny">${esc(t("这个版本没有原生层，只记 CPU 时间（电量、亮屏、前台时长要 coxdragon）。"))}</div>`;
     box.innerHTML = h;
     const b = d.battery;
     // currentUa 按微安上报（Android BATTERY_PROPERTY_CURRENT_NOW 的口径）：一律 /1000 成 mA。

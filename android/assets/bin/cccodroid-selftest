@@ -154,7 +154,7 @@ t "claude 命令" "claude --version"
 # 记录 vs 磁盘（组件记录、包清单、模块、自定义组件）由网关核：它有全部记录。网关自己起的自检不再问（本机实况另外报）
 TF=${CCAPP_TOKEN_FILE:-$HOME/.gateway-token}
 # 端口只认数字（审查 10-29 第六份 低2）：带 @ 之类就能把令牌头送到别处
-GP=${CCAPP_PORT:-8791}; case "$GP" in ''|*[!0-9]*) GP=8791;; esac
+GP=${CCAPP_PORT:-8891}; case "$GP" in ''|*[!0-9]*) GP=8891;; esac
 if [ -z "$CCAPP_ENVFACTS" ] && [ -r "$TF" ]; then
   echo "== 状态对账"
   # 不发令牌原文（审查 10-30 第九份 高2）：127.0.0.1 的端口全机共享，网关没起来时别的应用能先占住。

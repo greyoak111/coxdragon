@@ -1,11 +1,11 @@
-/* cccodroid 预览里的「选取元素」：界面发 {cc:"pick"} 进入选取模式，点一下网页里的某块，
+/* coxdragon 预览里的「选取元素」：界面发 {cc:"pick"} 进入选取模式，点一下网页里的某块，
    把它的选择器、标签和一小段 HTML 递回界面（{cc:"picked"}）。只递文字，界面那边只往输入框里放，不执行任何东西。
    和开发者工具（Eruda）一起按开关注入，只改预览吐出去的那一份，磁盘上的文件不动。 */
 (function () {
   if (window.__ccPick) return;
   window.__ccPick = 1;
   var on = false, box = null, cur = null;
-  // 只和嵌着自己的那一层（cccodroid 界面）说话（11-03 审查 I-1）；拿不到父页来源（老 WebView）才退回 *
+  // 只和嵌着自己的那一层（coxdragon 界面）说话（11-03 审查 I-1）；拿不到父页来源（老 WebView）才退回 *
   var PO = (location.ancestorOrigins && location.ancestorOrigins.length && location.ancestorOrigins[0] !== "null") ? location.ancestorOrigins[0] : "*";
   function cssEsc(s) { return window.CSS && CSS.escape ? CSS.escape(s) : String(s).replace(/[^\w-]/g, "\\$&"); }
   function selector(el) {

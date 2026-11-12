@@ -393,7 +393,7 @@
     const ok = new Set(["glibc", "bionic", "static", "script"]);
     const rows = r.programs.map((p, i) => {
       const can = ok.has(p.kind);
-      const clash = p.clash === "toolkit" ? t("工具包里已有同名命令，换个名字") : p.clash === "system" ? t("系统或 cccodroid 自带同名命令，换个名字") : p.clash === "custom" ? t("别的自定义组件占了这个名字") : p.clash === "busy" ? t("另一个组件正在安装这个名字，稍后再试或换个名字") : p.clash === "bad" ? t("改个名字（只能用字母、数字和 ._+-）") : "";
+      const clash = p.clash === "toolkit" ? t("工具包里已有同名命令，换个名字") : p.clash === "system" ? t("系统或 coxdragon 自带同名命令，换个名字") : p.clash === "custom" ? t("别的自定义组件占了这个名字") : p.clash === "busy" ? t("另一个组件正在安装这个名字，稍后再试或换个名字") : p.clash === "bad" ? t("改个名字（只能用字母、数字和 ._+-）") : "";
       return '<div class="cu-prog' + (can ? "" : " dim") + '" data-i="' + i + '">' +
         '<label class="cu-row"><input type="checkbox" class="cu-on"' + (can ? "" : " disabled") + (can && p.suggest && !p.clash ? " checked" : "") + "> <code>" + esc(p.rel) + "</code>" +
         ' <span class="tiny">' + esc(KIND()[p.kind] || p.kind) + "</span></label>" +
@@ -678,7 +678,7 @@
     // 模式（F5）：开 / 只露名字（省上下文）/ 只能你用斜杠调用 / 关。发行版的技能由网关打包交给 claude，只认开 / 关
     const modes = r.sealed ? [["on", t("开")], ["off", t("关")]] : [["on", t("开")], ["name-only", t("只露名字")], ["user-invocable-only", t("只能你调用")], ["off", t("关")]];
     const modeSel = (s) => s.orphan ? "" : `<select class="sk-mode" data-id="${esc(s.dir)}" aria-label="${esc(t("技能模式"))}">${modes.map(([v, l]) => `<option value="${v}"${(s.mode || "on") === v ? " selected" : ""}>${esc(l)}</option>`).join("")}</select>`;
-    $("ext-skills").innerHTML = (r.sealed && (r.items || []).length ? `<div class="tiny">${esc(t("cccodroid 检查过这些技能再交给 Claude Code，用斜杠调用时名字前面带 user:，比如 /user:{name}。", { name: r.items[0].name }))}</div>` : "") + (r.items || []).map((s) => extItem(esc(s.name) + (s.mode && s.mode !== "on" ? ` <span class="badge">${esc((modes.find(([v]) => v === s.mode) || [, t("已停用")])[1])}</span>` : ""), "",
+    $("ext-skills").innerHTML = (r.sealed && (r.items || []).length ? `<div class="tiny">${esc(t("coxdragon 检查过这些技能再交给 Claude Code，用斜杠调用时名字前面带 user:，比如 /user:{name}。", { name: r.items[0].name }))}</div>` : "") + (r.items || []).map((s) => extItem(esc(s.name) + (s.mode && s.mode !== "on" ? ` <span class="badge">${esc((modes.find(([v]) => v === s.mode) || [, t("已停用")])[1])}</span>` : ""), "",
       modeSel(s) + `<button data-x="skill-rm" data-id="${esc(s.dir)}">${t("删除")}</button>`,
       `<div class="tiny ext-desc">${esc(s.orphan ? t("这个文件夹里没有 SKILL.md（可能是以前导入到一半失败留下的），可以删掉。") : !isZh() && s.descEn ? s.descEn : s.description)}</div>`, [s.component ? "comp" : s.official ? "official" : "user"])).join("")
       || `<div class="tiny">${t("~/.claude/skills 里还没有技能。插件也可能自带技能。")}</div>`;
@@ -803,7 +803,7 @@
       local: t("写在项目的 .claude/settings.local.json，只在这个项目、这台设备上生效。"),
     };
     // 发行版不跑这里配的钩子（见 gw/edition.mjs、seal.mjs）：配置照样能看能改，只是不加载
-    $("hook-bar").innerHTML = (d.sealed ? `<div class="tiny warn">${esc(t("发行版不运行这里配置的 hooks：hooks 能执行任意命令、把任意内容放进对话，cccodroid 没法检查。规则留在文件里，不会被删。"))}</div>` : "") + `<div class="tiny">${esc(SCD[HK.scope])}
+    $("hook-bar").innerHTML = (d.sealed ? `<div class="tiny warn">${esc(t("发行版不运行这里配置的 hooks：hooks 能执行任意命令、把任意内容放进对话，coxdragon 没法检查。规则留在文件里，不会被删。"))}</div>` : "") + `<div class="tiny">${esc(SCD[HK.scope])}
         ${sc && sc.file && sc.exists ? `<a href="#" data-hk="open-file">${t("打开配置文件")}</a>` : ""}</div>
       <label class="tiny hk-pause"><input type="checkbox" data-hk="pause"${sc && sc.disableAll ? " checked" : ""}> ${t("暂停这一层的 hooks（规则留着，先不跑）")}</label>`;
     if (!sc || sc.error && !sc.badJson) { $("ext-hooks").innerHTML = `<div class="tiny warn">${esc((sc && sc.error) || "")}</div>`; return; }
@@ -1088,7 +1088,7 @@
         m.options.map((o) => `<span>${o.kind === "remote" ? esc(t("远程") + " · " + o.transport) : "npm"}</span>`).join("") +
         (m.other.length ? `<span class="warn">${t("另有 {kinds} 装法，本机用不了", { kinds: esc(m.other.join(" / ")) })}</span>` : "");
       const acts = usable.length ? `<button data-x="mcpcat-add" data-id="${esc(m.name)}">${t("添加")}</button>`
-        : `<span class="tiny warn">${m.options.length ? t("要 npx（cccodroid 的工具包里有）") : t("本机装不了")}</span>`;
+        : `<span class="tiny warn">${m.options.length ? t("要 npx（coxdragon 的工具包里有）") : t("本机装不了")}</span>`;
       return extItem(esc(m.title || m.name), meta, acts,
         `<div class="tiny mono">${esc(m.name)}</div><div class="tiny ext-desc">${esc(m.description)}</div>` +
         (webUrl(m.homepage) ? `<div class="tiny"><a class="weblink" href="${esc(m.homepage)}">${esc(m.homepage)}</a></div>` : "") + `<div class="mcpcat-form hidden"></div>`);
@@ -1319,7 +1319,7 @@
   $("upd-log").addEventListener("click", () => { closeSettings(); openPage("changelog"); });
   $("btn-share-logs").addEventListener("click", async () => {
     // 打包前给用户看清单：发出去的是什么、去掉了什么
-    if (!confirm(t("打一个诊断包，经系统分享发出去。\n\n包里有：\n· 版本与设备：cccodroid / Android 版本、机型、芯片、剩余空间\n· 开发工具包：装的是哪一版、更新与自检状态\n· 最近的日志：本应用的系统日志、网关日志的最后一段\n· 修复账本：安装、校验、修复做过哪些、成没成\n· 网络：开没开 VPN，应用连不连得上几个下载源（只记结果）\n\n已经去掉：\n· 密钥、令牌、登录凭据、邮箱\n· 你发给 Claude 的消息内容\n· 会话记录本身不在包里\n\n继续？"))) return;
+    if (!confirm(t("打一个诊断包，经系统分享发出去。\n\n包里有：\n· 版本与设备：coxdragon / Android 版本、机型、芯片、剩余空间\n· 开发工具包：装的是哪一版、更新与自检状态\n· 最近的日志：本应用的系统日志、网关日志的最后一段\n· 修复账本：安装、校验、修复做过哪些、成没成\n· 网络：开没开 VPN，应用连不连得上几个下载源（只记结果）\n\n已经去掉：\n· 密钥、令牌、登录凭据、邮箱\n· 你发给 Claude 的消息内容\n· 会话记录本身不在包里\n\n继续？"))) return;
     toast(t("正在打包日志…"));
     const r = await post("/api/app/share_logs").catch((e) => ({ ok: false, message: e.message }));
     if (!r.ok) toast(t("没分享成：{msg}", { msg: r.message || "" }), true);
