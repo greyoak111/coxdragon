@@ -1,9 +1,9 @@
 #!/system/bin/sh
 # ─────────────────────────────────────────────────────────────────────
-#  release.sh —— 发布 APK：建 GitHub Release（tag v<版本>）并上传 dist/cccodroid.apk
+#  release.sh —— 发布 APK：建 GitHub Release（tag v<版本>）并上传 dist/coxdragon.apk
 #
 #  APK 在构建机上签名（发布钥匙不进 CI），所以 Release 也从这里建。
-#  token：fine-grained，只对本仓库有 Contents 读写，放在构建机私有目录（TOKEN），绝不进仓库。
+#  token：fine-grained，只对本仓库有 Contents 读写；缺省用 gh auth token（本机已登录）。
 #  用法:  sh scripts/release.sh            先跑 build.sh；版本取自 AndroidManifest 的 versionName
 #         NOTES=说明.md NOTES_EN=notes.en.md sh scripts/release.sh   （缺省用 android/assets/whatsnew/v<版本>.*.md）
 #  说明是中英双语：中文在前，--- 之后是 ## English。NOTES_EN 缺省时英文部分只有安装与校验
@@ -13,12 +13,16 @@ set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OLDB=/data/user/0/li.dsh.claudecli/files/bldtools     # 旧开发端；不在就是 cccodroid 终端的 ~/.bldtools
 [ -d "$OLDB" ] || OLDB=${BLDTOOLS:-$HOME/.bldtools}
-TOKEN=${TOKEN:-$OLDB/gh-token-cccodroid}
-REPO=greyoak111/cccodroid
-APK="$ROOT/dist/cccodroid.apk"
-# 双方案：cccodroid-36.apk（targetSdk 36）同版本一起发；没打出来就只发 28 的（旧流程）
-APK36="$ROOT/dist/cccodroid-36.apk"
-[ -s "$TOKEN" ] || { echo "✗ 没有 token：$TOKEN"; exit 1; }
+TOKEN=${TOKEN:-$OLDB/gh-token-coxdragon}
+REPO=greyoak111/coxdragon
+APK="$ROOT/dist/coxdragon.apk"
+# 双方案：coxdragon-36.apk（targetSdk 36）同版本一起发；没打出来就只发 28 的
+APK36="$ROOT/dist/coxdragon-36.apk"
+if [ ! -s "$TOKEN" ]; then
+  TOKEN=$(mktemp "${TMPDIR:-$HOME/.cache}/coxdragon-gh-token.XXXXXX") || exit 1
+  trap 'rm -f "$TOKEN"' EXIT
+  gh auth token > "$TOKEN" || { echo "✗ 没有 token：给 TOKEN，或先 gh auth login"; exit 1; }
+fi
 [ -s "$APK" ] || { echo "✗ 没有 $APK，先跑 build.sh"; exit 1; }
 VER=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "$ROOT/android/AndroidManifest.xml")
 TAG="v$VER"
@@ -57,20 +61,20 @@ const read = (p) => (p ? fs.readFileSync(p, "utf8").trim() + "\n\n" : "");
 const devkitLink = "[" + DEVKIT + "](https://github.com/" + REPO + "/releases/tag/" + DEVKIT + ")";
 const body = "**简体中文** · [English](#english)\n\n" + read(NOTES) + [
   "### 安装",
-  "下载 `cccodroid.apk` 安装（系统提示「与此版本的安卓不兼容」、装不上时，改装 `cccodroid-36.apk`）。首次打开先勾选要装的工具包模块（默认约 330 MB，全部约 700 MB，断点续传），再下载官方 Claude Code（约 275 MB）。",
+  "下载 `coxdragon.apk` 安装（系统提示「与此版本的安卓不兼容」、装不上时，改装 `coxdragon-36.apk`）。首次打开先勾选要装的工具包模块（默认约 330 MB，全部约 700 MB，断点续传），再下载官方 Codex 引擎（约 84 MB）。",
   "",
   "### 校验",
-  "- `cccodroid.apk` sha256：`" + SHA + "`",
-  ...(SHA36 ? ["- `cccodroid-36.apk`（targetSdk 36）sha256：`" + SHA36 + "`"] : []),
+  "- `coxdragon.apk` sha256：`" + SHA + "`",
+  ...(SHA36 ? ["- `coxdragon-36.apk`（targetSdk 36）sha256：`" + SHA36 + "`"] : []),
   "- 配套开发工具包：[" + DEVKIT + "](https://github.com/" + REPO + "/releases/tag/" + DEVKIT + ")",
   "- 源码提交：" + COMMIT,
 ].join("\n") + "\n\n---\n\n## English\n\n" + read(NOTES_EN) + [
   "### Install",
-  "Download and install `cccodroid.apk` (if Android says it isn’t compatible and won’t install it, use `cccodroid-36.apk` instead). On first launch you pick toolchain modules (about 330 MB by default, about 700 MB for all, resumable), then the official Claude Code is downloaded (about 275 MB).",
+  "Download and install `coxdragon.apk` (if Android says it isn’t compatible and won’t install it, use `coxdragon-36.apk` instead). On first launch you pick toolchain modules (about 330 MB by default, about 700 MB for all, resumable), then the official Codex engine is downloaded (about 84 MB).",
   "",
   "### Verification",
-  "- `cccodroid.apk` sha256: `" + SHA + "`",
-  ...(SHA36 ? ["- `cccodroid-36.apk` (targetSdk 36) sha256: `" + SHA36 + "`"] : []),
+  "- `coxdragon.apk` sha256: `" + SHA + "`",
+  ...(SHA36 ? ["- `coxdragon-36.apk` (targetSdk 36) sha256: `" + SHA36 + "`"] : []),
   "- Matching toolchain: " + devkitLink,
   "- Source commit: " + COMMIT,
 ].join("\n");
@@ -87,11 +91,11 @@ if (rel) {
   console.log("  已有 Release " + TAG + "（同一提交），更新附件和正文");
 }
 else {
-  rel = await api("POST", `https://api.github.com/repos/${REPO}/releases`, JSON.stringify({ tag_name: TAG, target_commitish: COMMIT, name: "cccodroid " + TAG, body, prerelease: TAG.includes("-") })); console.log("  已建 Release " + TAG);
+  rel = await api("POST", `https://api.github.com/repos/${REPO}/releases`, JSON.stringify({ tag_name: TAG, target_commitish: COMMIT, name: "coxdragon " + TAG, body, prerelease: TAG.includes("-") })); console.log("  已建 Release " + TAG);
 }
-const files = [["cccodroid.apk", APK], ...(SHA36 ? [["cccodroid-36.apk", APK36]] : [])];
+const files = [["coxdragon.apk", APK], ...(SHA36 ? [["coxdragon-36.apk", APK36]] : [])];
 // 这次没有 36 包：上一次发的那份留着就和正文对不上了，一并删掉
-if (!SHA36) for (const a of rel.assets || []) if (a.name === "cccodroid-36.apk") await api("DELETE", a.url);
+if (!SHA36) for (const a of rel.assets || []) if (a.name === "coxdragon-36.apk") await api("DELETE", a.url);
 for (const [name, file] of files) {
   for (const a of rel.assets || []) if (a.name === name) await api("DELETE", a.url);
   const up = rel.upload_url.replace(/\{.*\}$/, "") + "?name=" + name;

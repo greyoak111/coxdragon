@@ -28,8 +28,8 @@ final class Installer {
     void step(String m) { ui.step(m); }
 
     // ── devkit 下载 ────────────────────────────────────────────────────
-    /** 工具包镜像（VPS 直连，不过 Cloudflare 代理）：dl.cccodroid.net/devkit/<tag>/ 与 GitHub Release 里的文件逐字节相同 */
-    static final String DEVKIT_MIRROR = "https://github.com/greyoak111/cccodroid/releases/download/";
+    /** 工具包镜像：与 GitHub Release 里的文件逐字节相同；coxdragon 暂时只发 GitHub Release */
+    static final String DEVKIT_MIRROR = "https://github.com/greyoak111/coxdragon/releases/download/";
 
     /**
      * 首次安装：按 APK 自带的清单（assets/devkit-pin.json：gz 的文件名、大小、sha256）下载 .tar.gz 到私有目录 ——
