@@ -26,6 +26,8 @@
   const fmtSize = A("fmtSize", (n) => (n ? Math.round(n / 1048576) + " MB" : ""));
   const relTime = A("relTime", (ms) => (ms ? new Date(ms * 1000).toLocaleString() : ""));
 
+  const t = (s) => window.I18N && I18N.t ? I18N.t(s) : s;
+
   const LS = {
     get: (k, d) => { try { return localStorage.getItem("cx." + k) || d; } catch { return d; } },
     set: (k, v) => { try { v ? localStorage.setItem("cx." + k, v) : localStorage.removeItem("cx." + k); } catch {} },
@@ -35,7 +37,7 @@
     thread: null, threadId: LS.get("thread", ""),
     items: new Map(), approvals: new Map(),
     login: null, model: LS.get("model", ""), effort: LS.get("effort", ""), cwd: LS.get("cwd", ""),
-    busy: false, bootRaf: 0, lastWarn: "",
+    busy: false, bootRaf: 0, lastWarn: "", search: "",
   };
 
   // ── DOM ─────────────────────────────────────────────────────────────
@@ -44,24 +46,15 @@
     if (dom) return dom;
     root.innerHTML = `
 <div class="cx">
-  <aside class="cx-side">
-    <div class="cx-side-top">
-      <div class="cx-logo">coxdragon<small>Codex 工作台</small></div>
-      <button class="cx-new" data-act="new" title="新任务" aria-label="新任务">+</button>
-    </div>
-    <div class="cx-acct" id="cx-acct"></div>
-    <div class="cx-side-label">任务</div>
-    <div class="cx-threads" id="cx-threads"></div>
-  </aside>
   <main class="cx-main">
     <header class="cx-head" id="cx-head"></header>
     <div class="cx-log" id="cx-log"><div id="cx-boot"></div><div id="cx-msgs"></div></div>
     <div class="cx-dock">
       <div class="cx-approvals" id="cx-approvals"></div>
       <div class="cx-row">
-        <textarea id="cx-input" rows="1" placeholder="交给 Codex 一件事…" autocomplete="off" spellcheck="false"></textarea>
-        <button class="cx-send" data-act="send" id="cx-send">发送</button>
-        <button class="cx-stop hidden" data-act="stop" id="cx-stop">停止</button>
+        <textarea id="cx-input" rows="1" placeholder="${esc(t("有什么想一起完成的？"))}" aria-label="${esc(t("消息输入框"))}" autocomplete="off" spellcheck="false"></textarea>
+        <button class="cx-send" data-act="send" id="cx-send" aria-label="${esc(t("发送"))}" title="${esc(t("发送"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
+        <button class="cx-stop hidden" data-act="stop" id="cx-stop" aria-label="${esc(t("停止"))}" title="${esc(t("停止"))}"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
       </div>
       <div class="cx-foot">
         <span id="cx-state"><i class="cx-dot idle"></i>未连接</span>
@@ -70,6 +63,13 @@
     </div>
   </main>
 </div>`;
+    // Share the shell drawer so phones and tablets have one conversation sidebar.
+    const sidebar = document.getElementById("cx-sidebar");
+    if (sidebar) {
+      sidebar.innerHTML = `<label class="cx-search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg><input id="cx-search" type="search" placeholder="${t("搜索对话")}" aria-label="${t("搜索对话")}"></label><div class="cx-side-label">${t("最近对话")}</div><div class="cx-threads" id="cx-threads"></div><div class="cx-acct" id="cx-acct"></div>`;
+      sidebar.addEventListener("click", onClick);
+      $("cx-search").addEventListener("input", (e) => { st.search = e.target.value; paintThreads(); });
+    }
     dom = {
       acct: $("cx-acct"), threads: $("cx-threads"), head: $("cx-head"),
       log: $("cx-log"), boot: $("cx-boot"), msgs: $("cx-msgs"),
@@ -81,10 +81,9 @@
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
     });
     dom.input.addEventListener("input", () => { dom.input.style.height = "auto"; dom.input.style.height = Math.min(180, dom.input.scrollHeight) + "px"; });
-    dom.log.addEventListener("click", (e) => {
-      const b = e.target.closest(".copy-btn");
-      if (b) { const pre = b.parentElement && b.parentElement.querySelector("code"); if (pre) { copyText(pre.textContent || ""); toast("已复制"); } }
-    });
+    // Use cccodroid's code-copy and local-file link handlers, including Android fallbacks.
+    if (CC.onCopyBtn) dom.log.addEventListener("click", CC.onCopyBtn);
+    if (CC.onPathLink) dom.log.addEventListener("click", CC.onPathLink);
     return dom;
   }
 
@@ -92,7 +91,17 @@
     const el = e.target.closest("[data-act]");
     if (!el) return;
     const act = el.dataset.act;
-    if (act === "new") return newThread();
+    if (act === "new") return newThread(st.cwd || (st.status && st.status.cwd));
+    if (act === "directory") return newThread();
+    if (act === "suggest") {
+      dom.input.value = el.dataset.prompt || "";
+      dom.input.dispatchEvent(new Event("input")); dom.input.focus(); return;
+    }
+    if (act === "copy-message") {
+      const item = st.items.get(el.closest("[data-item]").dataset.item);
+      if (item) Promise.resolve(copyText(item.text)).then(ok => toast(t(ok ? "已复制" : "复制失败"), !ok));
+      return;
+    }
     if (act === "send") return send();
     if (act === "stop") return interrupt();
     if (act === "install") return install();
@@ -124,10 +133,10 @@
 
     // 账户
     if (dom) {
-      if (acc) {
+      if (dom.acct && acc) {
         const who = acc.email || (acc.type === "apiKey" ? "API Key" : "已登录");
         dom.acct.innerHTML = `<b>${esc(who)}</b>${acc.planType ? `<span>${esc(acc.planType)}</span>` : ""}${acc.workspaceName ? ` · ${esc(acc.workspaceName)}` : ""}<div class="cx-acct-row"><button data-act="logout">退出登录</button></div>`;
-      } else {
+      } else if (dom.acct) {
         dom.acct.innerHTML = `<b>未登录</b><span>登录 ChatGPT 后即可对话</span><div class="cx-acct-row"><button data-act="login">登录 ChatGPT</button></div>`;
       }
     }
@@ -141,9 +150,17 @@
       dom.head.innerHTML = `<div class="cx-title">${esc(name)}</div>`
         + (models.length ? `<span class="cx-chip">模型 <select id="cx-model">${models.map((m) => `<option value="${esc(m.id)}"${cur && m.id === cur.id ? " selected" : ""}>${esc(m.displayName || m.id)}</option>`).join("")}</select></span>` : "")
         + (efforts.length ? `<span class="cx-chip">思考 <select id="cx-effort"><option value="">默认</option>${efforts.map((x) => `<option value="${esc(x.reasoningEffort)}"${x.reasoningEffort === st.effort ? " selected" : ""}>${esc(x.reasoningEffort)}</option>`).join("")}</select></span>` : "")
-        + `<span class="cx-chip" data-act="new" title="换一个工作目录开始新任务">目录 ${esc(st.cwd || s.cwd || "工作区")}</span>`;
+        + `<span class="cx-chip" data-act="directory" title="换一个工作目录开始新任务">目录 ${esc(st.cwd || s.cwd || "工作区")}</span>`;
       const msel = $("cx-model"), esel = $("cx-effort");
-      if (msel) msel.addEventListener("change", () => { st.model = msel.value; LS.set("model", st.model); saveSettings(); paint(); });
+      if (msel) msel.addEventListener("change", () => {
+        st.model = msel.value; LS.set("model", st.model);
+        // 换了模型：原来那档思考强度新模型不一定支持，不支持就退回默认
+        const m = models.find((x) => x.id === st.model);
+        if (m && st.effort && !(m.supportedReasoningEfforts || []).some((x) => x.reasoningEffort === st.effort)) {
+          st.effort = ""; LS.set("effort", "");
+        }
+        saveSettings(); paint();
+      });
       if (esel) esel.addEventListener("change", () => { st.effort = esel.value; LS.set("effort", st.effort); saveSettings(); });
     }
 
@@ -152,12 +169,14 @@
 
     // 状态行
     if (dom) {
+      const ready = !!s.ready;
       if (!installed) setState("Codex 引擎未安装", "err");
       else if (install.state === "installing") setState(`安装中 ${install.total ? Math.round((install.done || 0) / install.total * 100) + "%" : ""}`, "busy");
+      else if (!ready) setState("正在补齐代码模式组件…", "busy");
       else if (turn) setState("Codex 正在运行…", "busy");
       else if (server) setState(acc ? "就绪" : "未登录", acc ? "" : "err");
       else setState("引擎未启动", "idle");
-      dom.send.disabled = !installed || st.busy;
+      dom.send.disabled = !installed || !ready || st.busy;
       dom.stop.classList.toggle("hidden", !turn);
       dom.send.classList.toggle("hidden", !!turn);
       dom.cwd.textContent = st.cwd || s.cwd || "";
@@ -171,27 +190,40 @@
     if (!dom) return;
     const s = st.status || {}, install = s.install || {};
     const installed = !!s.installed || install.state === "done";
+    const ready = !!s.ready;
     let h = "";
+    const pct = install.total ? Math.min(100, Math.round((install.done || 0) / install.total * 100)) : 0;
     if (!installed) {
-      const pct = install.total ? Math.min(100, Math.round((install.done || 0) / install.total * 100)) : 0;
       h += `<div class="cx-install"><b>先装 Codex 引擎</b>
         官方 <span class="mono">codex-app-server</span> 静态二进制，约 ${fmtSize(88007340) || "84 MB"}。
         装好后以本应用 uid 运行，不 root；不确定的命令会先在这里等你确认。
         <div class="cx-bar"><i style="width:${install.state === "installing" ? pct : 0}%"></i></div>
         <div class="tiny">${install.state === "installing" ? esc(install.phase || "下载中…") + (install.total ? ` · ${fmtSize(install.done || 0)} / ${fmtSize(install.total)}` : "") : install.state === "error" ? "✗ " + esc(install.error || "安装失败") : "版本 " + esc(s.version || "")}</div>
         <button data-act="install"${install.state === "installing" ? " disabled" : ""}>${install.state === "installing" ? "安装中…" : install.state === "error" ? "重试安装" : "安装 Codex 引擎"}</button></div>`;
+    } else if (!ready) {
+      // 0.166.0 的代码模式宿主是官方单独发的包；缺了它读文件 / 跑命令会失败
+      h += `<div class="cx-install"><b>补齐 Codex 代码模式组件</b>
+        官方 <span class="mono">codex-code-mode-host</span>，约 ${fmtSize(27023046) || "26 MB"}。
+        没有它，Codex 能对话但读不了文件、也跑不了命令。
+        <div class="cx-bar"><i style="width:${install.state === "installing" ? pct : 0}%"></i></div>
+        <div class="tiny">${install.state === "installing" ? esc(install.phase || "下载中…") + (install.total ? ` · ${fmtSize(install.done || 0)} / ${fmtSize(install.total)}` : "") : install.state === "error" ? "✗ " + esc(install.error || "安装失败") : "登录状态和任务都不受影响"}</div>
+        <button data-act="install"${install.state === "installing" ? " disabled" : ""}>${install.state === "installing" ? "安装中…" : install.state === "error" ? "重试安装" : "下载组件"}</button></div>`;
     }
     if (st.status && st.status.lastError) h += `<div class="cx-appr" style="max-width:920px;margin:0 auto 10px"><div class="cx-appr-h">引擎报错</div><pre>${esc(st.status.lastError)}</pre></div>`;
     if (dom.boot.innerHTML !== h) dom.boot.innerHTML = h;
-    const empty = installed && !dom.msgs.children.length;
-    if (empty) dom.msgs.innerHTML = `<div class="cx-empty"><b>开始一个任务</b>${(st.status && st.status.account) ? "Codex 会在当前工作目录里读代码、改文件、跑命令；需要确认的会停在这里。" : "先点左边「登录 ChatGPT」，再开始。"}</div>`;
-    else if (!empty && dom.msgs.firstElementChild && dom.msgs.firstElementChild.className === "cx-empty") dom.msgs.innerHTML = "";
+    const empty = ready && !dom.msgs.querySelector(":scope > :not(.cx-empty)");
+    const emptyKey = String(!!(st.status && st.status.account));
+    if (empty && (!dom.msgs.querySelector(".cx-empty") || dom.msgs.dataset.account !== emptyKey)) {
+      dom.msgs.dataset.account = emptyKey;
+      dom.msgs.innerHTML = `<div class="cx-empty"><span class="cx-greeting">coxdragon</span><b>${t("今天，一起完成什么？")}</b><p>${st.status && st.status.account ? t("从一个想法、一段代码，或一个问题开始。") : t("在侧栏登录 ChatGPT，开始你的第一个任务。")}</p><div class="cx-suggestions">${["了解这个项目的结构", "帮我实现一个新功能", "检查代码，找出潜在问题"].map(prompt => `<button data-act="suggest" data-prompt="${esc(t(prompt))}">${esc(t(prompt))}<span aria-hidden="true">↗</span></button>`).join("")}</div></div>`;
+    } else if (!empty && dom.msgs.firstElementChild && dom.msgs.firstElementChild.className === "cx-empty") dom.msgs.firstElementChild.remove();
   }
 
   function paintThreads() {
-    if (!dom) return;
-    const threads = (st.status && st.status.threads) || st.threads || [];
-    if (!threads.length) { dom.threads.innerHTML = `<div class="tiny" style="padding:8px 9px;color:var(--fg3)">还没有任务</div>`; return; }
+    if (!dom || !dom.threads) return;
+    const allThreads = (st.status && st.status.threads) || st.threads || [];
+    const threads = allThreads.filter(t => !st.search || `${t.name || ""} ${t.preview || ""} ${t.cwd || ""}`.toLocaleLowerCase().includes(st.search.toLocaleLowerCase()));
+    if (!threads.length) { dom.threads.innerHTML = `<div class="tiny" style="padding:8px 9px;color:var(--fg3)">${esc(t(st.search ? "没有找到对话" : "还没有对话"))}</div>`; return; }
     dom.threads.innerHTML = threads.map((t) => {
       const name = t.name || t.preview || "未命名任务";
       return `<button class="cx-th${t.id === st.threadId ? " on" : ""}" data-act="open-thread" data-id="${esc(t.id)}"><b>${esc(name)}</b><small>${esc(t.cwd || "")}${t.updatedAt ? " · " + esc(relTime(t.updatedAt * 1000)) : ""}</small></button>`;
@@ -303,9 +335,16 @@
       }
       case "agentMessage": {
         d.className = "cx-msg cx-agent";
-        if (!d.firstChild) d.innerHTML = `<div class="cx-role">Codex</div><div class="cx-body"></div>`;
+        if (!d.firstChild) {
+          d.innerHTML = `<div class="cx-role">Codex</div><div class="cx-body"></div><div class="msg-acts"></div>`;
+          if (CC.actBtn) {
+            const actions = d.querySelector(".msg-acts");
+            actions.innerHTML = CC.actBtn("copy", t("复制"));
+            actions.querySelector("button").dataset.act = "copy-message";
+          }
+        }
         const body = d.querySelector(".cx-body");
-        if (body && !it.raf) it.raf = requestAnimationFrame(() => { it.raf = 0; body.innerHTML = md(it.text); });
+        if (body && !it.raf) it.raf = requestAnimationFrame(() => { it.raf = 0; body.innerHTML = md(it.text); if (CC.enhanceMd) CC.enhanceMd(body); });
         break;
       }
       case "reasoning": {
@@ -451,7 +490,12 @@
     if (ev.type === "install") {
       if (st.status) st.status.install = ev.install;
       else st.status = { install: ev.install };
-      if (ev.install && ev.install.installed) { st.status.installed = true; refreshSoon(); }
+      if (ev.install) {
+        st.status.installed = !!ev.install.installed;
+        st.status.ready = !!ev.install.ready;
+        if (ev.install.host) st.status.host = ev.install.host;
+        if (ev.install.ready) { st.hostAuto = false; refreshSoon(); }
+      }
       paint();
       return;
     }
@@ -507,19 +551,30 @@
         addError((p.error && p.error.message) || "Codex 报错");
         break;
       case "warning":
-      case "configWarning":
-        if (p.message && p.message !== st.lastWarn) { st.lastWarn = p.message; toast(p.message); }
+      case "configWarning": {
+        // warning 是 { message }；configWarning 是 { summary, details }
+        const w = p.message || p.summary;
+        if (w && w !== st.lastWarn) { st.lastWarn = w; toast(w); }
         break;
+      }
       case "account/login/completed":
-        if (p.success) { st.login = null; toast("登录成功"); refreshSoon(); }
-        else { toast("登录失败" + (p.error ? "：" + p.error : ""), true); }
+        if (p.success) {
+          st.login = null; toast("登录成功"); refreshSoon();
+          // 顶栏 / 抽屉底部也按 Codex 的账户更新一次，不用等 45 秒的轮询
+          try { window.dispatchEvent(new CustomEvent("cc:codex-account")); } catch {}
+        } else if (st.login) {   // 用户主动取消时 st.login 已清掉，不再报失败；真失败把过期的一次性码收掉
+          st.login = null;
+          toast("登录失败" + (p.error ? "：" + p.error : ""), true);
+        }
         paint();
         break;
       case "account/updated":
         refreshSoon();
+        try { window.dispatchEvent(new CustomEvent("cc:codex-account")); } catch {}
         break;
       case "model/rerouted":
-        toast("模型已切换到 " + (p.model || p.to || "默认"));
+        // 官方参数是 { fromModel, toModel, reason }；以前按 p.model / p.to 读，永远显示「默认」
+        toast("模型已切换到 " + (p.toModel || p.fromModel || "默认"));
         refreshSoon();
         break;
       case "serverRequest/resolved":
@@ -551,13 +606,23 @@
       const s = await api("/api/codex/status");
       st.status = s;
       st.installed = !!s.installed;
+      st.ready = !!s.ready;
+      // 只装过 app-server 的老安装：代码模式宿主缺着，自动补一次（约 26 MB，进度走 SSE 的 install 事件）
+      if (s.installed && !s.ready && !st.hostAuto) {
+        st.hostAuto = true;
+        post("/api/codex/install").catch(() => { st.hostAuto = false; });
+      }
       if (!st.cwd) st.cwd = s.cwd || "";
       if (s.activeThread && !st.thread) { st.thread = s.activeThread; st.threadId = s.activeThread.id; }
+      const ms = (s.models || []).filter((m) => !m.hidden);
+      // 以前选过的模型可能已经从清单里下架：退回默认，别让界面记着一个引擎不认识的 id
+      if (st.model && ms.length && !ms.some((m) => m.id === st.model)) { st.model = ""; LS.set("model", ""); }
       if (!st.model) {
-        const ms = (s.models || []).filter((m) => !m.hidden);
         const def = ms.find((m) => m.isDefault) || ms[0];
-        if (def) st.model = def.id;
+        if (def) { st.model = def.id; LS.set("model", st.model); }
       }
+      // 网关进程重启后 S.model 是空的：把界面上记住的选择补回去，别出现「下拉框显示 A、引擎实际用默认 B」
+      if (st.model && st.model !== (s.model || "")) saveSettings();
       paint();
       loadThreads();
     } catch (e) {
@@ -598,6 +663,8 @@
       st.cwd = (r.thread && r.thread.cwd) || dir || st.cwd;
       LS.set("cwd", st.cwd);
       paint(); loadThreads();
+      if (CC.openPage) CC.openPage("codex");
+      if (CC.closeDrawer) CC.closeDrawer();
       dom.input.focus();
       toast("新任务已开始");
     } catch (e) { toast(e.message, true); }
@@ -610,6 +677,8 @@
       st.thread = r.thread; st.threadId = id; LS.set("thread", id);
       st.cwd = (r.thread && r.thread.cwd) || st.cwd;
       hydrateThread(r.thread);
+      if (CC.openPage) CC.openPage("codex");
+      if (CC.closeDrawer) CC.closeDrawer();
       paint(); scrollBottom();
     } catch (e) { toast(e.message, true); }
   }
@@ -709,6 +778,20 @@
     disconnect();
   }
 
+  // 从浏览器登录完回到应用：事件流可能被系统挂起、错过 account/login/completed，
+  // 回到前台先补一次状态，别让登录卡片一直挂着。
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden || !st.open) return;
+    refresh();
+    if (!st.es) connect();
+  });
+
   ensureDom();
   window.CODEX = { onOpen, onHide, refresh, openThread, newThread, get state() { return st; } };
+  // app.js 的启动可能在 codex.js 之前就把 Codex 页切了出来（19-boot 的 setTimeout）：那时
+  // window.CODEX 还没挂，onOpen 没被调用，页面会停在「未连接」。这里补一次。
+  try {
+    const pg = document.getElementById("pages"), tab = document.getElementById("tab-codex");
+    if (pg && !pg.classList.contains("hidden") && tab && !tab.classList.contains("hidden")) onOpen();
+  } catch {}
 })();

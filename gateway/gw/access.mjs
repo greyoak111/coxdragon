@@ -26,7 +26,7 @@ export const TOKEN = (() => {
   fs.renameSync(tmp, TOKEN_FILE);
   return t;
 })();
-// Cookie 不按端口隔离：同一个浏览器里开着两个网关（开发端 8790 + cccodroid 8791）时，同名 Cookie 会互相覆盖，
+// Cookie 不按端口隔离：同一个浏览器里开着两个网关（开发端 8890 + cccodroid 8891）时，同名 Cookie 会互相覆盖，
 // 所以名字里带上端口
 export const COOKIE = `cc_t_${CFG.port}`;
 // ── 界面专用地址（GHSA-hwmm 第 1 项）──
@@ -73,7 +73,7 @@ export function sigOk(v, pathAndQuery, { method = "GET", local = UI_HOST, body =
 }
 
 // ── 证明「我是真网关」（审查 S1）──
-// 安卓上 127.0.0.1 的端口全机共享：网关没起来（开机、崩溃后重拉的空档）时别的应用能先占住 8791。
+// 安卓上 127.0.0.1 的端口全机共享：网关没起来（开机、崩溃后重拉的空档）时别的应用能先占住 8891。
 // 以前 App 只看端口上有没有人答话，就把令牌头、带 ?t=&k= 的首页地址交过去。现在 App 先发一个随机数 n，
 // 真网关用令牌算 HMAC 回过来（令牌只在双方私有目录里，冒牌的算不出），过了才交凭据。
 // BOOT 是这次启动的编号，一并算进去，App 据此知道网关换过了没有。

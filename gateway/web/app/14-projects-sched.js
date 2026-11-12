@@ -733,7 +733,7 @@
   var chatStatus = chatStatus || ["", ""], pageSub = pageSub || "";   // setStatus 可能在这行之前就调过
   function paintTitle() {
     const el = $("app-title");
-    if (curPage) { el.textContent = pageTitleOv || t(PAGES[curPage].name); subEl.textContent = pageSub; subEl.className = ""; }
+    if (curPage) { el.textContent = pageTitleOv || t(PAGES[curPage].name); subEl.textContent = pageSub || (curPage === "codex" ? t("官方 codex-app-server") : ""); subEl.className = ""; }
     else { el.textContent = view.title || t("新对话"); subEl.textContent = chatStatus[0] + (chatStatus[1] === "ok" ? archSub() : ""); subEl.className = chatStatus[1]; }
   }
   // 空闲时状态行后面接上档号和起止日期（建过档的会话才有）

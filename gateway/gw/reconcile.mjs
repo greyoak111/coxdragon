@@ -12,7 +12,7 @@
 // 本机实况里告诉 Claude，问题有变化时记一笔修复账本。
 import fs from "node:fs";
 import path from "node:path";
-import { CFG, LIVE, PATHS, PREFIX, log, reqLang, tr, tz } from "./config.mjs";
+import { CFG, LIVE, PREFIX, log, reqLang, tr, tz } from "./config.mjs";
 import { ledger } from "./claude.mjs";
 import { COMP_DIR, breathe, compRecord, compRepair, devkitIdentity } from "./components.mjs";
 import { modInstalled, modRepair, modulesInfo } from "./modules.mjs";
@@ -100,7 +100,7 @@ async function ownedPaths() {
 // 本应用的包名（清单前缀要对得上的那个）：/data/user/0/<包>/files/usr 或 /data/data/<包>/files/usr
 const OWN = PREFIX ? (/\/data\/(?:data|user\/\d+)\/([^/]+)\/files\/usr\/?$/.exec(PREFIX) || [])[1] || "" : "";
 
-const comp = (id) => ({ t: "comp", id }), mod = (id) => ({ t: "mod", id }), DEVKIT = { t: "devkit" }, CLAUDE = { t: "claude" };
+const comp = (id) => ({ t: "comp", id }), mod = (id) => ({ t: "mod", id }), DEVKIT = { t: "devkit" };
 
 /** 核一遍，返回 { at, findings:[{key, level:error|warn|info, k, v, fix, samples, act}] }。k/v 是 tz 的原句和变量，出门时再翻 */
 export async function reconcileNow() {
@@ -110,9 +110,7 @@ export async function reconcileNow() {
   const add = (key, level, k, v, fix, samples, act) => F.push({ key, level, k, v: v || null, fix: fix || "", ...(samples && samples.length ? { samples: samples.slice(0, 8) } : {}), act: act && actOk(act) ? act : null });
   const dk = devkitIdentity();
   if (!dk) add("devkit", "error", tz("找不到工具包的安装标记（.devkit-ok），工具包可能没装完"), null, tz("设置 → 更新：修复工具包"), null, DEVKIT);
-  // 用户主动卸载 Claude Code 会留 files/.claude-uninstalled：这是正常状态，别再报红教人重装（0.6.9 审计 195-M.7）
-  const claudeUninstalled = PREFIX && exists(path.join(path.dirname(PREFIX), ".claude-uninstalled"));
-  if (PATHS.claude && !fs.existsSync(PATHS.claude) && !claudeUninstalled) add("claude", "error", tz("找不到 Claude Code 程序"), null, tz("设置 → 更新：重装 Claude Code"), [PATHS.claude], CLAUDE);
+  // Codex 单核：不再核对 Claude Code 程序。这个应用跑的是官方 codex-app-server，没装 Claude 是正常状态。
 
   // ── 组件 ──
   let recs = [];

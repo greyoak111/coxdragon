@@ -1,0 +1,15 @@
+{
+  "release": "v0.1.3",
+  "package": "cox.dragon",
+  "versionCode": 4,
+  "targetSdk": 28,
+  "apk": "coxdragon-0.1.3-chat-ui.apk",
+  "sha256": "6c790612151af55d5f99a45382b740dd62b5e2856ee82868bd7c1c56d08543e2",
+  "signerCertificateSha256": "93f4d801b104b160140644b9d13109756d20cf8cc1d875fec58ef93835b2b9fb",
+  "sourceFilesMatchedToApk": 542,
+  "nativeCode": "Preserved from the installed v0.1.2 APK; not rebuilt for this web-only update",
+  "originalSourceCommit": "14f9bfed2f450647824b520ffd7bd3683940ae7e",
+  "upstreamReuseCommit": "af79e9b",
+  "baseApkSha256": "efa09bc808d643df51732045bf9c16aa6dfd0b7994e799511e72d7d42dd839bc",
+  "webViewVisualAcceptance": "pending user installation"
+}

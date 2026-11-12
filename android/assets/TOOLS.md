@@ -1,4 +1,4 @@
-# 运行环境：cccodroid（安卓上原生运行，不是 chroot / proot / 虚拟机）
+# 运行环境：coxdragon（安卓上原生运行，不是 chroot / proot / 虚拟机）
 
 - 安卓 aarch64，无 root；你以本应用的普通 uid 运行。开发工具来自 Termux 官方仓库，已改写为本应用的路径，前缀 `$PREFIX`。
 - 工作区 `{{WORKSPACE}}`（应用私有目录）：在这里建项目、编译、运行。
@@ -14,7 +14,7 @@
   工具包更新后，之前用 pkg 装的包会提示 `pkg restore` 装回。Python / Node 的库照常用 pip / npm 装（有 `python-<库>` 的预编译包时优先 pkg，省去现场编译）。
 - **Office 文档转换**：`pkg install libreoffice`（约 190 MB）后可无头转换，如 `soffice --headless --convert-to pdf --outdir <目录> <文件>`（docx/xlsx/pptx/doc/odt 互转同理）。没有 X11，别开图形界面。用户在查看器里看 PPT 时装过的话这里已经有了。
 
-## 可用工具（cccodroid-selftest 逐项实测）
+## 可用工具（本机自检逐项实测）
 
 - **C/C++**：`cc`/`c++`/`clang`/`clang++` 21（`gcc` 也指向 clang），lld，C++20 可用。**只能动态链接**：没有静态 libc，别用 `-static`。产物由 `/system/bin/linker64` 加载，库在 `$PREFIX/lib`、头文件在 `$PREFIX/include`。
 - **构建**：make、cmake（默认 Makefile，`-G Ninja` 亦可）、ninja、pkg-config；`./configure` 这类脚本可直接跑。
@@ -33,7 +33,7 @@
 ## 系统权限：priv
 
 需要 pm / am / settings / dumpsys / logcat / screencap / input 之类的系统能力时，用 `priv '<命令>'`：经 Shizuku 以 shell 身份（uid 2000）执行，标准输入、输出与退出码都照常传递；`priv -- 程序 参数…` 不经 sh 直接执行。
-先 `priv --status` 看是否可用：没装 / 没启动 / 没授权 Shizuku 时如实告诉用户去 cccodroid 设置页处理，别反复重试。
+先 `priv --status` 看是否可用：没装 / 没启动 / 没授权 Shizuku 时如实告诉用户去 coxdragon 设置页处理，别反复重试。
 每条 priv 命令都会记进审计日志（时间、命令、退出码），用户在设置 → Shizuku →「特权命令记录」里看得到。
 
 ⚠️ **`priv` 看不见应用私有目录**（工作区、`$PREFIX` 都是 0700，它是 uid 2000），`/data/local/tmp` 应用身份也写不进去。
@@ -48,7 +48,7 @@ priv 'sh /sdcard/cccodroid/脚本.sh'      # 再执行
 
 用户在设置里开着「设备工具」时，会有一组 `mcp__device__` 开头的工具：设备状态、发通知、读写剪贴板、打开链接 / 地图 / 拨号盘 / 邮件或短信草稿 / 日历新事件 / 闹钟计时器 / 某个应用、分享文件、已装应用列表。**这些比 `priv` 拼 am / content 命令更合适**：参数固定、用户能逐个开关。
 - 会打开别的应用的都只是**预填**：保存、发送、拨出要用户自己点。别跟用户说「已经发出去了 / 已经加进日历了」，说「已经打开、填好了，请你确认」。
-- cccodroid 在后台时安卓不让弹界面，工具会改发一条通知（结果里 `shown: "notification"`），如实告诉用户去点通知。
+- coxdragon 在后台时安卓不让弹界面，工具会改发一条通知（结果里 `shown: "notification"`），如实告诉用户去点通知。
 - 读屏 / 点按 / 输入 / 滑动 / 截屏（`screen_*`、`screenshot`）要无障碍，用户没开就不会出现这些工具。操作别的应用的套路：`screen_read` 看编号 → `screen_tap` / `screen_type`。点按 / 输入 / 滑动 / 按键做完会等界面静下来，直接带回新屏幕和新编号，不用再 `screen_read`；编号过期没点成时，报错里也附着新屏幕，从里面重选。
 - 用户没开、或者工具不在列表里：告诉用户在 设置 → 设备工具 里打开，别改用 priv 绕过去。
 
@@ -82,7 +82,7 @@ priv 'sh /sdcard/cccodroid/脚本.sh'      # 再执行
 
 **关于 `SIGSYS: bad system call`**：安卓的 seccomp 会拦一批比 targetSdk 新的系统调用
 （`clone3`、`faccessat2`、`openat2`、`epoll_pwait2`，以及 `mount` / `umount2` / `reboot` / `kcmp` 这类），
-程序一碰就被 SIGSYS 杀掉。cccodroid 已经处理好了，**一般不用你管**：
+程序一碰就被 SIGSYS 杀掉。coxdragon 已经处理好了，**一般不用你管**：
 
 - 设置里的「静态程序兼容」默认开着：claude 外面套了 `seccomp-enosys-run -f`，**你拉起的整棵进程树**
   （bash、静态 Go 程序、它们的子进程）碰到这类调用都会拿到 `-ENOSYS`，程序自己退回老接口接着跑。

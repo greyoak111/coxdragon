@@ -483,7 +483,7 @@ if (/[?&](t|k)=/.test(location.search) || /[#&]k=/.test(location.hash)) history.
   // ── 保存到（A4）：外壳有 CCApp.saveAs 时，下载 / 导出一律走系统「保存到」面板 ──
   //  不要存储权限，也不会把文件落进用户打不开的私有目录。结果由外壳回调 __ccSaved
   const canSaveAs = () => !!(window.CCApp && window.CCApp.saveAs);
-  const canShare = () => !!(state.serverStatus && state.serverStatus.product === "cccodroid");
+  const canShare = () => !!(state.serverStatus && state.serverStatus.product === "coxdragon");
   function saveAs(path, mime) { window.CCApp.saveAs(path, path.split("/").pop(), mime || ""); }
   window.__ccSaved = guardHook("__ccSaved", (ok, msg) => {
     if (ok) return toast(t("已保存：{name}", { name: msg }));
@@ -502,7 +502,7 @@ if (/[?&](t|k)=/.test(location.search) || /[#&]k=/.test(location.hash)) history.
   }, true);
 
   // 查看器 / 图片灯箱里的「分享」：文件本来就在本机，再存一份没意义，交给系统分享面板发到别的应用。
-  // 不在 cccodroid 里（开发端、浏览器）时退回下载
+  // 不在 coxdragon 里（开发端、浏览器）时退回下载
   async function shareFile(p) {
     if (!canShare()) { location.href = fileUrl(p, true); return; }
     try {
@@ -1086,7 +1086,7 @@ if (/[?&](t|k)=/.test(location.search) || /[#&]k=/.test(location.hash)) history.
   chatEl.addEventListener("click", onPathLink);
   $("vw-body").addEventListener("click", onPathLink);
 
-  // 网页链接：有应用内浏览器就在里面开（cccodroid / 开发端外壳提供），否则照常新窗口
+  // 网页链接：有应用内浏览器就在里面开（coxdragon / 开发端外壳提供），否则照常新窗口
   const hasBrowser = () => !!(window.CCApp && window.CCApp.openBrowser);
   // 宽屏（两栏起）且外壳支持嵌入：浏览器开在右侧工作区，和文件 / 终端并列；窄屏照旧全屏窗口。
   // 已经开着窗格时，窄屏下的新链接也送进窗格，别再叠一个全屏窗口

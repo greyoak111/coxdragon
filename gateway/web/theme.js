@@ -12,7 +12,7 @@
 //  定下来以后再告诉壳 CCApp.setBars(dark)，让状态栏 / 导航栏跟着换色。
 // ─────────────────────────────────────────────────────────────────────
 
-// ── 原生桥口令（cccodroid 0.4.6 起）：壳的 CCApp 里有副作用的方法第一个参数要带口令，
+// ── 原生桥口令（coxdragon 0.4.6 起）：壳的 CCApp 里有副作用的方法第一个参数要带口令，
 //    口令只经首页地址的 #k= 交给主框架（不进请求行，11-03 审查 M-3）（存 sessionStorage，刷新还在）。HTML 预览的 iframe 同样被注入了 CCApp，
 //    但和界面不同源，拿不到口令，调了也没用。这里把 CCApp 换成自动带口令的一层，其余代码照旧写 CCApp.xxx(…)。
 //    放在 theme.js 开头，因为它是第一个碰 CCApp 的脚本。开发端 / 测试壳没有 keyed()，原样不动
@@ -70,7 +70,7 @@
     // 先告诉壳风格，再让它换栏色 —— 栏色按风格取
     if (a && typeof a.skinPref === "function") { try { a.skinPref(skin); } catch {} }
     if (a && typeof a.setBars === "function") { try { a.setBars(dark); } catch {} }
-    // 外壳记下这个选择，下次启动的安装页 / 空白页照着上色（cccodroid 0.1.20 起有）；壳只认 auto/light/dark
+    // 外壳记下这个选择，下次启动的安装页 / 空白页照着上色（coxdragon 0.1.20 起有）；壳只认 auto/light/dark
     if (a && typeof a.themePref === "function") { try { a.themePref(mode); } catch {} }
     const s = document.getElementById("set-theme");
     if (s && s.value !== pref) s.value = pref;

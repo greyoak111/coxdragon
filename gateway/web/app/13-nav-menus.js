@@ -106,7 +106,12 @@
   // 0.4.10 加了「脉络」：已有的固定项里补上它（只补一次，用户之后取消了不再加回来）
   (function () { try { const p = JSON.parse(localStorage.getItem("cc.navPins")); if (Array.isArray(p) && !localStorage.getItem("cc.navPinsV3") && !p.includes("lineage")) localStorage.setItem("cc.navPins", JSON.stringify([...p, "lineage"])); localStorage.setItem("cc.navPinsV3", "1"); } catch {} })();
   // 0.4.20 起存进 ccapp-ui.json（uiGet / uiSet，见 01-core.js）；以前存在本地的 cc.navPins 照读
-  const navPins = () => { const p = uiGet("navPins", "cc.navPins"); if (Array.isArray(p)) return NAV_ITEMS.filter((k) => p.includes(k)); return ["codex", "sessions", "projects", "lineage", "sched"]; };
+  // 默认常驻项也过一遍 NAV_ITEMS：Codex 单核把 Claude 那几页从清单里去掉后，默认数组不能把已删的项又画出来
+  const navPins = () => {
+    const p = uiGet("navPins", "cc.navPins");
+    const want = Array.isArray(p) ? p : ["codex", "sessions", "projects", "lineage", "sched"];
+    return NAV_ITEMS.filter((k) => want.includes(k));
+  };
   document.addEventListener("cc:ui", (e) => { if (e.detail.key === "navPins") renderSideNav(); });
   var navEdit = false;
   function renderSideNav() {
@@ -149,12 +154,12 @@
     if (e.target.checked) pins.push(k);
     uiSet("navPins", pins);
   });
-  $("side-new").addEventListener("click", () => { closePage(); closeDrawer(); newConversation(); });
+  $("side-new").addEventListener("click", () => { if (window.CODEX) return CODEX.newThread(CODEX.state.cwd || undefined); closePage(); closeDrawer(); newConversation(); });
   $("side-acct").addEventListener("click", () => acctMenu());
-  // ── 头像与昵称：只存本机。没设昵称时用登录邮箱 @ 前面那段，再没有就叫 cccodroid ──
+  // ── 头像与昵称：只存本机。没设昵称时用登录邮箱 @ 前面那段，再没有就叫 coxdragon ──
   const PROF_KEY = "cc.profile";
   const profile = () => { try { return JSON.parse(localStorage.getItem(PROF_KEY)) || {}; } catch { return {}; } };
-  const profName = () => profile().name || (acctEmail ? acctEmail.split("@")[0] : "") || "cccodroid";
+  const profName = () => profile().name || (acctEmail ? acctEmail.split("@")[0] : "") || "coxdragon";
   function paintAv(el, p) {
     p = p || profile();
     const av = typeof p.av === "string" && /^data:image\/[a-z+.-]+;base64,[A-Za-z0-9+\/=]+$/.test(p.av) ? p.av : "";   // 只认本机存的 data: 图片
@@ -192,18 +197,22 @@
   paintProf();
 
   // 账户行：头像 + 昵称，下面一行只写当前接口（账户登录 / DeepSeek / Kimi …），别的都不放
+  var cxAcct = null;   // 最近一次 /api/codex/status 的快照（19-boot 的 refreshStatus 填）：抽屉底部按 Codex 的登录态显示
   function paintAcct(s) {
     if (!s) return;
     paintAv($("acct-av"));
     $("acct-name").textContent = profName();
-    $("acct-sub").textContent = provName(s);
+    $("acct-sub").textContent = cxAcct
+      ? (cxAcct.account ? (cxAcct.account.email || t("Codex 已登录")) : t("Codex 未登录"))
+      : provName(s);
     paintProf();
     if (s.product) $("side-title").textContent = s.product;
     // 登录与否先用 /api/status 的 auth 定（退出登录后菜单马上换回「登录账户」）；
     // 邮箱和额度再问 /api/login/status。问不出（unknown）时不动上次的判断（0.6.9 审计 195-G.3）
+    // Codex 单核：有 Codex 状态就不再问 Claude 的登录态
     if (s.keyMode === "login" && s.auth && !s.auth.unknown) acctLogged = !!s.auth.loggedIn;
     // 官方账户：名字换成登录邮箱（问一次，之后十分钟内沿用）
-    if (s.keyMode === "login" && Date.now() - acctEmailAt > 600000) {
+    if (!cxAcct && s.keyMode === "login" && Date.now() - acctEmailAt > 600000) {
       acctEmailAt = Date.now();
       api("/api/login/status").then((st) => {
         const wk = st && st.limits && st.limits.sevenDay ? Math.round(st.limits.sevenDay.used) : null;
@@ -459,17 +468,15 @@
     if (more) items.push(...more); else items.push({ label: t("在脉络中查看"), icon: SM.lineage, fn: () => { closeDrawer(); openLineage(id); } });
     popMenu(anchor, items, null, "lineage");
   }
-  // 账户菜单：常用的在上，不可逆的放最下
+  // 账户菜单：常用的在上，不可逆的放最下。Codex 单核：Claude 的接口 / 账户 / 用量入口都不再出现，
+  // 登录和退出在 Codex 工作台自己的账户卡上做。
   function acctMenu() {
-    const st = state.serverStatus || {};
     // 更新直达设置里的「更新」类目；有东西可下 / 可装就在右边标出来（状态是上次取的，顺手再取一次给下回用）
     const pend = (lastUpd.items || []).filter((it) => it.state === "available" || it.state === "ready").length;
     loadUpd();
     const items = [
       { label: t("设置"), icon: PAGES.settings.icon, fn: () => openPage("settings") },
       { label: t("头像与昵称"), icon: SM.edit, fn: () => openPage("settings", "general") },
-      { label: t("切换接口 / 账户"), icon: SM.swap, fn: () => openPage("settings", "provider") },
-      { label: t("用量"), icon: PAGES.usage.icon, fn: () => openPage("usage") },
       { label: t("更新"), icon: SM.update, small: pend ? t("有 {n} 项可更新", { n: pend }) : "", fn: () => openPage("settings", "update") },
       "hr",
       { label: t("帮助"), icon: PAGES.help.icon, fn: () => openPage("help") },
@@ -477,18 +484,6 @@
       { label: t("到 GitHub 反馈"), icon: SM.chat, fn: () => $("btn-issue").click() },
       { label: t("交流群 · 讨论区"), icon: SM.people, fn: () => { openPage("help"); setTimeout(() => $("help-body").querySelector(".cm-box")?.scrollIntoView({ block: "center", behavior: "smooth" }), 400); } },
     ];
-    // 官方账户：按实际登录状态给「退出登录」或「登录」（接口是官方账户 ≠ 已登录）；状态没问到时先不放
-    if (st.keyMode === "login" && acctLogged) items.push("hr", { label: t("退出登录"), icon: SM.logout, danger: true, fn: async () => {
-      if (!confirm(t("退出这台设备上的 Claude 账户登录？"))) return;
-      const r = await post("/api/login/logout").catch((e) => ({ ok: false, output: e.message }));
-      toast(r.ok ? t("已退出登录") : t("退出失败：{msg}", { msg: r.output || r.message || "" }), !r.ok);
-      // 立刻换成「登录账户」，不用等下一次状态查询（0.6.9 审计 195-G.3）
-      if (r.ok) { acctLogged = false; acctEmail = ""; acctWeek = null; }
-      acctEmailAt = 0;
-      refreshStatus();
-    } });
-    else if (st.keyMode === "login" && acctLogged === false) items.push("hr", { label: t("登录账户"), icon: SM.swap, fn: () => openPage("settings", "provider") });
-    if (st.keyMode === "login") { acctEmailAt = 0; paintAcct(st); }
     popMenu($("side-acct"), items, "up");
   }
 

@@ -20,7 +20,7 @@ export const CFG = {
   runtime: process.env.CCAPP_RUNTIME || path.join(HERE, "..", "runtime"),
   home: process.env.CCAPP_HOME || process.env.HOME || HERE,
   workspace: process.env.CCAPP_WORKSPACE || path.join(HERE, "..", "workspace"),
-  port: Number(process.argv[2] || process.env.CCAPP_PORT || 8790),
+  port: Number(process.argv[2] || process.env.CCAPP_PORT || 8890),
   bridgePort: Number(process.env.CCAPP_BRIDGE_PORT || 8788),
   upstream: process.env.CCAPP_UPSTREAM || "https://api.deepseek.com/anthropic",
   model: process.env.CCAPP_MODEL || "deepseek-flash",

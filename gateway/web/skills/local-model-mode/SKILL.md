@@ -1,17 +1,17 @@
 ---
 name: local-model-mode
-description: 帮用户给 cccodroid 的「端侧小模型」配置自定义模式（~/.cccodroid/local-mode.json）：选工具、写系统提示、调 llama-server 参数，并在本机实测效果。用户说要配置/调教端侧模型、本地小模型自定义模式时使用。
+description: 帮用户给 coxdragon 的「端侧小模型」配置自定义模式（~/.cccodroid/local-mode.json）：选工具、写系统提示、调 llama-server 参数，并在本机实测效果。用户说要配置/调教端侧模型、本地小模型自定义模式时使用。
 ---
-<!-- cccodroid:managed —— 删掉这一行，应用升级时就不会覆盖你改过的版本 -->
+<!-- coxdragon:managed —— 删掉这一行，应用升级时就不会覆盖你改过的版本 -->
 
 # 端侧小模型的自定义模式
 
-cccodroid 用 llama.cpp 在手机上跑 GGUF 小模型，内置只有「聊天」模式（不给工具，提示约 70 token）。
+coxdragon 用 llama.cpp 在手机上跑 GGUF 小模型，内置只有「聊天」模式（不给工具，提示约 70 token）。
 「自定义模式」是留给用户自己折腾的插口：网关每条消息都会现读下面这个文件。
 
 ## 配置文件
 
-路径：`~/.cccodroid/local-mode.json`（`~` 是 cccodroid 的 home，即 `$HOME`）
+路径：`~/.cccodroid/local-mode.json`（`~` 是 coxdragon 的 home，即 `$HOME`）
 
 ```json
 {

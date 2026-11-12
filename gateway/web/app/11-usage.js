@@ -94,7 +94,7 @@
     c.fillStyle = glow; c.fillRect(0, 0, W, H);
     c.textBaseline = "alphabetic";
     let y = P + 34;
-    text("cccodroid · " + t("使用月报"), P, y, font(500, 30), FG2);
+    text("coxdragon · " + t("使用月报"), P, y, font(500, 30), FG2);
     // 导出才有：右上角 头像 + 昵称（和标题同一行）
     if (who) {
       const R0 = 34, cx = W - P - R0, cy = y - 11;
@@ -178,7 +178,7 @@
     // 页脚
     c.fillStyle = K.fg(0.08); c.fillRect(P, y, W - 2 * P, 2);
     text(t("{t} 轮回复 · 读了 {i} token", { t: usNum(st.tot.t), i: usCompact(st.tot.i) }), P, y + 56, font(500, 24), FG3);
-    text("cccodroid.net", W - P, y + 56, font(600, 24), FG2, "right");
+    text("coxdragon", W - P, y + 56, font(600, 24), FG2, "right");
   }
 
   // 换外观时重画月报（theme.js 只改 html 的 data-theme / data-skin 和 <style id="user-accent"> 的内容，不发事件）
@@ -298,7 +298,7 @@
     const k = (v, l) => `<div><span class="num">${v}</span><small>${esc(l)}</small></div>`;
     $("en-kpis").innerHTML = e ? (e.native ? k(b && b.d != null ? (Math.round(b.d * 10) / 10) + "%" : "—", t("电量")) + k(b && b.s ? fmtDur(b.s * 1000) : "—", t("亮屏")) : "")
       + k(b && b.c ? fmtDur(b.c * 1000) : "—", t("本应用 CPU")) : "";
-    $("en-kpi-note").textContent = e ? (e.native ? t("电量是整机今天掉了多少；CPU 是本应用（含 Claude 和它跑的命令）实际干活的时间。") : t("这个版本没有原生层，只记 CPU 时间（电量、亮屏要 cccodroid）。")) : "";
+    $("en-kpi-note").textContent = e ? (e.native ? t("电量是整机今天掉了多少；CPU 是本应用（含 Claude 和它跑的命令）实际干活的时间。") : t("这个版本没有原生层，只记 CPU 时间（电量、亮屏要 coxdragon）。")) : "";
   }
   $("us-view").addEventListener("click", (e) => {
     const b = e.target.closest("[data-v]"); if (!b) return;
@@ -326,7 +326,7 @@
     const rows = [[t("日期"), t("消息"), t("回复轮数"), t("工具调用"), t("输入 tokens"), t("输出 tokens"), t("读缓存 tokens")].join(",")]
       .concat(keys.map((k) => { const x = us.days.get(k); return [k, x.m, x.t, x.tl, x.i, x.o, x.c].join(","); }));
     try {
-      const r = await post("/api/usage/csv", { name: "cccodroid-usage-" + usDayKey(new Date()) + ".csv", text: rows.join("\n") });
+      const r = await post("/api/usage/csv", { name: "coxdragon-usage-" + usDayKey(new Date()) + ".csv", text: rows.join("\n") });
       if (canSaveAs()) saveAs(r.file, "text/csv"); else toast(t("已保存：{name}", { name: r.file }));
     } catch (e) { toast(e.message, true); }
   });
@@ -399,7 +399,7 @@
   });
   // 月报图片：先交给网关落成文件，再走「保存到」/ 系统分享；都没有就让浏览器自己下载
   async function usCardFile() {
-    const [y, m] = us.month, name = `cccodroid-usage-${y}-${String(m + 1).padStart(2, "0")}.png`;
+    const [y, m] = us.month, name = `coxdragon-usage-${y}-${String(m + 1).padStart(2, "0")}.png`;
     // 导出的图另画一张：多了右上角的头像与昵称
     const p = profile(), cv = document.createElement("canvas");
     let img = null;

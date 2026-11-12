@@ -1,6 +1,6 @@
-# cccodroid help
+# coxdragon help
 
-cccodroid runs the **official, unmodified Claude Code** on your phone, wraps it in a graphical interface and ships a full developer toolchain. Claude can read and write files, run commands and start local servers, just as it would in a terminal on a computer.
+coxdragon runs the **official, unmodified Claude Code** on your phone, wraps it in a graphical interface and ships a full developer toolchain. Claude can read and write files, run commands and start local servers, just as it would in a terminal on a computer.
 
 ## Getting started
 
@@ -41,7 +41,7 @@ These choices are stored in the app's own data, so clearing the WebView cache wo
 ## Conversations
 
 - **Enter sends.** Sending while Claude is busy queues the message; ⚡ interjects into the running turn without stopping it.
-- `/` opens slash commands and `@` references a file. Use Share → cccodroid in other apps to attach files directly.
+- `/` opens slash commands and `@` references a file. Use Share → coxdragon in other apps to attach files directly.
 - The top row of ＋ next to the input box: Attach file, Take photo, Screenshot, Browse files. Photos are scaled to 2048 px on the long side before they're attached. **Long-press Screenshot to take it in 5 seconds**: switch to the app you want to capture in the meantime, and you'll be brought back afterwards.
 - Tool calls collapse into one line such as "3 steps · done"; tap to see each step. Steps that need you, or that failed, open on their own.
 - **Subagents** get their own card below the steps that launched them: one row per subagent with its status, step count and what it's doing; tap a row to open its steps. At the bottom, the message log shows "who → whom · what about". Each subagent's brief and report are saved under `.cccodroid/agents/` in the project folder; tap "Brief" or "Report" to read them.
@@ -73,7 +73,7 @@ These choices are stored in the app's own data, so clearing the WebView cache wo
 - Approval cards appear under the tool that needs them, and a bar above the input box keeps them in view. Allow, always allow, or deny with an optional reason. Approving a request never loosens the mode; change that in Settings.
 - If Claude enters plan mode by itself while "Allow everything" is on, tap "Approve, keep current mode" on the plan card: that turn goes back to your previous mode and the global setting stays as it was.
 - In the background you are notified when a turn ends or needs you. Notifications can only deny; to allow, come back and read the full command.
-- Swiping cccodroid away in Recents closes it: if nothing is running, the gateway stops, the ongoing notification goes away and it won't restart itself; a running turn keeps going and the gateway stops after it finishes. Scheduled tasks are still woken by a system alarm when they're due.
+- Swiping coxdragon away in Recents closes it: if nothing is running, the gateway stops, the ongoing notification goes away and it won't restart itself; a running turn keeps going and the gateway stops after it finishes. Scheduled tasks are still woken by a system alarm when they're due.
 - Keys stay in the app's private directory. Account sign-in is handled by Claude Code itself; the app never touches your credentials.
 
 ## Projects and scheduled tasks
@@ -142,23 +142,23 @@ First check which protocol the endpoint speaks; the setup differs:
 
 ## Shizuku and system permissions
 
-- Settings → Device & permissions → Install and activate. It activates over wireless debugging with no computer, and reactivates itself after a reboot. If you already have **Sui** (a Magisk / KernelSU module), grant cccodroid in Sui and you're done; no Shizuku app needed.
+- Settings → Device & permissions → Install and activate. It activates over wireless debugging with no computer, and reactivates itself after a reboot. If you already have **Sui** (a Magisk / KernelSU module), grant coxdragon in Sui and you're done; no Shizuku app needed.
 - Once active, the terminal and Claude can run `priv '<command>'` as the shell user; every call is kept in the Privileged command log.
-- **Privileged commands need your OK.** Only read-only commands such as `dumpsys <service>`, `pm list` and `settings get` run straight away. Anything else shows a dialog in cccodroid with the exact command, and runs only if you allow it. If cccodroid isn't in the foreground, or another command is already waiting, it is refused, so a task left running in the background stops at its first privileged command. Ways to loosen this, from narrowest to widest:
+- **Privileged commands need your OK.** Only read-only commands such as `dumpsys <service>`, `pm list` and `settings get` run straight away. Anything else shows a dialog in coxdragon with the exact command, and runs only if you allow it. If coxdragon isn't in the foreground, or another command is already waiting, it is refused, so a task left running in the background stops at its first privileged command. Ways to loosen this, from narrowest to widest:
   - "Allow, and don't ask again for this command for 10 minutes": only for that exact command.
   - Tick "Allow all later privileged commands in this session" before allowing: that session won't be asked again and can keep going in the background. It resets when the app restarts and never applies to scheduled tasks.
   - Settings → Device & permissions → "Stop confirming privileged commands one by one (at your own risk)": every privileged command runs directly. Turning it on shows a disclaimer: damage caused by a wrong command, a model's mistake or an injected script is your own responsibility.
-  - Whichever you choose, commands that touch cccodroid itself or Shizuku / Sui are caught and confirmed where possible, but not every form can be caught (for example, one hidden in a script file).
+  - Whichever you choose, commands that touch coxdragon itself or Shizuku / Sui are caught and confirmed where possible, but not every form can be caught (for example, one hidden in a script file).
 - **Device tools** (off by default): let Claude post notifications, use the clipboard and share files. Reading and tapping the screen needs accessibility, which can switch on only while in use.
 - **Memory manager** (off by default): stops background apps outside your allow list before heavy jobs. In the terminal, use `cc-mem run -- <command>`.
 
 ## Updates and repair
 
 - **Auto-update** (on by default): Claude Code updates silently; a new app version is signature-checked, then offered for install; toolkit updates download on Wi‑Fi and are applied the next time you open the app.
-- The toolkit can come from GitHub, the cccodroid.net mirror or a local file. If one source stalls, the other takes over and resumes; everything is checked against hashes shipped in the APK.
+- The toolkit can come from GitHub or a local file. Downloads resume after a network drop; everything is checked against hashes shipped in the APK.
 - Updates are verified against the release manifest before anything is replaced. If one is interrupted, it finishes or rolls back on the next launch.
 - The Repair ledger under Settings → Troubleshooting records every install, check and repair.
-- **Two install packages**: the usual `cccodroid.apk` targets SDK 28 and runs on the widest range of devices; `cccodroid-36.apk` targets SDK 36 for newer phones whose system refuses apps with an old target SDK. Both have the same features and share data, and you can switch at any time under Settings → Updates → Install package. If the system ever refuses the 28 build, the app remembers it and only updates to 36 from then on; choosing 28 is then blocked. In the 36 build, toolkit programs are started through the system loader, so the odd program that locates its data relative to its own path may misbehave — please report it if you hit one.
+- **Install package**: `coxdragon.apk` targets SDK 28 and runs on the widest range of devices. A targetSdk 36 build is planned but not shipped yet.
 
 ## Known issues
 
