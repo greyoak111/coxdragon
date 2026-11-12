@@ -28,7 +28,7 @@ test("195-G.6 真机：浏览器打开时 403 记成 foreign，事件流别再�
   assert.match(boot, /e\.status === 403 && location\.hostname !== "127\.0\.0\.2"\) \{\s*srv\.foreign = true;[\s\S]{0,120}es\.close\(\)/);
   assert.match(flow, /if \(srv\.foreign\) \{ es = null; return; \}/);
   assert.match(flow, /setStatus\(srv\.foreign \? t\("请在 cccodroid 应用里打开"\) : t\("与网关断开/);
-  assert.match(rd("web/index.html"), /<title>cccodroid<\/title>/);
+  assert.match(rd("web/index.html"), /<title>coxdragon<\/title>/);
   assert.match(rd("web/index.html"), /<link rel="icon" type="image\/png" href="\/icon.png">/);
   assert.ok(fs.statSync(path.join(G, "web/icon.png")).size > 1000, "页签图标用应用图标");
 });
