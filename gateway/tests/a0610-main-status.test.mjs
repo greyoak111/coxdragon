@@ -72,7 +72,7 @@ test("特权免确认时长可选、最长一周：网关只放行固定几档�
   const src = (f) => fs.readFileSync(new URL(f, import.meta.url), "utf8");
   assert.match(src("../gw/devside.mjs"), /\[1, 4, 24, 72, 168\]\.includes\(\+b\.hours\) \? \+b\.hours : 24/);
   assert.match(src("../web/app/10-settings-device.js"), /hours: \+\$\("priv-na-hours"\)\.value \|\| 24/);
-  const java = src("../../android/java/cc/codroid/Priv.java");
+  const java = src("../../android/java/cox/dragon/Priv.java");
   assert.match(java, /NOASK_HOURS = \{ 1, 4, 24, 72, 168 \}/);
   assert.match(java, /NOASK_MAX = 7L \* 24 \* 3600 \* 1000/);
   assert.ok(!/NOASK_TTL/.test(java), "旧的固定 24 小时常量不再用");

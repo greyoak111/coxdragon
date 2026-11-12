@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
-const PRIV = rd("android/java/cc/codroid/Priv.java");
+const PRIV = rd("android/java/cox/dragon/Priv.java");
 const block = (() => { const i = PRIV.indexOf('case "apk_install": {'); assert.ok(i > 0); return PRIV.slice(i, PRIV.indexOf('case "usb_open"', i)); })();
 
 test("应用侧：前台才受理；过分享同一道 guard；验的和装的是暂存的同一份；先确认再装；自己的新版本不走这里；留痕", () => {
@@ -27,14 +27,14 @@ test("应用侧：前台才受理；过分享同一道 guard；验的和装的�
 
 test("确认框按来路换成「安装应用」的标题和说明，不说成以 Shizuku 身份跑命令（11-09 真机看到的）", () => {
   assert.match(PRIV, /!trustable && key\.startsWith\("apk:"\) \? "apk"/);
-  const ma = rd("android/java/cc/codroid/MainActivity.java");
+  const ma = rd("android/java/cox/dragon/MainActivity.java");
   assert.match(ma, /"apk"\.equals\(i\.getStringExtra\("kind"\)\)\);/);
   assert.match(ma, /apk \? Tr\.t\("安装这个应用？"\)/);
   assert.match(ma, /: apk \? cmd \+ "\\n\\n" \+ Tr\.t\("点「允许」后还会弹出系统的安装确认。/);
 });
 
 test("安装结果：查看器装的给一句提示，用户取消不提示；不走更新页的状态", () => {
-  const ev = rd("android/java/cc/codroid/Events.java");
+  const ev = rd("android/java/cox/dragon/Events.java");
   const i = ev.indexOf('if ("file".equals(what)) {');
   assert.ok(i > 0 && i < ev.indexOf("Updater.get(c).onInstallResult"));
   assert.match(ev.slice(i, i + 500), /STATUS_FAILURE_ABORTED[\s\S]*?Toast[\s\S]*?return;/);

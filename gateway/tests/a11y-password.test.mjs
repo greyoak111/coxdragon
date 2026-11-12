@@ -1,9 +1,9 @@
-// 读屏跳过密码框（android/java/cc/codroid/A11y.java）：Java 侧本机跑不了，只能核源码；外加 A11y 用到的外壳文案九种语言都有
+// 读屏跳过密码框（android/java/cox/dragon/A11y.java）：Java 侧本机跑不了，只能核源码；外加 A11y 用到的外壳文案九种语言都有
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const SRC = fs.readFileSync(new URL("../../android/java/cc/codroid/A11y.java", import.meta.url), "utf8");
+const SRC = fs.readFileSync(new URL("../../android/java/cox/dragon/A11y.java", import.meta.url), "utf8");
 const body = (name) => {
   const i = SRC.indexOf(name);
   assert.ok(i >= 0, "找不到 " + name);

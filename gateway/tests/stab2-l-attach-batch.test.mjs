@@ -8,7 +8,7 @@ import vm from "node:vm";
 
 const read = (p) => fs.readFileSync(new URL(`../web/${p}`, import.meta.url), "utf8");
 const src05 = read("app/05-composer.js");
-const java = fs.readFileSync(new URL("../../android/java/cc/codroid/MainActivity.java", import.meta.url), "utf8");
+const java = fs.readFileSync(new URL("../../android/java/cox/dragon/MainActivity.java", import.meta.url), "utf8");
 
 // 和 stab-f-attach-copy 同样的抽取方式：直接跑 05-composer.js 里的真代码（选择器事件块）
 function loadPickState() {

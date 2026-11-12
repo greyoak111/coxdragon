@@ -16,7 +16,7 @@ test("只提了文件名 / 相对路径：记下来，下一轮取一次就清",
   assert.deepEqual(w.lazy().map((x) => x.said), ["index.html", "game/main.js"]);
   settlePathNote("s1", w);
   const n = takePathNote("s1");
-  assert.match(n, /index\.html → \/data\/user\/0\/cc\.codroid\/files\/home\/workspace\/game\/index\.html/);
+  assert.match(n, /index\.html → \/data\/user\/0\/cox\.dragon\/files\/home\/workspace\/game\/index\.html/);
   assert.match(n, /starting with \//);
   assert.equal(takePathNote("s1"), "");
 });

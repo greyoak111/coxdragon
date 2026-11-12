@@ -1,11 +1,11 @@
 // 第二份稳定性报告 l 组：Android 宿主修复的接线锚点。
-// 纯逻辑由 android/tests/cc/codroid/Stab2LHostTest.java 跑；这里只检查生命周期 / 投递路径确实接上了，
+// 纯逻辑由 android/tests/cox/dragon/Stab2LHostTest.java 跑；这里只检查生命周期 / 投递路径确实接上了，
 // 因为这些时序在 JS 测试里模拟不了，真机也没跑（见交付说明「未测」）。
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 
-const read = (p) => fs.readFileSync(new URL(`../../android/java/cc/codroid/${p}`, import.meta.url), "utf8");
+const read = (p) => fs.readFileSync(new URL(`../../android/java/cox/dragon/${p}`, import.meta.url), "utf8");
 const gw = read("GatewayService.java");
 const notify = read("Notify.java");
 const dev = read("DeviceTools.java");

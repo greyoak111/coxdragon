@@ -9,7 +9,7 @@ import vm from "node:vm";
 
 const read = (p) => fs.readFileSync(new URL(`../web/${p}`, import.meta.url), "utf8");
 const src05 = read("app/05-composer.js");
-const java = fs.readFileSync(new URL("../../android/java/cc/codroid/MainActivity.java", import.meta.url), "utf8");
+const java = fs.readFileSync(new URL("../../android/java/cox/dragon/MainActivity.java", import.meta.url), "utf8");
 
 // 从 05-composer.js 里取出选择器快照与三个新事件的监听（不改一处逻辑，测试直接跑真代码）
 function loadPickState() {

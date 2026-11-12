@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const rd = (p) => fs.readFileSync(path.join(ROOT, p), "utf8");
-const MA = rd("android/java/cc/codroid/MainActivity.java");
+const MA = rd("android/java/cox/dragon/MainActivity.java");
 const body = (src, head) => { const i = src.indexOf(head); assert.ok(i >= 0, head); return src.slice(i, src.indexOf("\n    }\n", i)); };
 
 test("有文件时先弹过 guard 的确认框，点「收下」才拷；只有文字不问", () => {
