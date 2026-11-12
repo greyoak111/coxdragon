@@ -18,7 +18,7 @@ import { execFileSync } from "node:child_process";
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
 const OUT = path.join(ROOT, "gateway/web/changelog");
 const WN = path.join(ROOT, "android/assets/whatsnew");
-const REPO = "greyoak111/cccodroid";
+const REPO = "greyoak111/coxdragon";
 
 const cmpVer = (a, b) => {
   const x = a.split(/[.-]/).map(Number), y = b.split(/[.-]/).map(Number);
