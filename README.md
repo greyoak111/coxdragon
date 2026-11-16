@@ -24,8 +24,13 @@ the Codex page and the `cox.dragon` package are new.
 - **Official Codex, unmodified.** Downloads `codex-app-server` from the
   `openai/codex` release, verifies the pinned SHA-256, and speaks the documented
   stdio JSON-RPC protocol (`initialize`, `thread/*`, `turn/*`, `account/*`).
-- **ChatGPT device-code login.** No API key is embedded. The app shows the one-time
-  code and opens the verification URL in your browser.
+- **Choose your connection.** Sign in to ChatGPT with a device code, configure your
+  own Responses or Chat Completions API endpoint/key/model, or skip and explore first.
+  Fetch a provider model catalog, auto-detect the protocol and test a short model
+  request before connecting. Chat Completions uses an authenticated local adapter
+  for text, images and function/custom tool calls; Responses-only features need Responses.
+  Keys stay in the app's private directory; changing endpoints requires re-entering
+  the key. This is an independent client, not an official OpenAI app.
 - **A real workbench, not a terminal wrapper.** Thread list, streaming agent messages,
   reasoning summaries, shell cards with live output, patch cards, MCP tool cards,
   plans, model/reasoning-effort selection, and an approval card for every command
@@ -118,11 +123,19 @@ Early alpha. The protocol and login path have been exercised against the officia
 - [x] `thread/start`, `thread/list`, `thread/resume`, `turn/start`, `turn/interrupt`
 - [x] map `item/*` / `turn/*` notifications into the workbench UI
 - [x] approval cards and JSON-RPC responses
+- [x] Codex settings with persistent model/effort preferences and actual permission policy
+- [x] Codex activity in Android busy detection, completion and approval notifications
+- [x] project-aware Codex skills/MCP inventory, skill toggles and instruction/config file entry points
 - [x] a dedicated `devkit-2026.11.12` build for `cox.dragon`
 - [x] a separate `coxdragon-components` market (recipes, built packages, signed index)
 - [ ] a real end-to-end turn with a logged-in ChatGPT account on device
 - [ ] targetSdk 36 validation
 - [ ] screenshots and a short video
+
+Cross-platform protocol and background-marker regression: `node scripts/test-codex-engine.mjs`.
+Browser fixtures and layout screenshots: `node scripts/test-codex-ui.mjs --screenshots`.
+These use synthetic state; system notification delivery and the new workflow still require
+device validation. See [the workflow checklist](docs/desktop-workflow.zh-CN.md) for scope.
 
 First install uses the `devkit-2026.11.12` release published from this repository.
 Components come from the separate `coxdragon-components` market, built against the
@@ -150,6 +163,22 @@ TARGET_SDK=36 sh scripts/build.sh
 # → move dist/coxdragon.apk to dist/coxdragon-36.apk
 ```
 
+On Windows, install SDK Build Tools `35.0.0`, platform `android-35` and NDK
+`27.2.12479018` (the same versions as CI). Use JDK 17 or newer and native Node:
+
+```powershell
+$env:ANDROID_SDK_ROOT = 'E:\Android\Sdk' # your SDK directory
+$env:JAVA_HOME = 'C:\path\to\jdk'
+$env:KEY = 'C:\private\coxdragon-release.json' # keep outside the repository
+node scripts/build-windows.mjs
+# → dist/coxdragon.apk, verified with the SDK apksigner
+$env:TARGET_SDK = '36'
+node scripts/build-windows.mjs
+# → dist/coxdragon-36.apk
+Remove-Item Env:TARGET_SDK
+# Or build both variants together: node scripts/build-windows.mjs --all-targets
+```
+
 The devkit pin lives in `devkit-pin.json`; `devkit-sources.txt` names the release
 directory. `android/assets/gwpin.json` is generated from the pinned devkit and is
 checked into the build only for reproducibility. Build caches (`devkit/cache`,
@@ -158,13 +187,22 @@ checked into the build only for reproducibility. Build caches (`devkit/cache`,
 ## First run
 
 1. Install the APK. Android may ask for permission to install unknown apps.
-2. Choose where to get the development toolkit (GitHub or a mirror) and which modules
-   to install. The base module is required; the default selection is about 330 MB.
-3. The app runs the devkit's first-run scripts, then asks you to install the Codex
-   engine (about 84 MB, official release, SHA-256 verified).
-4. Open the **Codex** page → **登录 ChatGPT** → open the verification URL and enter
-   the one-time code. The card disappears when the app-server reports success.
-5. Type a task. Commands that need approval appear above the input box.
+2. Tap **Set up my workbench** and review the download size. The recommended setup
+   includes the required base environment and command-line tools. Download sources,
+   offline installation, and extra modules are available under the expandable options.
+3. Install Codex (about 84 MB, official release, SHA-256 verified). Download progress
+   survives reopening the app; failed steps can be retried.
+4. Choose ChatGPT login, **Custom third-party API**, or **Skip and explore the workspace**.
+   ChatGPT uses its official browser authorization flow. Custom APIs need a base URL,
+   model name and key, and must support the Responses API. Skip preserves your draft
+   and asks you to connect only when you send a task. The connection can be changed
+   later under **Codex settings → Model connection** while no Codex task is running.
+5. Select a project or use the current workspace. This opens an empty task without
+   sending anything to the model. Returning users resume their workbench directly.
+
+The native setup and Codex page share the same three stages: environment, account,
+and first task. Installation details are expandable. Optional system permission
+prompts are deferred until a launch after setup is completed.
 
 ## Repository layout
 

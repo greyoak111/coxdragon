@@ -22,10 +22,13 @@ import net from "node:net";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import { CFG, PREFIX, log } from "./config.mjs";
+import { CFG, PREFIX, LIVE, log } from "./config.mjs";
 import { NEXT, readBody, sendJson } from "./http.mjs";
-import { enosysRun } from "./claude.mjs";
 import { SETTINGS } from "./settings-store.mjs";
+import { runFlag } from "./activity.mjs";
+import { loadState, writeAtomic as saveState } from "./statefile.mjs";
+import { connectionStatus, prepareConnectionLaunch, updateConnection, connectionErrorMessage, CUSTOM_PROVIDER } from "./codex-connection.mjs";
+import { discoverApiModels, testApiConnection } from "./codex-api.mjs";
 
 // ── 钉住的 Codex 版本 ─────────────────────────────────────────────────
 // 升级只改这里，并把新的 tar / 二进制 sha256 一起换掉。和 cccodroid 的 devkit 无关。
@@ -46,6 +49,8 @@ const BIN = path.join(ROOT, CODEX.binName);
 const CODEX_HOME = process.env.CCAPP_CODEX_HOME || path.join(CFG.home, ".codex");
 const CACHE = path.join(CFG.home, ".cache", "coxdragon");
 const LOG_LIMIT = 24 * 1024;
+const PREF_FILE = path.join(CFG.home, "coxdragon-codex.json");
+const prefs = loadState(PREF_FILE, { max: 4096, shape: (j) => j && typeof j === "object" && !Array.isArray(j) ? j : undefined }).data;
 
 // ── 小工具 ───────────────────────────────────────────────────────────
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
@@ -110,13 +115,17 @@ async function downloadTo(url, dest, onProgress) {
   if (start > 0) headers.range = `bytes=${start}-`;
   let res;
   try { res = await fetch(url, { redirect: "follow", headers }); }
-  catch (e) {
-    if (start > 0) { try { fs.rmSync(part); } catch {} }
-    throw e;
-  }
+  catch (e) { throw e; } // A network error must preserve the already downloaded bytes.
   if (res.status === 416) { try { fs.rmSync(part); } catch {} throw new Error("续传位置无效，已重新开始"); }
   if (!res.ok) throw new Error(`下载 Codex 引擎失败：HTTP ${res.status}`);
   let append = start > 0 && res.status === 206;
+  if (res.status === 206) {
+    const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get("content-range") || "");
+    if (!range || Number(range[1]) !== start || Number(range[3]) !== CODEX.size || Number(range[2]) < start || Number(range[2]) >= CODEX.size) {
+      await res.body?.cancel();
+      throw new Error("下载线路的续传范围不匹配，请重试");
+    }
+  }
   if (!append) start = 0;
   const total = Number(res.headers.get("content-length") || 0) + start || CODEX.size;
   INSTALL.total = total;
@@ -204,10 +213,11 @@ async function doInstall() {
   broadcastInstall();
   const tar = path.join(CACHE, CODEX.asset);
   let ok = false;
-  const urls = [CODEX.url, PROXY_PREFIX + CODEX.url];
+  const urls = [CODEX.url, PROXY_PREFIX + CODEX.url, PROXY_PREFIX + CODEX.url, PROXY_PREFIX + CODEX.url];
   let last = "";
   for (const u of urls) {
     try {
+      INSTALL.phase = "下载官方 Codex 引擎（约 84 MB）"; broadcastInstall();
       await downloadTo(u, tar, (d, t) => { INSTALL.done = d; INSTALL.total = t; if (d === t || d % (4 << 20) < (1 << 20)) broadcastInstall(); });
       ok = true; break;
     } catch (e) { last = errMsg(e); INSTALL.phase = "下载失败，换线路重试"; broadcastInstall(); }
@@ -366,14 +376,59 @@ class Rpc {
 
 // ── 引擎状态 ─────────────────────────────────────────────────────────
 const S = {
-  child: null, rpc: null, starting: null,
+  child: null, rpc: null, starting: null, generation: 0, closeAdapter: null, connectionProbe: null,
   account: null, models: [],
-  activeThread: null, activeTurn: null,
+  activeThread: null, activeTurn: null, runningTurns: new Map(), startingTurns: new Set(), endedTurns: new Set(),
   cwd: CFG.workspace,
   approvals: new Map(), sse: new Set(),
   lastError: "", stderr: "", startedAt: 0,
-  model: "", effort: "",
+  model: connectionStatus().mode === "custom" ? connectionStatus().model : typeof prefs.model === "string" ? prefs.model.slice(0, 200) : "",
+  effort: connectionStatus().mode === "custom" ? "" : typeof prefs.effort === "string" ? prefs.effort.slice(0, 40) : "",
+  titles: new Map(),
+  diagnostics: [],
 };
+
+// Deliberately omit prompts, replies, tool arguments and account credentials.
+// Native diagnostic export reads this bounded snapshot even if the UI reconnects.
+function recordTaskEvent(method, params = {}) {
+  const c = connectionStatus(), turn = params.turn;
+  const error = params.error || turn?.error;
+  const entry = { at: Date.now(), event: method, threadId: params.threadId || "", turnId: turn?.id || params.turnId || "",
+    ...(turn?.status ? { status: turn.status } : {}), ...(error ? { message: connectionErrorMessage(error) } : {}),
+    ...(params.willRetry != null ? { willRetry: !!params.willRetry } : {}) };
+  S.diagnostics.push(entry); if (S.diagnostics.length > 40) S.diagnostics.shift();
+  mkdir(CACHE);
+  saveState(path.join(CACHE, "codex-diagnostics.json"), JSON.stringify({ version: CODEX.version, connection: { mode: c.mode, baseUrl: c.baseUrl, wireApi: c.wireApi, model: c.model },
+    server: !!S.rpc, lastError: S.lastError, running: [...S.runningTurns].map(([threadId, t]) => ({ threadId, turnId: t.id })), events: S.diagnostics }), { mode: 0o600 });
+  log(`[codex] ${method} thread=${entry.threadId} turn=${entry.turnId}${entry.status ? " status=" + entry.status : ""}${entry.willRetry != null ? " retry=" + entry.willRetry : ""}${entry.message ? " " + entry.message : ""}`);
+}
+
+const activityListeners = new Set();
+export const onCodexActivity = (fn) => { activityListeners.add(fn); return () => activityListeners.delete(fn); };
+export function codexActivity() {
+  return {
+    busy: !!(S.runningTurns.size || S.startingTurns.size || S.approvals.size),
+    running: S.runningTurns.size, starting: S.startingTurns.size,
+    approvals: [...S.approvals.values()].map((p) => ({
+      id: "codex:" + p.id, engine: "codex", sessionId: p.params?.threadId || "",
+      runId: "codex:" + (p.params?.turnId || ""),
+      tool: p.method === "item/tool/requestUserInput" ? "AskUserQuestion" : p.method,
+      input: p.params || {}, description: p.params?.reason || "",
+    })),
+  };
+}
+function activityChanged(done) {
+  const state = codexActivity();
+  runFlag(state.busy, "codex");
+  for (const fn of activityListeners) {
+    try { fn({ type: "codex_state", codex: state }); if (done) fn(done); } catch {}
+  }
+}
+function rememberTitle(thread) {
+  if (!thread?.id) return;
+  S.titles.set(thread.id, String(thread.name || thread.preview || "Codex").slice(0, 200));
+  if (S.titles.size > 200) S.titles.delete(S.titles.keys().next().value);
+}
 
 function broadcast(ev) {
   const line = Buffer.from(`data: ${JSON.stringify(ev)}\n\n`);
@@ -411,6 +466,7 @@ function status() {
     version: CODEX.version,
     install: { ...INSTALL },
     server: !!S.rpc,
+    connection: connectionStatus(),
     account: acc ? {
       type: acc.type, email: acc.email || "", planType: acc.planType || "",
       workspaceName: acc.workspaceName || "", userId: S.account.userId || "",
@@ -419,9 +475,12 @@ function status() {
     models: S.models.map(slimModel),
     activeThread: slimThread(S.activeThread),
     activeTurn: S.activeTurn ? { id: S.activeTurn.id, status: S.activeTurn.status } : null,
+    runningTurns: [...S.runningTurns].map(([threadId, turn]) => ({ threadId, turn: { id: turn.id, status: turn.status } })),
+    approvals: [...S.approvals.values()].map((p) => ({ ...p, id: String(p.id) })),
     cwd: S.cwd,
     model: S.model || "",
     effort: S.effort || "",
+    permissions: { approvalPolicy: "untrusted", sandbox: "danger-full-access", boundary: "android-app-uid" },
     lastError: S.lastError,
     stderr: (S.rpc ? S.rpc.stderr : S.stderr).slice(-4000),
     proxy: proxy ? { port: proxy.port } : null,
@@ -438,30 +497,61 @@ async function refreshAccount() {
 }
 async function refreshModels() {
   if (!S.rpc) return [];
+  const connection = connectionStatus();
+  if (connection.mode === "custom") {
+    S.model = connection.model; S.effort = "";
+    S.models = [{ id: connection.model, model: connection.model, displayName: connection.model, isDefault: true, supportedReasoningEfforts: [] }];
+    return S.models;
+  }
   try { const r = await S.rpc.request("model/list", {}); S.models = Array.isArray(r && r.data) ? r.data : []; }
   catch (e) { log("[codex] model/list 失败：" + errMsg(e)); }
   return S.models;
 }
 
 function handleNotify(m) {
+  let done;
   S.stderr = S.rpc ? S.rpc.stderr : S.stderr;
   switch (m.method) {
-    case "turn/started": S.activeTurn = m.params && m.params.turn || null; break;
-    case "turn/completed": if (!S.activeTurn || !m.params || !m.params.turn || m.params.turn.id === S.activeTurn.id) S.activeTurn = null; break;
+    case "turn/started": {
+      const p = m.params || {};
+      S.lastError = "";
+      if (p.threadId && p.turn) S.runningTurns.set(p.threadId, p.turn);
+      if (p.threadId === S.activeThread?.id) S.activeTurn = p.turn || null;
+      break;
+    }
+    case "turn/completed": {
+      const p = m.params || {}, running = S.runningTurns.get(p.threadId);
+      if (p.turn?.error) S.lastError = connectionErrorMessage(p.turn.error);
+      if (p.turn?.id) { S.endedTurns.add(p.turn.id); if (S.endedTurns.size > 200) S.endedTurns.delete(S.endedTurns.values().next().value); }
+      if (!running || !p.turn || p.turn.id === running.id) S.runningTurns.delete(p.threadId);
+      if (p.threadId === S.activeThread?.id && (!S.activeTurn || !p.turn || p.turn.id === S.activeTurn.id)) S.activeTurn = null;
+      for (const [id, a] of S.approvals) if (a.params?.threadId === p.threadId && (a.params?.turnId === p.turn?.id || (!a.params?.turnId && (!running || running.id === p.turn?.id)))) {
+        S.approvals.delete(id); broadcast({ type: "approval-done", id });
+      }
+      if (p.turn?.id) done = { type: "codex_done", engine: "codex", runId: "codex:" + p.turn.id,
+        sessionId: p.threadId, text: S.titles.get(p.threadId) || "Codex", failed: p.turn.status === "failed" || !!p.turn.error,
+        aborted: p.turn.status === "interrupted" };
+      break;
+    }
     case "thread/started": if (m.params && m.params.thread) S.activeThread = m.params.thread; break;
     case "thread/status/changed": if (m.params && S.activeThread && m.params.threadId === S.activeThread.id) S.activeThread.status = m.params.status; break;
     case "account/login/completed":
       if (m.params && m.params.success) refreshAccount().then(() => refreshModels()).catch(() => {});
       break;
     case "account/updated": refreshAccount().catch(() => {}); break;
+    case "serverRequest/resolved":
+      if (m.params?.requestId != null || m.params?.id != null) S.approvals.delete(String(m.params.requestId ?? m.params.id));
+      break;
     case "error":
-      if (m.params && m.params.error) S.lastError = m.params.error.message || "";
+      if (m.params && m.params.error) S.lastError = connectionErrorMessage(m.params.error);
       break;
     case "warning":
     case "configWarning":
       if (m.params && m.params.message) log("[codex] " + m.params.message);
       break;
   }
+  if (["turn/started", "turn/completed", "error"].includes(m.method)) recordTaskEvent(m.method, m.params);
+  if (["turn/started", "turn/completed", "serverRequest/resolved"].includes(m.method)) activityChanged(done);
   broadcast({ type: "rpc", method: m.method, params: m.params });
 }
 
@@ -478,6 +568,7 @@ function handleRequest(m) {
   }
   const pending = { id: m.id, method: m.method, params: m.params };
   S.approvals.set(String(m.id), pending);
+  activityChanged();
   broadcast({ type: "approval", id: String(m.id), method: m.method, params: m.params });
   log(`[codex] 等待确认：${m.method} id=${m.id}`);
 }
@@ -502,14 +593,28 @@ async function startRpc() {
   env.NO_COLOR = "1";
   // 静态 musl 程序在 Android 14+ 会被 seccomp 拦下较新的系统调用，直接 SIGSYS；和 claude 一样套上
   // 「静态程序兼容」的监督器（跟进子进程），让被拦的调用拿到 ENOSYS 自己退回老接口。
-  const er = SETTINGS.staticCompat !== false ? enosysRun() : "";
-  const argv = ["--listen", "stdio://"];
+  // 只有实际启动进程时才加载兼容监督器，Codex 的协议状态不依赖 Claude 运行时。
+  const er = SETTINGS.staticCompat !== false ? (await import("./claude.mjs")).enosysRun() : "";
+  const connection = await prepareConnectionLaunch();
+  S.closeAdapter = connection.close;
+  delete env.COXDRAGON_CUSTOM_API_KEY;
+  if (connectionStatus().mode === "custom") { delete env.OPENAI_API_KEY; delete env.CODEX_API_KEY; delete env.OPENAI_BASE_URL; }
+  Object.assign(env, connection.env);
+  const argv = [...connection.args, "--listen", "stdio://"];
   const child = spawn(er || BIN, er ? ["-f", BIN, ...argv] : argv, { cwd: isDir(S.cwd) ? S.cwd : CFG.workspace, env, stdio: ["pipe", "pipe", "pipe"] });
-  const rpc = new Rpc(child, { onNotify: handleNotify, onRequest: handleRequest });
+  // 停止或换过引擎之后，旧进程缓冲区里剩下的事件和审批不能进入新会话。
+  const rpc = new Rpc(child, {
+    onNotify: (m) => { if (S.child === child) handleNotify(m); },
+    onRequest: (m) => { if (S.child === child) handleRequest(m); },
+  });
   S.child = child; S.rpc = rpc; S.stderr = ""; S.lastError = ""; S.startedAt = Date.now();
   child.on("exit", (code, signal) => {
     if (S.child === child) {
+      S.closeAdapter?.(); S.closeAdapter = null;
       S.child = null; S.rpc = null; S.activeTurn = null;
+      S.generation++;
+      S.runningTurns.clear(); S.startingTurns.clear(); S.approvals.clear();
+      activityChanged();
       broadcast({ type: "server", state: "exited", code, signal, stderr: rpc.stderr.slice(-4000) });
       log(`[codex] 引擎退出 code=${code} signal=${signal || ""}`);
     }
@@ -531,20 +636,24 @@ async function startRpc() {
 }
 
 function ensureRpc() {
-  if (S.rpc) return Promise.resolve(S.rpc);
   if (S.starting) return S.starting;
+  if (S.rpc) return Promise.resolve(S.rpc);
   S.starting = startRpc().finally(() => { S.starting = null; });
   return S.starting;
 }
 
 function stopServer() {
   const c = S.child;
+  S.closeAdapter?.(); S.closeAdapter = null;
+  S.generation++;
   S.child = null; S.rpc = null; S.activeTurn = null;
+  S.runningTurns.clear(); S.startingTurns.clear(); S.approvals.clear();
+  activityChanged();
   if (c) { try { c.stdin.end(); } catch {} try { c.kill("SIGTERM"); } catch {} setTimeout(() => { try { c.kill("SIGKILL"); } catch {} }, 1500).unref(); }
   broadcast({ type: "server", state: "stopped" });
 }
 
-process.on("exit", () => { if (S.child) { try { S.child.kill("SIGKILL"); } catch {} } if (proxy) { try { proxy.srv.close(); } catch {} } });
+process.on("exit", () => { S.closeAdapter?.(); if (S.child) { try { S.child.kill("SIGKILL"); } catch {} } if (proxy) { try { proxy.srv.close(); } catch {} } });
 
 // ── 高级动作 ─────────────────────────────────────────────────────────
 async function startThread(cwd) {
@@ -552,54 +661,89 @@ async function startThread(cwd) {
   const dir = safeCwd(cwd) || safeCwd(CFG.workspace) || CFG.workspace;
   const params = {
     cwd: dir,
+    modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
     sandbox: "danger-full-access",
     approvalPolicy: "untrusted",
   };
   if (S.model) params.model = S.model;
   const r = await rpc.request("thread/start", params, 60000);
-  if (r && r.thread) { S.activeThread = r.thread; S.activeTurn = null; S.cwd = dir; broadcast({ type: "thread", thread: slimThread(r.thread) }); }
+  if (r && r.thread) { S.activeThread = r.thread; rememberTitle(r.thread); S.activeTurn = null; S.cwd = dir; broadcast({ type: "thread", thread: slimThread(r.thread) }); }
   return r;
 }
 async function resumeThread(threadId) {
   const rpc = await ensureRpc();
   const r = await rpc.request("thread/resume", {
     threadId: String(threadId),
+    modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
+    ...(S.model ? { model: S.model } : {}),
     sandbox: "danger-full-access",
     approvalPolicy: "untrusted",
   }, 60000);
-  if (r && r.thread) { S.activeThread = r.thread; S.activeTurn = null; S.cwd = r.thread.cwd || S.cwd; broadcast({ type: "thread", thread: slimThread(r.thread) }); }
+  if (r && r.thread) {
+    S.activeThread = r.thread;
+    rememberTitle(r.thread);
+    // 恢复会话只改变当前视图，不能把正在后台执行的轮次当成结束。
+    const running = (r.thread.turns || []).find((t) => t.status === "inProgress" && !S.endedTurns.has(t.id));
+    if (running) S.runningTurns.set(r.thread.id, running);
+    S.activeTurn = S.runningTurns.get(r.thread.id) || null;
+    S.cwd = r.thread.cwd || S.cwd;
+    activityChanged();
+    broadcast({ type: "thread", thread: slimThread(r.thread) });
+  }
   return r;
 }
-async function startTurn(text) {
+async function startTurn(text, threadId) {
   const s = String(text || "");
   if (!s.trim()) throw new Error("消息是空的");
   if (s.length > 200000) throw new Error("消息太长");
-  if (!S.activeThread) await startThread(S.cwd);
-  const rpc = await ensureRpc();
-  const params = { threadId: S.activeThread.id, input: [{ type: "text", text: s }] };
-  if (S.model) params.model = S.model;
-  if (S.effort) params.effort = S.effort;
-  const r = await rpc.request("turn/start", params, 60000);
-  if (r && r.turn) S.activeTurn = r.turn;
-  broadcast({ type: "turn", turn: r && r.turn ? { id: r.turn.id, status: r.turn.status } : null });
-  return r;
+  const initial = String(threadId || S.activeThread?.id || "");
+  const pendingKey = initial || "@new", generation = S.generation;
+  if (S.runningTurns.has(pendingKey) || S.startingTurns.has(pendingKey)) throw new Error("这个任务还在运行，请先停止或等待完成");
+  S.startingTurns.add(pendingKey);
+  activityChanged();
+  try {
+    const rpc = await ensureRpc();
+    if (generation !== S.generation || S.rpc !== rpc) throw new Error("Codex 引擎已停止，请重新发送");
+    if (initial && !S.activeThread) await resumeThread(initial);
+    if (!initial && !S.activeThread) await startThread(S.cwd);
+    const target = initial || S.activeThread.id;
+    const params = { threadId: target, input: [{ type: "text", text: s }] };
+    if (S.model) params.model = S.model;
+    if (S.effort) params.effort = S.effort;
+    let r = await rpc.request("turn/start", params, 60000);
+    if (generation !== S.generation || S.rpc !== rpc) throw new Error("Codex 引擎已停止，请重新发送");
+    if (r?.turn && S.endedTurns.has(r.turn.id)) r = { ...r, turn: { ...r.turn, status: "completed" } };
+    if (r && r.turn && r.turn.status === "inProgress") {
+      S.runningTurns.set(target, r.turn);
+      if (target === S.activeThread?.id) S.activeTurn = r.turn;
+    }
+    broadcast({ type: "turn", threadId: target, turn: r && r.turn ? { id: r.turn.id, status: r.turn.status } : null });
+    return r;
+  } finally {
+    if (generation === S.generation) { S.startingTurns.delete(pendingKey); activityChanged(); }
+  }
 }
 async function steerTurn(text) {
   if (!S.activeThread || !S.activeTurn) throw new Error("当前没有在跑的轮次");
   const rpc = await ensureRpc();
   return rpc.request("turn/steer", { threadId: S.activeThread.id, expectedTurnId: S.activeTurn.id, input: [{ type: "text", text: String(text || "") }] }, 60000);
 }
-async function interruptTurn() {
-  if (!S.activeThread || !S.activeTurn) throw new Error("当前没有在跑的轮次");
+async function interruptTurn(threadId) {
+  const target = String(threadId || S.activeThread?.id || "");
+  const turn = S.runningTurns.get(target);
+  if (!turn) throw new Error("当前没有在跑的轮次");
   const rpc = await ensureRpc();
-  return rpc.request("turn/interrupt", { threadId: S.activeThread.id, turnId: S.activeTurn.id }, 30000);
+  return rpc.request("turn/interrupt", { threadId: target, turnId: turn.id }, 30000);
 }
 async function listThreads() {
   const rpc = await ensureRpc();
   const r = await rpc.request("thread/list", { limit: 50 }, 30000);
-  return (r && r.data || []).map(slimThread).filter(Boolean);
+  const threads = (r && r.data || []).map(slimThread).filter(Boolean);
+  for (const t of threads) rememberTitle(t);
+  return threads;
 }
 async function login() {
+  if (connectionStatus().mode === "custom") throw new Error("请先切换到 ChatGPT 连接方式");
   const rpc = await ensureRpc();
   return rpc.request("account/login/start", { type: "chatgptDeviceCode" }, 60000);
 }
@@ -616,9 +760,9 @@ async function logout() {
 function approve(id, decision, answers) {
   const p = S.approvals.get(String(id));
   if (!p) throw new Error("这条确认已经失效");
-  S.approvals.delete(String(id));
   const rpc = S.rpc;
   if (!rpc) throw new Error("Codex 引擎没有在跑");
+  S.approvals.delete(String(id));
   const d = String(decision || "");
   if (p.method === "item/tool/requestUserInput") {
     const a = answers && typeof answers === "object" ? answers : {};
@@ -632,6 +776,56 @@ function approve(id, decision, answers) {
     rpc.respond(p.id, { decision: ok ? d : d === "cancel" ? "cancel" : "decline" });
   }
   broadcast({ type: "approval-done", id: String(id) });
+  activityChanged();
+}
+
+function updateSettings(body) {
+  const model = typeof body.model === "string" ? body.model : S.model;
+  const effort = typeof body.effort === "string" ? body.effort : S.effort;
+  if (model.length > 200 || effort.length > 40) throw new Error("设置值太长");
+  const selected = S.models.find((m) => m.id === model || m.model === model) || (!model ? S.models.find((m) => m.isDefault) || S.models[0] : null);
+  if (model && S.models.length && !selected) throw new Error("当前账号不支持这个模型，请刷新模型列表");
+  if (effort && selected && !(selected.supportedReasoningEfforts || []).some((x) => x.reasoningEffort === effort)) throw new Error("这个模型不支持所选思考强度");
+  const next = connectionStatus().mode === "custom" ? { model: prefs.model || "", effort: prefs.effort || "" } : { model, effort };
+  if (!saveState(PREF_FILE, JSON.stringify(next), { mode: 0o600 })) throw new Error("设置没有保存，请检查存储空间后重试");
+  Object.assign(prefs, next);
+  S.model = model; S.effort = effort;
+  broadcast({ type: "settings", model, effort });
+  return { model, effort };
+}
+
+function setConnection(body) {
+  if (codexActivity().busy || S.starting) throw Object.assign(new Error("还有任务在运行，请结束后再切换连接"), { statusCode: 409 });
+  const connection = updateConnection(body);
+  stopServer(); S.account = null; S.models = []; S.activeThread = null;
+  S.model = connection.mode === "custom" ? connection.model : prefs.model || "";
+  S.effort = connection.mode === "custom" ? "" : prefs.effort || "";
+  broadcast({ type: "status", status: status() });
+  return status();
+}
+
+async function extensions(cwd) {
+  const dir = safeCwd(cwd);
+  if (!dir) throw new Error("项目目录不存在");
+  const rpc = await ensureRpc();
+  const [skills, mcp] = await Promise.allSettled([
+    rpc.request("skills/list", { cwds: [dir], forceReload: true }, 30000),
+    rpc.request("mcpServerStatus/list", { limit: 100 }, 30000),
+  ]);
+  return { cwd: dir, codexHome: CODEX_HOME, configPath: path.join(CODEX_HOME, "config.toml"), agentsPath: path.join(dir, "AGENTS.md"),
+    skills: skills.status === "fulfilled" ? skills.value.data || [] : null,
+    skillsError: skills.status === "rejected" ? errMsg(skills.reason) : "",
+    mcp: mcp.status === "fulfilled" ? mcp.value.data || [] : null,
+    mcpNextCursor: mcp.status === "fulfilled" ? mcp.value.nextCursor || null : null,
+    mcpError: mcp.status === "rejected" ? errMsg(mcp.reason) : "" };
+}
+
+async function setSkill(cwd, skillPath, enabled) {
+  if (typeof skillPath !== "string" || typeof enabled !== "boolean") throw new Error("技能设置无效");
+  const list = await extensions(cwd);
+  if (!(list.skills || []).some((group) => (group.skills || []).some((s) => s.path === skillPath))) throw new Error("技能已不在当前项目清单中，请刷新");
+  const rpc = await ensureRpc();
+  return rpc.request("skills/config/write", { path: skillPath, enabled }, 30000);
 }
 
 // ── 路由 ─────────────────────────────────────────────────────────────
@@ -659,6 +853,7 @@ export async function routeCodex(req, res, u, p) {
     if (method === "GET" && p === "/api/codex/events") { sse(req, res); return; }
     if (method === "GET" && p === "/api/codex/status") { json(res, 200, status()); return; }
     if (method === "GET" && p === "/api/codex/threads") { return json(res, 200, { threads: await listThreads() }); }
+    if (method === "GET" && p === "/api/codex/extensions") return json(res, 200, await extensions(u.searchParams.get("cwd") || S.cwd));
     if (method === "POST") {
       let body = {};
       try { body = JSON.parse((await readBody(req)) || "{}"); } catch { return json(res, 400, { error: "请求体不是 JSON" }); }
@@ -666,23 +861,37 @@ export async function routeCodex(req, res, u, p) {
       if (p === "/api/codex/stop") { stopServer(); return json(res, 200, { ok: true }); }
       if (p === "/api/codex/thread") { const r = await startThread(body.cwd); return json(res, 200, { thread: slimThread(r && r.thread) }); }
       if (p === "/api/codex/open-thread") { const r = await resumeThread(body.threadId); return json(res, 200, { thread: slimThread(r && r.thread) }); }
-      if (p === "/api/codex/turn") { const r = await startTurn(body.text); return json(res, 200, { turn: r && r.turn ? { id: r.turn.id, status: r.turn.status } : null }); }
+      if (p === "/api/codex/turn") { const r = await startTurn(body.text, body.threadId); return json(res, 200, { turn: r && r.turn ? { id: r.turn.id, status: r.turn.status } : null }); }
       if (p === "/api/codex/steer") { const r = await steerTurn(body.text); return json(res, 200, r || {}); }
-      if (p === "/api/codex/interrupt") { const r = await interruptTurn(); return json(res, 200, r || {}); }
+      if (p === "/api/codex/interrupt") { const r = await interruptTurn(body.threadId); return json(res, 200, r || {}); }
       if (p === "/api/codex/login") { const r = await login(); return json(res, 200, r || {}); }
       if (p === "/api/codex/login-cancel") { const r = await loginCancel(body.loginId); return json(res, 200, r || {}); }
       if (p === "/api/codex/logout") { const r = await logout(); return json(res, 200, r || {}); }
-      if (p === "/api/codex/approve") { approve(body.id, body.decision, body.answers); return json(res, 200, { ok: true }); }
-      if (p === "/api/codex/settings") {
-        if (typeof body.model === "string") S.model = body.model.slice(0, 200);
-        if (typeof body.effort === "string") S.effort = body.effort.slice(0, 40);
-        return json(res, 200, { model: S.model, effort: S.effort });
+      if (p === "/api/codex/approve") {
+        if (!S.approvals.has(String(body.id))) return json(res, 409, { error: "这条确认已经失效" });
+        approve(body.id, body.decision, body.answers); return json(res, 200, { ok: true });
       }
+      if (p === "/api/codex/settings") {
+        return json(res, 200, updateSettings(body));
+      }
+      if (p === "/api/codex/connection") return json(res, 200, setConnection(body));
+      if (p === "/api/codex/connection/models" || p === "/api/codex/connection/test") {
+        if (S.connectionProbe) return json(res, 429, { error: "连接检测正在进行，请稍后重试" });
+        const controller = new AbortController(); S.connectionProbe = controller;
+        const cancel = () => { if (!res.writableEnded) controller.abort(); };
+        res.on("close", cancel);
+        try { return json(res, 200, await (p.endsWith("/models") ? discoverApiModels : testApiConnection)(body, { signal: controller.signal })); }
+        finally { res.off("close", cancel); S.connectionProbe = null; }
+      }
+      if (p === "/api/codex/skill") return json(res, 200, await setSkill(body.cwd, body.path, body.enabled));
       if (p === "/api/codex/refresh") { await refreshAccount(); await refreshModels(); return json(res, 200, status()); }
     }
     return json(res, 404, { error: "not found" });
   } catch (e) {
     log("[codex] " + method + " " + p + " → " + errMsg(e));
-    return json(res, 500, { error: errMsg(e) });
+    return json(res, e.statusCode || 500, { error: errMsg(e) });
   }
 }
+
+// 只供隔离测试注入协议替身，正式网关不暴露内部状态。
+export const _codexForTest = LIVE ? null : { S, status, handleNotify, handleRequest, startThread, startTurn, resumeThread, interruptTurn, stopServer, approve, refreshModels, updateSettings, setConnection, extensions, setSkill, downloadTo };

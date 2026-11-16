@@ -1,0 +1,342 @@
+import "../gw/config.mjs";
+import { test, after } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { Readable } from "node:stream";
+import { CFG, PREFIX } from "../gw/config.mjs";
+import { activityBusy, runFlag } from "../gw/activity.mjs";
+import { _codexForTest as cx, codexActivity, onCodexActivity } from "../gw/codex.mjs";
+import { connectionStatus, connectionLaunch } from "../gw/codex-connection.mjs";
+
+// The legacy status module imports Android usage accounting. This test only reads
+// protocol state; its isolated Windows process needs a synthetic UID for that import.
+if (process.platform === "win32" && !process.getuid) process.getuid = () => 0;
+
+function reset() {
+  cx.stopServer(); runFlag(false);
+  cx.S.rpc = { stderr: "", respond() {}, respondError() {} };
+  cx.S.child = null; cx.S.starting = null; cx.S.activeThread = { id: "a" }; cx.S.activeTurn = null;
+  for (const key of ["runningTurns", "startingTurns", "endedTurns", "approvals", "sse"]) cx.S[key].clear();
+  cx.S.models = []; cx.S.model = ""; cx.S.effort = "";
+}
+after(() => { cx.stopServer(); runFlag(false); });
+
+test("Codex：失败记录落盘保留协议和错误、重试、结束状态，不包含消息或密钥", () => {
+  reset();
+  const key = "fixture-private-key", prompt = "private-user-prompt";
+  try {
+    cx.setConnection({ mode: "custom", baseUrl: "https://provider.test/v1", model: "fixture", apiKey: key, wireApi: "responses" });
+    cx.S.rpc = { stderr: "" }; cx.S.diagnostics.length = 0;
+    cx.handleNotify({ method: "turn/started", params: { threadId: "a", turn: { id: "diagnostic-turn", status: "inProgress" }, input: prompt } });
+    cx.handleNotify({ method: "error", params: { threadId: "a", turnId: "diagnostic-turn", error: { message: "upstream failed " + key }, willRetry: true } });
+    cx.handleNotify({ method: "turn/completed", params: { threadId: "a", turn: { id: "diagnostic-turn", status: "failed", error: { message: "upstream failed " + key } } } });
+    const text = fs.readFileSync(path.join(CFG.home, ".cache", "coxdragon", "codex-diagnostics.json"), "utf8"), report = JSON.parse(text);
+    assert.equal(text.includes(key), false); assert.equal(text.includes(prompt), false);
+    assert.equal(report.connection.wireApi, "responses"); assert.equal(report.events[1].willRetry, true);
+    assert.equal(report.events[2].status, "failed"); assert.deepEqual(report.running, []);
+  } finally { cx.stopServer(); cx.setConnection({ mode: "chatgpt" }); }
+});
+
+test("Codex：网络中断保留下载分片，下次请求从已有字节继续", async () => {
+  const dest = path.join(CFG.home, "resume-test.tar.gz"), partial = dest + ".part";
+  const originalFetch = globalThis.fetch;
+  fs.writeFileSync(partial, "retained partial download");
+  try {
+    const offsets = [];
+    globalThis.fetch = async (_url, opts) => { offsets.push(opts.headers.range); throw new Error("synthetic network interruption"); };
+    await assert.rejects(cx.downloadTo("https://download.test/engine", dest), /network interruption/);
+    await assert.rejects(cx.downloadTo("https://mirror.test/engine", dest), /network interruption/);
+    assert.deepEqual(offsets, ["bytes=25-", "bytes=25-"]);
+    assert.equal(fs.readFileSync(partial, "utf8"), "retained partial download");
+    assert.equal(fs.existsSync(dest), false);
+  } finally { globalThis.fetch = originalFetch; fs.rmSync(partial, { force: true }); }
+});
+
+test("Codex：拒绝错误续传范围，不能把无关数据追加到分片", async () => {
+  const dest = path.join(CFG.home, "invalid-range-test.tar.gz"), partial = dest + ".part";
+  const originalFetch = globalThis.fetch;
+  fs.writeFileSync(partial, "partial");
+  try {
+    globalThis.fetch = async () => new Response("wrong data", { status: 206, headers: { "content-range": "bytes 0-9/88007340" } });
+    await assert.rejects(cx.downloadTo("https://download.test/engine", dest), /续传范围不匹配/);
+    assert.equal(fs.readFileSync(partial, "utf8"), "partial");
+    assert.equal(fs.existsSync(dest), false);
+  } finally { globalThis.fetch = originalFetch; fs.rmSync(partial, { force: true }); }
+});
+
+test("Codex：状态快照保留后台任务和等待中的审批，已解决的审批不再重放", () => {
+  reset();
+  cx.handleNotify({ method: "turn/started", params: { threadId: "b", turn: { id: "b1", status: "inProgress" } } });
+  cx.handleRequest({ id: 7, method: "item/commandExecution/requestApproval", params: { threadId: "b", command: "npm test" } });
+  const snapshot = cx.status();
+  assert.equal(snapshot.activeTurn, null, "后台任务不能占用当前线程的停止按钮");
+  assert.deepEqual(snapshot.runningTurns, [{ threadId: "b", turn: { id: "b1", status: "inProgress" } }]);
+  assert.equal(snapshot.approvals[0].id, "7");
+  assert.equal(snapshot.approvals[0].params.command, "npm test");
+  cx.handleNotify({ method: "serverRequest/resolved", params: { requestId: 7 } });
+  assert.deepEqual(cx.status().approvals, []);
+});
+
+test("Codex：发送和停止显式指定线程，不受当前打开的线程影响", async () => {
+  reset(); const calls = [];
+  cx.S.rpc.request = async (method, params) => { calls.push({ method, params }); return { turn: { id: "b1", status: "inProgress" } }; };
+  await cx.startTurn("check b", "b");
+  await cx.interruptTurn("b");
+  assert.equal(calls[0].params.threadId, "b");
+  assert.deepEqual(calls[1], { method: "turn/interrupt", params: { threadId: "b", turnId: "b1" } });
+  assert.equal(cx.S.activeThread.id, "a");
+  assert.equal(cx.S.activeTurn, null);
+});
+
+test("Codex：同一线程不能重复提交，另一线程可以启动", async () => {
+  reset(); let finish;
+  cx.S.rpc.request = (_, params) => params.threadId === "a"
+    ? new Promise((resolve) => { finish = resolve; })
+    : Promise.resolve({ turn: { id: "b1", status: "inProgress" } });
+  const first = cx.startTurn("first", "a");
+  await new Promise((r) => setImmediate(r));
+  await assert.rejects(cx.startTurn("duplicate", "a"), /还在运行/);
+  await cx.startTurn("parallel", "b");
+  finish({ turn: { id: "a1", status: "inProgress" } }); await first;
+  assert.equal(cx.S.runningTurns.size, 2);
+});
+
+test("Codex：完成事件先于启动回执时不复活任务，旧完成事件不结束新轮次", async () => {
+  reset();
+  cx.S.rpc.request = async () => {
+    cx.handleNotify({ method: "turn/completed", params: { threadId: "a", turn: { id: "a1", status: "completed" } } });
+    return { turn: { id: "a1", status: "inProgress" } };
+  };
+  const r = await cx.startTurn("quick", "a");
+  assert.equal(r.turn.status, "completed");
+  assert.equal(cx.S.runningTurns.has("a"), false);
+  cx.handleNotify({ method: "turn/started", params: { threadId: "a", turn: { id: "a2", status: "inProgress" } } });
+  cx.handleNotify({ method: "turn/completed", params: { threadId: "a", turn: { id: "a1", status: "completed" } } });
+  assert.equal(cx.S.runningTurns.get("a").id, "a2");
+});
+
+test("Codex：恢复后台线程保留执行状态，停止引擎清理所有失效审批", async () => {
+  reset();
+  cx.S.runningTurns.set("b", { id: "b1", status: "inProgress" });
+  cx.S.rpc.request = async () => ({ thread: { id: "b", turns: [] } });
+  await cx.resumeThread("b");
+  assert.equal(cx.S.activeTurn.id, "b1");
+  cx.handleRequest({ id: 4, method: "item/fileChange/requestApproval", params: { threadId: "b" } });
+  cx.stopServer();
+  assert.equal(cx.S.approvals.size, 0); assert.equal(cx.S.runningTurns.size, 0);
+});
+
+test("Codex：进程已创建但还在初始化时，新请求等待初始化完成", async () => {
+  reset(); let ready, called = false;
+  cx.S.rpc.request = async () => { called = true; return { turn: { id: "a1", status: "inProgress" } }; };
+  cx.S.starting = new Promise((resolve) => { ready = resolve; });
+  const turn = cx.startTurn("wait for initialize", "a");
+  await new Promise((r) => setImmediate(r));
+  assert.equal(called, false);
+  assert.equal(codexActivity().busy, true, "初始化等待期间也要保留后台服务");
+  ready(cx.S.rpc); await turn; cx.S.starting = null;
+  assert.equal(called, true);
+});
+
+test("Codex：停止后的延迟回执不能复活旧任务或清掉新任务的后台标记", async () => {
+  reset(); let oldFinish, newFinish;
+  cx.S.rpc.request = () => new Promise((resolve) => { oldFinish = resolve; });
+  const oldTurn = cx.startTurn("old", "b");
+  await new Promise((r) => setImmediate(r)); cx.stopServer();
+  cx.S.rpc = { stderr: "", request: () => new Promise((resolve) => { newFinish = resolve; }) };
+  const newTurn = cx.startTurn("new", "b"); await new Promise((r) => setImmediate(r));
+  oldFinish({ turn: { id: "old", status: "inProgress" } });
+  await assert.rejects(oldTurn, /已停止/);
+  assert.equal(cx.S.runningTurns.size, 0); assert.equal(cx.S.startingTurns.has("b"), true); assert.equal(activityBusy(), true);
+  newFinish({ turn: { id: "new", status: "inProgress" } }); await newTurn;
+  assert.equal(cx.S.runningTurns.get("b").id, "new");
+});
+
+test("Codex：待回执、运行和审批期间保留后台标记，旧引擎空闲不能清掉它", async () => {
+  reset(); let finish;
+  const pending = new Promise((resolve) => { finish = resolve; });
+  cx.S.rpc.request = () => pending;
+  const turn = cx.startTurn("background", "b");
+  await new Promise((r) => setImmediate(r));
+  const marker = path.join(CFG.home, ".run-active");
+  assert.equal(codexActivity().starting, 1); assert.equal(fs.readFileSync(marker, "utf8"), String(process.pid));
+  runFlag(false); assert.equal(fs.existsSync(marker), true);
+  finish({ turn: { id: "b1", status: "inProgress" } }); await turn;
+  cx.handleRequest({ id: 19, method: "item/commandExecution/requestApproval", params: { threadId: "b", turnId: "b1", command: "npm test" } });
+  assert.equal(codexActivity().approvals[0].id, "codex:19");
+  assert.equal(codexActivity().approvals[0].sessionId, "b");
+  runFlag(true); cx.stopServer();
+  assert.equal(activityBusy(), true, "停止 Codex 仍保留旧引擎的忙碌标记");
+  runFlag(false); assert.equal(fs.existsSync(marker), false);
+});
+
+test("Codex：后台完成事件包含正确任务、失败状态，完成后清理该轮审批", () => {
+  reset(); const events = [], unsub = onCodexActivity((e) => events.push(e));
+  try {
+    cx.handleNotify({ method: "turn/started", params: { threadId: "b", turn: { id: "b2", status: "inProgress" } } });
+    cx.handleRequest({ id: 20, method: "item/fileChange/requestApproval", params: { threadId: "b", turnId: "b2" } });
+    cx.handleNotify({ method: "turn/completed", params: { threadId: "b", turn: { id: "b2", status: "failed", error: { message: "test failure" } } } });
+    assert.equal(codexActivity().busy, false); assert.equal(codexActivity().approvals.length, 0);
+    const done = events.find((e) => e.type === "codex_done");
+    assert.equal(done.sessionId, "b"); assert.equal(done.engine, "codex"); assert.equal(done.failed, true);
+    assert.equal(done.runId, "codex:b2");
+  } finally { unsub(); }
+});
+
+test("Codex：请求失败释放后台标记；持久设置只接受模型支持的思考强度", async () => {
+  reset(); cx.S.rpc.request = async () => { throw new Error("synthetic RPC failure"); };
+  await assert.rejects(cx.startTurn("failure", "b"), /synthetic RPC failure/);
+  assert.equal(codexActivity().busy, false); assert.equal(activityBusy(), false);
+  cx.S.models = [{ id: "test-model", supportedReasoningEfforts: [{ reasoningEffort: "high" }] }];
+  assert.deepEqual(cx.updateSettings({ model: "test-model", effort: "high" }), { model: "test-model", effort: "high" });
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(CFG.home, "coxdragon-codex.json"), "utf8")), { model: "test-model", effort: "high" });
+  assert.throws(() => cx.updateSettings({ model: "test-model", effort: "low" }), /不支持/);
+  assert.throws(() => cx.updateSettings({ model: "missing" }), /不支持/);
+  assert.equal(cx.S.effort, "high");
+  const pref = path.join(CFG.home, "coxdragon-codex.json");
+  fs.rmSync(pref); fs.mkdirSync(pref);
+  assert.throws(() => cx.updateSettings({ model: "", effort: "" }), /没有保存/);
+  assert.equal(cx.S.model, "test-model", "写盘失败不能假装保存成功");
+  fs.rmdirSync(pref);
+});
+
+test("Codex：扩展只用 Codex 协议；MCP 失败不隐藏技能，拒绝修改未发现的技能", async () => {
+  reset(); const calls = [];
+  cx.S.rpc.request = async (method, params) => {
+    calls.push({ method, params });
+    if (method === "mcpServerStatus/list") throw new Error("MCP unavailable");
+    if (method === "skills/list") return { data: [{ cwd: CFG.workspace, skills: [{ name: "test-skill", path: "/synthetic/SKILL.md", enabled: true }], errors: [] }] };
+    return { ok: true };
+  };
+  const inventory = await cx.extensions(CFG.workspace);
+  assert.equal(inventory.skills[0].skills[0].name, "test-skill"); assert.equal(inventory.mcpError, "MCP unavailable");
+  await assert.rejects(cx.setSkill(CFG.workspace, "/unlisted/SKILL.md", false), /不在/);
+  assert.equal(calls.some((c) => c.method === "skills/config/write"), false);
+  await cx.setSkill(CFG.workspace, "/synthetic/SKILL.md", false);
+  assert.deepEqual(calls.at(-1), { method: "skills/config/write", params: { path: "/synthetic/SKILL.md", enabled: false } });
+});
+
+test("Codex：共享事件总线和网关忙碌状态包含 Codex，重连快照保留审批", async () => {
+  reset();
+  const [{ routeBus, onPublish, publish }, { routeCaps }] = await Promise.all([import("../gw/bus.mjs"), import("../gw/caps.mjs")]);
+  const events = [], unsub = onPublish((ev) => events.push(ev));
+  const response = () => ({ writeHead() {}, end(body) { this.body = JSON.parse(body); } });
+  try {
+    cx.handleNotify({ method: "turn/started", params: { threadId: "b", turn: { id: "bus-turn", status: "inProgress" } } });
+    cx.handleRequest({ id: 77, method: "item/commandExecution/requestApproval", params: { threadId: "b", turnId: "bus-turn", command: "npm test" } });
+    assert.equal(events.at(-1).type, "codex_state");
+    publish({ type: "state", runs: [] }); assert.equal(events.at(-1).codex.approvals[0].id, "codex:77");
+    const res = response(); await routeBus({ method: "GET" }, res, new URL("http://localhost/api/state"), "/api/state");
+    assert.equal(res.body.codex.approvals[0].sessionId, "b");
+    const status = response(); await routeCaps({ method: "GET" }, status, new URL("http://localhost/api/status"), "/api/status");
+    assert.equal(status.body.busy, true); assert.equal(status.body.running, 1);
+    assert.equal(status.body.nativeApp, !!PREFIX); assert.equal(status.body.product, PREFIX ? "coxdragon" : "Claude CLI");
+    cx.stopServer(); assert.equal(events.at(-1).codex.busy, false);
+  } finally { unsub(); }
+});
+
+test("Codex：等待启动回执时拒绝网关重启，拒绝前不写执行方式偏好", async (t) => {
+  reset();
+  const { routeSettings } = await import("../gw/settings.mjs");
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let finish;
+  cx.S.rpc.request = () => new Promise((resolve) => { finish = resolve; });
+  const turn = cx.startTurn("pending restart guard", "b");
+  await new Promise((r) => setImmediate(r));
+  const pref = path.join(CFG.runtime, ".exec-mode");
+  const before = fs.existsSync(pref) ? fs.readFileSync(pref, "utf8") : null;
+  try {
+    const req = Readable.from([Buffer.from(JSON.stringify({ mode: "loader", restart: true }))]); req.method = "POST";
+    const res = { writeHead(code) { this.code = code; }, end(body) { this.body = JSON.parse(body); } };
+    await routeSettings(req, res, new URL("http://localhost/api/exec-mode"), "/api/exec-mode");
+    assert.equal(res.code, 409); assert.match(res.body.error, /任务/);
+    assert.equal(fs.existsSync(pref) ? fs.readFileSync(pref, "utf8") : null, before);
+  } finally {
+    finish({ turn: { id: "restart-guard", status: "inProgress" } }); await turn; cx.stopServer();
+  }
+});
+
+test("Codex：运行和等待审批时推迟自动清理，全部结束后恢复", async () => {
+  reset();
+  const { autoCleanTick } = await import("../gw/storage.mjs");
+  const { SETTINGS } = await import("../gw/settings-store.mjs");
+  const previous = SETTINGS.autoClean;
+  const file = path.join(CFG.home, ".npm", "_cacache", "idle-guard-fixture");
+  fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, "old cache");
+  const old = new Date(Date.now() - 10 * 86400e3); fs.utimesSync(file, old, old);
+  SETTINGS.autoClean = { enabled: true, every: "day" };
+  try {
+    cx.handleNotify({ method: "turn/started", params: { threadId: "b", turn: { id: "cleanup-guard", status: "inProgress" } } });
+    assert.equal(await autoCleanTick(), null); assert.equal(fs.existsSync(file), true);
+    cx.stopServer();
+    cx.handleRequest({ id: 89, method: "item/commandExecution/requestApproval", params: { threadId: "b", command: "npm test" } });
+    assert.equal(await autoCleanTick(), null); assert.equal(fs.existsSync(file), true);
+    cx.stopServer();
+    const result = await autoCleanTick();
+    assert.equal(result.auto, true); assert.ok(result.n + result.skipped > 0, "空闲后才开始处理缓存候选项");
+  } finally { SETTINGS.autoClean = previous; cx.stopServer(); fs.rmSync(file, { force: true }); }
+});
+
+test("Codex：自定义 API 的地址校验、私有密钥保存与进程配置", async () => {
+  reset();
+  const key = "synthetic-private-key-never-a-real-credential";
+  const file = path.join(CFG.home, "coxdragon-codex-connection.json");
+  try {
+    for (const baseUrl of ["file:///secret", "https://user:pass@example.test/v1", "https://example.test/v1?key=x"]) {
+      assert.throws(() => cx.setConnection({ mode: "custom", baseUrl, model: "my-model", apiKey: key }), (e) => e.statusCode === 400);
+    }
+    const saved = cx.setConnection({ mode: "custom", baseUrl: "https://example.test/v1/responses", model: "my-model", apiKey: key });
+    assert.equal(saved.connection.baseUrl, "https://example.test/v1"); assert.equal(saved.connection.hasKey, true);
+    assert.equal(JSON.stringify(saved).includes(key), false);
+    const launch = connectionLaunch();
+    assert.equal(launch.args.join(" ").includes(key), false); assert.equal(launch.env.COXDRAGON_CUSTOM_API_KEY, key);
+    assert.ok(launch.args.includes('model_providers.coxdragon_custom.wire_api="responses"'));
+    assert.ok(launch.args.includes('model_providers.coxdragon_custom.requires_openai_auth=false'));
+    assert.equal(JSON.parse(fs.readFileSync(file, "utf8")).apiKey, key);
+    if (process.platform !== "win32") assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+    const before = fs.readFileSync(file, "utf8");
+    assert.throws(() => cx.setConnection({ mode: "custom", baseUrl: "https://different.test/v1", model: "my-model", apiKey: "" }), /API Key/);
+    assert.equal(fs.readFileSync(file, "utf8"), before, "换地址时不能自动把旧密钥送过去");
+    cx.setConnection({ mode: "custom", baseUrl: "https://example.test/v1", model: "my-model", apiKey: "" });
+    assert.equal(connectionLaunch().env.COXDRAGON_CUSTOM_API_KEY, key, "同地址留空可保留密钥");
+    cx.setConnection({ mode: "custom", baseUrl: "http://127.0.0.1:9000/v1", model: "local-model", noKey: true });
+    assert.deepEqual(connectionLaunch().env, {}); assert.equal(connectionStatus().hasKey, false);
+  } finally { cx.stopServer(); cx.setConnection({ mode: "chatgpt" }); }
+});
+
+test("Codex：运行时拒绝切换 API，保存失败保持原连接与账号", () => {
+  reset();
+  const file = path.join(CFG.home, "coxdragon-codex-connection.json");
+  const original = fs.readFileSync(file);
+  const before = connectionStatus();
+  cx.handleRequest({ id: 901, method: "item/commandExecution/requestApproval", params: { threadId: "b", command: "test" } });
+  assert.throws(() => cx.setConnection({ mode: "custom", baseUrl: "https://blocked.test/v1", model: "blocked", apiKey: "fake" }), (e) => e.statusCode === 409);
+  assert.deepEqual(fs.readFileSync(file), original);
+  cx.stopServer(); cx.S.account = { account: { type: "chatgpt", email: "still@example.test" } };
+  fs.rmSync(file); fs.mkdirSync(file);
+  try {
+    assert.throws(() => cx.setConnection({ mode: "custom", baseUrl: "https://not-saved.test/v1", model: "x", apiKey: "fake" }), /没有保存/);
+    assert.deepEqual(connectionStatus(), before); assert.equal(cx.S.account.account.email, "still@example.test");
+  } finally { fs.rmdirSync(file); fs.writeFileSync(file, original); }
+});
+
+test("Codex：自定义模型和供应商贯穿新建、恢复、发送；切回 ChatGPT 不携带第三方密钥", async () => {
+  reset();
+  const calls = [];
+  try {
+    cx.setConnection({ mode: "custom", baseUrl: "https://provider.test/v1", model: "provider-model", apiKey: "fake-provider-key" });
+    cx.S.rpc = { stderr: "", request: async (method, params) => {
+      calls.push({ method, params });
+      return method === "turn/start" ? { turn: { id: "provider-turn", status: "inProgress" } } : { thread: { id: "b", cwd: CFG.workspace, turns: [] } };
+    } };
+    const models = await cx.refreshModels(); assert.equal(models[0].id, "provider-model");
+    assert.equal(calls.length, 0, "自定义模型不能被 OpenAI 账号目录替换");
+    await cx.startThread(CFG.workspace); await cx.resumeThread("b"); await cx.startTurn("hello", "b");
+    assert.equal(calls.find((c) => c.method === "thread/start").params.modelProvider, "coxdragon_custom");
+    assert.equal(calls.find((c) => c.method === "thread/resume").params.modelProvider, "coxdragon_custom");
+    assert.equal(calls.find((c) => c.method === "turn/start").params.model, "provider-model");
+    cx.stopServer(); cx.setConnection({ mode: "chatgpt" });
+    assert.deepEqual(connectionLaunch().env, {}); assert.equal(connectionLaunch().modelProvider, "openai");
+  } finally { cx.stopServer(); cx.setConnection({ mode: "chatgpt" }); }
+});

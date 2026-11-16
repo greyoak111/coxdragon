@@ -30,7 +30,7 @@ import org.json.JSONObject;
  * 跑在 GatewayService 里：界面被关了、只剩前台服务时也能发。
  */
 final class Notify {
-    static final String TAG = "cccodroid";
+    static final String TAG = "coxdragon";
     static final String CH_DONE = "done", CH_ASK = "ask";
     static final String ACTION_DENY = "cox.dragon.PERM_DENY";
     static final String ACTION_OPEN = "cox.dragon.OPEN_SESSION";
@@ -168,13 +168,15 @@ final class Notify {
                     if ("hello".equals(type)) {
                         // 订阅期间网关重启过（启动号变了）：旧轮次等不到终止事件，文本回收（BUG-A05）
                         String boot = ev.optString("boot");
-                        if (gatewayChanged(boot, lastBoot)) runText.clear();
+                        if (gatewayChanged(boot, lastBoot)) { runText.clear(); pending.clear(); clearAsks(); }
                         lastBoot = boot;
                     }
                     onState(ev);
                 }
                 else if ("run_start".equals(type)) runText.put(ev.optString("runId"), clip(ev.optString("text"), RUN_TEXT_CHARS));
                 else if ("run_end".equals(type)) onRunEnd(ev);
+                else if ("codex_state".equals(type)) { onCodexState(ev.optJSONObject("codex")); syncAsks(); }
+                else if ("codex_done".equals(type)) onRunEnd(ev);
                 else if ("sched_note".equals(type)) onSchedNote(ev);
                 else if ("sched_next".equals(type)) SchedAlarm.set(ctx, ev.optLong("at"));
                 if ("hello".equals(type)) SchedAlarm.fromFile(ctx);   // 事件流（重）连上：按文件补定一次闹钟
@@ -186,7 +188,7 @@ final class Notify {
 
     /** 并行多会话：state 里的 runs 是所有正在跑的轮次（旧网关只有 run） */
     private void onState(JSONObject st) {
-        pending.clear();
+        pending.entrySet().removeIf(e -> !e.getKey().startsWith("codex:"));
         JSONArray runs = st.optJSONArray("runs");
         if (runs == null) { runs = new JSONArray(); if (st.optJSONObject("run") != null) runs.put(st.optJSONObject("run")); }
         for (int k = 0; k < runs.length(); k++) {
@@ -199,7 +201,17 @@ final class Notify {
                 if (p != null && !p.optString("id").isEmpty()) pending.put(p.optString("id"), p);
             }
         }
+        if (st.has("codex")) onCodexState(st.optJSONObject("codex"));
         syncAsks();
+    }
+
+    private void onCodexState(JSONObject state) {
+        pending.entrySet().removeIf(e -> e.getKey().startsWith("codex:"));
+        JSONArray approvals = state == null ? null : state.optJSONArray("approvals");
+        if (approvals != null) for (int i = 0; i < approvals.length(); i++) {
+            JSONObject p = approvals.optJSONObject(i);
+            if (p != null && p.optString("id").startsWith("codex:")) pending.put(p.optString("id"), p);
+        }
     }
 
     /** pending 与已发通知对齐：答掉的撤，新的（且界面不在前台、开关开着）发 */
@@ -218,6 +230,7 @@ final class Notify {
     private void onRunEnd(JSONObject ev) {
         String runId = ev.optString("runId");
         String text = runText.remove(runId);
+        if ("codex".equals(ev.optString("engine"))) text = ev.optString("text");
         // 只撤这一轮的确认项：别的会话可能还在等（紧跟着的 state 事件会再对齐一次）
         for (java.util.Iterator<JSONObject> it = pending.values().iterator(); it.hasNext(); )
             if (runId.equals(it.next().optString("runId"))) it.remove();
@@ -231,11 +244,12 @@ final class Notify {
         boolean failed = ev.optBoolean("failed") || ev.optBoolean("isError") || ev.has("error") && !ev.isNull("error");
         String sid = sidOf(ev);
         // 每个会话各留最新一条：并行时几个会话先后跑完，不互相顶掉
-        nm.notify(TAG_DONE, sid.isEmpty() ? ID_DONE : sid.hashCode(), new Notification.Builder(ctx, CH_DONE)
+        String engine = ev.optString("engine");
+        nm.notify(TAG_DONE, sid.isEmpty() ? ID_DONE : (engine + ":" + sid).hashCode(), new Notification.Builder(ctx, CH_DONE)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentTitle(failed ? Tr.t("出错了") : Tr.t("已完成"))
             .setContentText(clip(text == null || text.isEmpty() ? Tr.t("这一轮跑完了") : text, 80))
-            .setContentIntent(openIntent(sid, 0))
+            .setContentIntent(openIntent(sid, 0, engine))
             .setAutoCancel(true)
             .build());
     }
@@ -265,12 +279,12 @@ final class Notify {
             title = Tr.t("计划待批准");
             body = in.optString("plan");
         } else if (question) {
-            title = Tr.t("Claude 想问你");
+            title = "codex".equals(p.optString("engine")) ? Tr.t("Codex 想问你") : Tr.t("Claude 想问你");
             JSONArray qs = in.optJSONArray("questions");
             JSONObject q = qs == null ? null : qs.optJSONObject(0);
             body = q == null ? "" : q.optString("question");
         } else {
-            title = Tr.t("需要确认：") + tool;
+            title = Tr.t("需要确认：") + ("codex".equals(p.optString("engine")) ? "Codex" : tool);
             body = firstOf(in, "command", "file_path", "notebook_path", "url", "pattern", "path");
             if (body.isEmpty()) body = p.optString("description");
             if (body.isEmpty()) body = in.toString();
@@ -285,7 +299,7 @@ final class Notify {
             // 命令行里可能带着密钥：锁屏上只显示标题（审查 10-29 L16）
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setPublicVersion(new Notification.Builder(ctx, CH_ASK).setSmallIcon(android.R.drawable.stat_sys_warning).setContentTitle(title).build())
-            .setContentIntent(openIntent(sidOf(p), 1 + Math.abs(id.hashCode() % 10000)))
+            .setContentIntent(openIntent(sidOf(p), 1 + Math.abs(id.hashCode() % 10000), p.optString("engine")))
             .setAutoCancel(true);
         // 选择题要选项，通知里答不了；其它的给「拒绝」，「允许」必须进应用看完整内容再点
         if (!question) {
@@ -297,7 +311,7 @@ final class Notify {
                 PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
             b.addAction(new Notification.Action.Builder(null, Tr.t("拒绝"), pi).build());
         }
-        b.addAction(new Notification.Action.Builder(null, Tr.t("打开查看"), openIntent(sidOf(p), 30000 + Math.abs(id.hashCode() % 10000))).build());
+        b.addAction(new Notification.Action.Builder(null, Tr.t("打开查看"), openIntent(sidOf(p), 30000 + Math.abs(id.hashCode() % 10000), p.optString("engine"))).build());
         return b.build();
     }
 
@@ -308,7 +322,7 @@ final class Notify {
         try { v = c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionName; } catch (Exception ignored) {}
         n.nm.notify(TAG_DONE, 0x5eed, new Notification.Builder(c, CH_DONE)
             .setSmallIcon(android.R.drawable.stat_notify_chat)
-            .setContentTitle(Tr.f("cccodroid 已更新到 v{0}", v))
+            .setContentTitle(Tr.f("coxdragon 已更新到 v{0}", v))
             .setContentText(Tr.t("点此打开即可继续使用"))
             .setContentIntent(n.openIntent("", 5))
             .setAutoCancel(true)
@@ -324,19 +338,26 @@ final class Notify {
     private static String sidOf(JSONObject o) { return o.isNull("sessionId") ? "" : o.optString("sessionId", ""); }
 
     private PendingIntent openIntent(String sessionId, int req) {
+        return openIntent(sessionId, req, "");
+    }
+
+    private PendingIntent openIntent(String sessionId, int req, String engine) {
         Intent i = MainActivity.internal(ctx, ACTION_OPEN)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         if (sessionId != null && !sessionId.isEmpty()) i.putExtra("session", sessionId);
-        i.setData(android.net.Uri.parse("cccodroid-notify://open/" + req + "/" + android.net.Uri.encode(sessionId == null ? "" : sessionId)));   // 同上：撞码时别串会话
+        i.putExtra("engine", engine);
+        i.setData(android.net.Uri.parse("coxdragon-notify://open/" + android.net.Uri.encode(engine) + "/" + req + "/" + android.net.Uri.encode(sessionId == null ? "" : sessionId)));
         return PendingIntent.getActivity(ctx, 60000 + req, i, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
     }
 
     /** 通知里点「拒绝」：转给网关，跟界面里点拒绝走同一个接口 */
     static void deny(Context c, String id) {
         try {
-            byte[] body = new JSONObject().put("id", id).put("behavior", "deny")
-                .put("message", "用户在通知里拒绝了这次操作。").toString().getBytes(StandardCharsets.UTF_8);
-            HttpURLConnection h = Env.gateway("POST", "/api/perm/answer", body);
+            boolean codex = id != null && id.startsWith("codex:");
+            JSONObject answer = codex ? new JSONObject().put("id", id.substring(6)).put("decision", "decline")
+                : new JSONObject().put("id", id).put("behavior", "deny").put("message", "用户在通知里拒绝了这次操作。");
+            byte[] body = answer.toString().getBytes(StandardCharsets.UTF_8);
+            HttpURLConnection h = Env.gateway("POST", codex ? "/api/codex/approve" : "/api/perm/answer", body);
             h.setDoOutput(true);
             h.setConnectTimeout(3000); h.setReadTimeout(5000);
             h.setRequestProperty("Content-Type", "application/json");

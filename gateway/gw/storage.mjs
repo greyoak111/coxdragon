@@ -15,6 +15,7 @@ import { CFG, PATHS, PREFIX, log } from "./config.mjs";
 import { SETTINGS } from "./settings-store.mjs";
 import { isObj, loadState, saveState } from "./statefile.mjs";
 import { runList } from "./runs.mjs";
+import { activityBusy } from "./activity.mjs";
 import { NEXT, readBody, sendJson } from "./http.mjs";
 import { sessionRetention } from "./retention.mjs";
 
@@ -358,8 +359,9 @@ export async function autoCleanTick(now = Date.now()) {
   const cfg = autoCleanCfg();
   if (!cfg.enabled) return null;
   if (now - st().lastAuto < AUTO_EVERY[cfg.every]) return null;
-  if (runList().length) return null;
+  if (activityBusy() || runList().length) return null;
   try { const q = await import("./queue.mjs"); if (q.QUEUE.length) return null; } catch {}
+  if (activityBusy()) return null;
   if (SCANNING) return null;
   return cleanStorage(["cache", "tmp", "junk"], { auto: true, at: now });
 }

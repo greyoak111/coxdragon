@@ -150,7 +150,9 @@ t "/tmp 硬编码" "rg --version >/dev/null || exit 1; rg -l --no-messages -uu '
 fi
 cd /; rm -rf "$W"
 echo "== Claude Code"
-t "claude 命令" "claude --version"
+if [ -f "${CCAPP_CLAUDE:-$HOME/.local/share/cccodroid/claude/current/claude}" ]; then
+  t "claude 命令" "claude --version"
+else echo "SKIP claude 命令 :: 可选引擎未安装"; fi
 # 记录 vs 磁盘（组件记录、包清单、模块、自定义组件）由网关核：它有全部记录。网关自己起的自检不再问（本机实况另外报）
 TF=${CCAPP_TOKEN_FILE:-$HOME/.gateway-token}
 # 端口只认数字（审查 10-29 第六份 低2）：带 @ 之类就能把令牌头送到别处

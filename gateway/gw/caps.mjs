@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { codexActivity } from "./codex.mjs";
+import { activityBusy } from "./activity.mjs";
 import { CFG, PATHS, PREFIX } from "./config.mjs";
 import { SETTINGS } from "./settings-store.mjs";
 import { API_KEY, PROVIDER, providerBrief } from "./providers.mjs";
@@ -92,9 +94,11 @@ function capabilities() {
 // ── 路由：/api/status /api/capabilities /api/cli ──
 export async function routeCaps(req, res, u, p) {
   if (req.method === "GET" && p === "/api/status") {
+    const codex = codexActivity();
     return sendJson(res, 200, {
       app: "claude-cli",
-      product: PREFIX ? "cccodroid" : "Claude CLI",   // 界面标题
+      product: PREFIX ? "coxdragon" : "Claude CLI",   // 界面标题
+      nativeApp: !!PREFIX,   // 原生桥接能力不依赖产品显示名称
       pid: process.pid,
       ready: fs.existsSync(PATHS.claude) && fs.existsSync(PATHS.loader),
       // 登录态厂商也算"就绪"：它不用密钥，用的是 claude 自己的 OAuth 登录
@@ -117,8 +121,9 @@ export async function routeCaps(req, res, u, p) {
       bridge: await bridgeAlive(),
       uptimeMs: Math.round(process.uptime() * 1000),
       version: "3.0.0",
-      busy: RUNS.size > 0,
-      running: RUNS.size,
+      busy: activityBusy() || codex.busy || RUNS.size > 0,
+      running: RUNS.size + codex.running,
+      codex,
       // 挂起的（点了停止、被系统中断的）不会自己发出去，不算「有活要干」：外壳据 queued 判断能不能换工具包
       queued: QUEUE.filter((q) => !q.held).length,
       held: QUEUE.filter((q) => q.held).length,

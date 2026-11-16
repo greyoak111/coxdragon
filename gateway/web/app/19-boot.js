@@ -208,10 +208,9 @@
       paintAcct(s);
       paintSafeMode(s.safeMode);
       recheckSetup();
-      // 日志分享靠安卓壳（cccodroid）打包、弹分享面板；旧版应用没有
-      // 打包诊断、到 GitHub 反馈只有 cccodroid 有：整行藏起来
-      $("btn-share-logs").closest(".srow").classList.toggle("hidden", s.product !== "cccodroid");
-      $("btn-issue").closest(".srow").classList.toggle("hidden", s.product !== "cccodroid");
+      // 日志打包、系统分享与诊断反馈依赖安卓壳；按能力判断，避免品牌改名后误隐藏。
+      $("btn-share-logs").closest(".srow").classList.toggle("hidden", !canShare());
+      $("btn-issue").closest(".srow").classList.toggle("hidden", !canShare());
       $("btn-ledger").classList.toggle("hidden", !s.hasLedger);
       paintModel(curModel() || s.model || "—");
       state.model = s.model;
@@ -538,7 +537,8 @@
       steps.splice(0, steps.length, ...steps.slice(0, at).filter(([id]) => !order.includes(id)), ...panes, ...steps.slice(at).filter(([id]) => !order.includes(id)));
     }
     for (const [id, close] of steps) {
-      if (id === "drawer" && L && L.docked()) continue;
+      if (id === "drawer" && (window.CODEX || L && L.docked())) continue;
+      if (id === "pages" && curPage === "codex" && window.CODEX) return CODEX.back();
       if (open(id)) { close(); return true; }
     }
     return false;
@@ -547,7 +547,7 @@
     // 常驻栏展开：面板从左边弹进来（右边内容已经让出位置）
     dockIn: () => MO.spring(drawerEl.querySelector(".drawer-panel"), "snap", (p) => ({ transform: `translateX(${(MO.rtl() ? 100 : -100) * (1 - p)}%)` })) });
   window.__cc = { view, srv, state, send, abort, openSession, newConversation, openPage, bus: onBus,   // bus：测试时往前端灌事件
-    openGit, openViewer, openFiles, openDrawer, showWhatsNew, mdEd: () => VW.ed, provCard: (id) => { state.provView = id; renderProvCard(); },
+    openGit, openViewer, openFiles, openTerm, openDrawer, mountDeviceSettings, showWhatsNew, mdEd: () => VW.ed, provCard: (id) => { state.provView = id; renderProvCard(); },
     renderMd, esc, toast, api, copyText, fmtSize, relTime,   // Codex 工作台（web/codex.js）复用同一套排版与请求封装
     lin: { prof: linProfOpen, pick: linPickStart, wiz: mergeWizard, get: () => LIN } };   // 脉络：探针直接开剖面 / 多选 / 汇合向导
 
@@ -565,6 +565,7 @@
     connectBus(false);                   // hello 到了就会去取历史 / 接上正在跑的那一轮
 
     await Promise.all([loadSettings(), loadCaps(), loadSessions()]);
+    // codex.js selects the workspace synchronously, independently of these requests.
     // 启动时网关没起来 / 接口闪断：loadSettings 自己把错吞了，基础设置会长期停在默认值。
     // 隔一会儿看一眼，没拿到设置就补拉，最多三次（0.6.9 审计 195-N.3）
     const ensureSettings = (left) => setTimeout(async () => {
@@ -589,6 +590,7 @@
   /** 更新说明：更新后第一次打开时，主窗口正中弹一张卡片（外壳决定显示哪几版，见 WhatsNew.java；
    *  全新安装、开发端外壳没有这个接口时什么都不做）。显示出来就记为看过 */
   function showWhatsNew() {
+    if (document.documentElement.classList.contains("cx-shell")) return false;
     const A = window.CCApp;
     if (!A || typeof A.whatsNew !== "function") return false;
     let list = [];

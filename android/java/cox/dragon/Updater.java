@@ -471,7 +471,13 @@ final class Updater {
             if (!env.devkitReady()) devkit.set("uptodate", Tr.t("首次安装进行中"));
             else if (!mirror) try { checkDevkit(rels); } catch (Exception e) { devkit.set("error", e.getMessage()); }
         }
-        try { checkClaude(); } catch (Exception e) { claude.set("error", Tr.t("连不上 downloads.claude.ai：") + e.getMessage()); }
+        // Codex 首装不包含旧引擎；定期检查只更新已安装的组件，不能顺带把它装回来。
+        if (env.claudeReady()) {
+            try { checkClaude(); } catch (Exception e) { claude.set("error", Tr.t("连不上 downloads.claude.ai：") + e.getMessage()); }
+        } else if (!"installing".equals(claude.state)) {
+            claude.latest = "";
+            claude.set("missing", "");
+        }
         prefs().edit().putLong("lastCheck", System.currentTimeMillis()).apply();
         if (auto() && !manual && env.devkitReady()) autoApply();      // 首装期间不自动装任何东西，Claude Code 也由首装流程来装
         releaseApp();         // 工具包停在"已下载"没去装（比如有任务在跑）时，别让 APK 一直等着
@@ -541,13 +547,21 @@ final class Updater {
             JSONObject r = rels.getJSONObject(i);
             String tag = r.optString("tag_name");
             if (r.optBoolean("draft") || !tag.matches("v\\d+(\\.\\d+)*")) continue;
-            app.latest = tag.substring(1);
             String want = wantFlavor(), name = apkName(want);
+            JSONArray as = r.optJSONArray("assets");
+            boolean installable = false;
+            for (int k = 0; as != null && k < as.length(); k++) {
+                JSONObject a = as.optJSONObject(k);
+                if (a != null && name.equals(a.optString("name"))) { installable = true; break; }
+            }
+            // A release may contain only a manually named test build. It is not
+            // an update for this flavor; keep looking for a compatible artifact.
+            if (!installable) { Log.i(TAG, "跳过 " + tag + "：没有 " + name); continue; }
+            app.latest = tag.substring(1);
             // 版本相同但要换一套（28 ↔ 36）：也算有更新，同版本号覆盖安装系统是认的
             int c = cmpVer(app.latest, app.current);
             boolean swap = c == 0 && !want.equals(flavor());
             if (c < 0 || c == 0 && !swap) { app.set("uptodate", ""); return; }
-            JSONArray as = r.getJSONArray("assets");
             for (int k = 0; k < as.length(); k++) {
                 JSONObject a = as.getJSONObject(k);
                 if (!a.optString("name").equals(name)) continue;
@@ -827,7 +841,7 @@ final class Updater {
     private void autoApply() {
         if (!loopOn) return;
         boolean unmetered = !ctx.getSystemService(ConnectivityManager.class).isActiveNetworkMetered();
-        if ("available".equals(claude.state) && unmetered && !claudeHeld && !claudeOlder && !switching.get()) {
+        if (env.claudeReady() && "available".equals(claude.state) && unmetered && !claudeHeld && !claudeOlder && !switching.get()) {
             // 版本只读一次，装之前再按已装的现读比一遍：几个字段可能是两次检查交错写的，别凭拼起来的状态装回旧版（10-31 八轮核验）
             String v = claude.latest;
             if (!v.isEmpty() && !claudeDowngrade(v)) apply("claude", false, v);

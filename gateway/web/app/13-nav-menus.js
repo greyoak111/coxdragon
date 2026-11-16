@@ -2,6 +2,11 @@
   // 侧栏（#drawer）只放：新对话、去哪（导航）、对话列表、账户行。设置 / 能力 / 扩展 / 用量 / 帮助是主区域的整页（#pages），
   // 宽屏时侧栏和右侧窗格都留着、整页只占对话那一块；窄屏整页盖住对话，返回键回到对话。
   function openDrawer(tab) {
+    if (window.CODEX) {
+      if (tab && tab !== "sessions") return openPage(tab);
+      openPage("codex");
+      return CODEX.openSidebar();
+    }
     if (tab && tab !== "sessions") return openPage(tab);
     if (window.CCLayout && CCLayout.expand && CCLayout.expand()) return;   // 三栏收起时：回到常驻，布局层会回调这里把内容填上
     OV.closeAll();
@@ -101,7 +106,7 @@
   const NAV_ITEMS = ["codex", "sessions", "projects", "lineage", "sched", "bookmarks", "ext", "caps", "usage", "help", "changelog"];          // 侧栏「去哪」里能放的；设置走底部账户行
   var curPage = null;   // var：openSession 在启动早期就会调 closePage，别撞上 let 的暂时性死区
   // 轮询（下载进度、配对状态…）只在那一页开着时继续：整页关了、换页了就停
-  function pageOn(name) { return name === "settings" ? setOpen : curPage === name && !$("pages").classList.contains("hidden"); }
+  function pageOn(name) { return name === "settings" ? setOpen || !!window.CODEX?.deviceSettingsOpen() : curPage === name && !$("pages").classList.contains("hidden"); }
   (function () { try { const p = JSON.parse(localStorage.getItem("cc.navPins")); if (Array.isArray(p) && !localStorage.getItem("cc.navPinsV2")) { localStorage.setItem("cc.navPins", JSON.stringify([...new Set([...p.filter((k) => k !== "ext"), "projects", "sched"])])); } localStorage.setItem("cc.navPinsV2", "1"); } catch {} })();
   // 0.4.10 加了「脉络」：已有的固定项里补上它（只补一次，用户之后取消了不再加回来）
   (function () { try { const p = JSON.parse(localStorage.getItem("cc.navPins")); if (Array.isArray(p) && !localStorage.getItem("cc.navPinsV3") && !p.includes("lineage")) localStorage.setItem("cc.navPins", JSON.stringify([...p, "lineage"])); localStorage.setItem("cc.navPinsV3", "1"); } catch {} })();
@@ -293,7 +298,7 @@
   }
   // 捕获阶段拦住：mousedown / 触摸的 pointerdown 不让系统选择器弹出，click 打开我们的菜单；回车 / 空格同样打开。
   // 带 data-native 的保留系统选择器
-  const selOk = (s) => s && !s.disabled && !s.multiple && !s.dataset.native && s.size <= 1;
+  const selOk = (s) => s && !s.disabled && !s.multiple && !s.dataset.native && !s.closest("#tab-codex") && s.size <= 1;
   const selOf = (e) => e.target.closest && e.target.closest("select");
   addEventListener("mousedown", (e) => { if (selOk(selOf(e))) e.preventDefault(); }, true);
   addEventListener("pointerdown", (e) => { if (e.pointerType !== "mouse" && selOk(selOf(e))) e.preventDefault(); }, true);

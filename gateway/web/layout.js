@@ -41,7 +41,7 @@
   const recent = [];                                       // 打开顺序，最后一个在最上面
   const isOpen = (id) => { const el = $(id); return !!el && !el.classList.contains("hidden"); };
   const rtl = () => root.getAttribute("dir") === "rtl";
-  const docked = () => tier >= 3 && !rotate && localStorage.getItem(LS_DOCK) !== "0";
+  const docked = () => !root.classList.contains("cx-shell") && tier >= 3 && !rotate && localStorage.getItem(LS_DOCK) !== "0";
 
   // 常驻侧栏宽度：拖过就用拖的（像素），没拖过按窗口宽度给个默认；总要给对话留够 MIN_CHAT
   function leftWidth() {
@@ -149,7 +149,7 @@
     if (!(window.CCApp && CCApp.paneBounds)) return;
     let r = null;
     const open = recent.filter(isOpen);
-    const covered = ovCover || COVERS.some((id) => isOpen(id)
+    const covered = ovCover || !!document.querySelector("#cx-preferences[open], #cx-project-dialog[open], #cx-mobile-menu[open], #cx-onboarding:not([hidden])") || COVERS.some((id) => isOpen(id)
       && !(id === "drawer" && root.classList.contains("dock-l"))     // 常驻左栏不挡
       && !(id === "popup" && tier >= 2));                            // 宽屏时补全弹窗挪到了窗格左边
     if (isOpen("browser") && open[open.length - 1] === "browser" && !covered) {

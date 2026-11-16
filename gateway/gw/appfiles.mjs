@@ -155,8 +155,8 @@ export const APP = appGuard(HERE, {
     if (idleTimer) return;
     // 等空闲再退：正在跑的回话和终端不打断。退出后 GatewayService 一秒后重拉，起之前按安装包还原
     idleTimer = setInterval(async () => {
-      const [{ RUNS }, { TERMS }] = await Promise.all([import("./runs.mjs"), import("./terminal.mjs")]);
-      if (RUNS.size || [...TERMS.values()].some((t) => t.alive)) return;
+      const [{ RUNS }, { TERMS }, { activityBusy }] = await Promise.all([import("./runs.mjs"), import("./terminal.mjs"), import("./activity.mjs")]);
+      if (activityBusy() || RUNS.size || [...TERMS.values()].some((t) => t.alive)) return;
       log("[应用文件] 空闲了，重启网关还原");
       process.kill(process.pid, "SIGTERM");
     }, 5000);

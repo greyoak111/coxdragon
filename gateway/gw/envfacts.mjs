@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { CFG, HERE, PREFIX, log } from "./config.mjs";
 import { ensureShell, killTree } from "./claude.mjs";
 import { RUNS } from "./runs.mjs";
+import { activityBusy } from "./activity.mjs";
 import { termEnv } from "./terminal.mjs";
 import { COMP_DIR, compRecord, devkitIdentity } from "./components.mjs";
 import { modInstalled, modulesInfo } from "./modules.mjs";
@@ -80,9 +81,9 @@ function envFactsRun(why = "工具包或应用换了版本") {
     log(`[env] 本机自检：通过 ${r.pass} 项，失败 ${r.fail.length} 项`);
   }));
 }
-// 空闲（没有 claude 在跑）且结果过期时才跑：启动 2 分钟后看一次，之后每 5 分钟
+// 空闲（所有引擎都没有任务）且结果过期时才跑：启动 2 分钟后看一次，之后每 5 分钟
 function envFactsTick() {
-  if (RUNS.size || envFactsJob) return;
+  if (activityBusy() || RUNS.size || envFactsJob) return;
   let cur = null; try { const raw = readSmallFile(ENV_FACTS, 256 << 10); cur = raw == null ? null : JSON.parse(raw); } catch {}
   // 结果最多用一周：修好组件 / 联网恢复后不用等工具包再换一次版本才重测（0.6.9 审计 195-M.1）
   const old = !cur || !cur.at || Date.now() - cur.at > 7 * 86400e3;

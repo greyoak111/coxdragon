@@ -1427,7 +1427,7 @@
     if (r.fail.length) lines.push(`<details><summary>${esc(t("失败项"))}</summary>${r.fail.map((f) => `<div><code>${esc(f)}</code></div>`).join("")}</details>`);
     el.innerHTML = lines.join("");
     clearTimeout(envFactsTimer);
-    if (r.running) envFactsTimer = setTimeout(() => { if (!$("set-ov").classList.contains("hidden")) loadEnvFacts(); }, 5000);
+    if (r.running) envFactsTimer = setTimeout(() => { if (pageOn("settings")) loadEnvFacts(); }, 5000);
   }
   async function loadEnvFacts() {
     const r = await api("/api/env-facts").catch(() => null);

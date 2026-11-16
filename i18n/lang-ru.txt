@@ -3160,3 +3160,237 @@
 3160	Предыдущий ход завершён, но следующий не получил результата (прерван)
 3161	Папка не найдена: {dir}; вместо неё используется {cwd}
 3162	API вернул ошибку, а не обычный ответ:
+3163	Close sidebar
+3164	Projects and tasks
+3165	App menu
+3166	Toggle sidebar
+3167	New task
+3168	Search tasks
+3169	Add project
+3170	Tasks
+3171	Task messages
+3172	Describe a task, or ask a follow-up…
+3173	Task description
+3174	Enter to send · Shift Enter for a new line
+3175	Review changes
+3176	Working tree changes in this project
+3177	Commit in Git panel
+3178	Choose a project
+3179	For example: my app
+3180	Existing project directory
+3181	Add and start a task
+3182	This tool is unavailable
+3183	Could not add project
+3184	No text changes to display
+3185	Only part of this large diff is shown
+3186	This directory is not a Git repository
+3187	No working tree changes
+3188	File changes will appear here
+3189	Sign in with ChatGPT
+3190	Use your ChatGPT account
+3191	Explain this project’s architecture
+3192	Review the current changes
+3193	Help me build a new feature
+3194	What will you build?
+3195	Start with an idea. Make it happen in your project.
+3196	Sign in with ChatGPT to start your first task.
+3197	Untitled task
+3198	No tasks yet
+3199	Other tasks
+3200	Pin task
+3201	Unpin task
+3202	No matching tasks
+3203	Add a project to get started
+3204	Resumed task
+3205	Codex engine is not installed
+3206	Codex is working…
+3207	Engine is stopped
+3208	New task started
+3209	Turn an idea into something real.
+3210	Let Codex explore your project, write code, and work through the checks with you.
+3211	Install Codex
+3212	One-time download, about {size}
+3213	Runs on your device
+3214	Installation progress
+3215	Preparing download…
+3216	Retry installation
+3217	Install and continue
+3218	Interrupted downloads can resume. The next step opens when installation is complete.
+3219	Connect your ChatGPT account
+3220	Authorize in your browser, then come back to get started. Enter your password only on the official sign-in page.
+3221	One-time sign-in code
+3222	Copy code
+3223	Tap to copy
+3224	Open the authorization page, enter the code, and confirm sign-in.
+3225	Continue in browser
+3226	Checking…
+3227	I've finished authorizing
+3228	Cancel and start again
+3229	Connecting…
+3230	Sign in with ChatGPT
+3231	An existing sign-in is restored automatically. You won't need to authorize again.
+3232	Start with a project
+3233	Choose a working directory. Files, terminal, and change review will follow your project.
+3234	Environment ready. Account connected.
+3235	Continue existing tasks
+3236	Opening project…
+3237	Use current workspace
+3238	Choose another project directory
+3239	You can add more projects later. No task will be sent automatically.
+3240	Environment
+3241	Account
+3242	First task
+3243	Workbench setup
+3244	YOUR MOBILE WORKBENCH
+3245	This step couldn't be completed
+3246	Completed steps are kept. You can retry here.
+3247	Ideas start here.
+3248	Add search to this project
+3249	Explore the project, then build and verify.
+3250	Explore the project structure
+3251	Implement search
+3252	Review the changes together
+3253	Tell me more about your idea…
+3254	Projects, conversations, terminal, and changes, in one workbench.
+3255	An independent Codex client built for Android
+3256	Authorization hasn't arrived yet. Confirm in your browser, then check again. You only need to sign in once.
+3257	Signed in
+3258	Sign-in wasn't completed. Request a new code.
+3259	Skills & MCP
+3260	Codex settings
+3261	Settings saved for your next message.
+3262	Account & model
+3263	ChatGPT account
+3264	Model and reasoning preferences are saved on this device for your next message.
+3265	Permissions & execution
+3266	Codex requests approval for untrusted commands. Tasks run as this Android app and can access its files and authorized shared directories. Additional project directory isolation is currently disabled.
+3267	Approval policy
+3268	Execution sandbox
+3269	Background tasks
+3270	{n} tasks running
+3271	App & device settings
+3272	Appearance & language
+3273	Codex version
+3274	System notifications are available in the Android app.
+3275	Task completion notifications
+3276	Approval notifications
+3277	Some notifications are disabled by Android. Enable them in system settings.
+3278	System notification settings
+3279	Skills discovered by Codex for this project. Toggles are saved in Codex configuration.
+3280	No skills found for this project.
+3281	Services loaded by Codex and their authentication status.
+3282	Authentication
+3283	No MCP servers configured.
+3284	Showing the first 100 servers.
+3285	Project instructions
+3286	Create or edit AGENTS.md in the project directory to guide future tasks.
+3287	Codex configuration
+3288	Configure MCP in config.toml. Finish running tasks, then restart the app to reload services.
+3289	Engine
+3290	Open directory
+3291	Model connection
+3292	Custom API
+3293	Connect a model
+3294	ChatGPT or a custom API
+3295	No model connected
+3296	Choose how to connect
+3297	Use ChatGPT, a custom API, or connect later. coxdragon is an independent client, not an official OpenAI app.
+3298	Custom third-party API
+3299	Sign in to ChatGPT on its official website, or use your own API endpoint and key.
+3300	Skip and explore the workspace
+3301	Environment ready, model connected
+3302	Environment ready, connect a model later
+3303	Independent client · Not an official OpenAI app
+3304	Connect ChatGPT or a custom API to send a task.
+3305	Connect a model to send. Your draft is saved.
+3306	Saving connection settings…
+3307	Connection method
+3308	Configure connection
+3309	coxdragon is an independent client, not an official OpenAI app.
+3310	The endpoint must support the OpenAI Responses API. Requests will be sent to the address you enter.
+3311	API base URL
+3312	Key saved; leave blank to keep it
+3313	Enter your API key
+3314	This endpoint does not need an API key
+3315	Keys stay in the app private directory and are omitted from status responses. Re-enter your key when changing the address.
+3316	Save and use API
+3317	Connection saved. Tasks will use this API.
+3318	Enter a valid API URL
+3319	Use an HTTP or HTTPS URL without credentials, query parameters, or a fragment
+3320	Enter the API base URL, for example https://example.com/v1
+3321	Choose a connection method
+3322	Enter a valid model name
+3323	Invalid API key format
+3324	Enter an API key or select that the endpoint does not need one
+3325	Connection settings were not saved. Check free storage and retry.
+3326	Custom API configuration is incomplete. Save your connection settings again.
+3327	Switch to the ChatGPT connection first
+3328	Finish running tasks before switching the connection
+3329	Enter your provider API URL and key, fetch models, then test the connection.
+3330	Use the API URL supplied by your provider. You can also paste a full /responses or /chat/completions endpoint.
+3331	API protocol
+3332	Auto-detect with connection test
+3333	Request URL
+3334	Fetch models
+3335	Choose a fetched model or enter a model ID
+3336	Models are fetched after entering the URL and key. You can also enter a model ID manually.
+3337	Test connection
+3338	Sends a short model request. A small charge may apply.
+3339	Key storage and compatibility
+3340	A local adapter supports text, images and tool calls for Chat Completions. Prefer Responses for other features. A successful test does not verify every tool capability.
+3341	Fetching models…
+3342	Testing connection…
+3343	Fetched {n} models. Type a name to filter.
+3344	You can still enter a model ID manually.
+3345	Connection test passed
+3346	Connection test failed
+3347	Request details
+3348	Test the connection to detect the protocol, or select one manually.
+3349	Choose Responses or Chat Completions. Test the connection before using auto-detection.
+3350	A connection check is already running. Try again shortly.
+3351	The API response is too large
+3352	The endpoint did not return valid JSON. Check the API URL.
+3353	Request cancelled
+3354	The API request timed out. Check the URL and network.
+3355	Cannot reach the API. Check the domain, certificate and network.
+3356	The endpoint redirected. Enter the final API URL. The key was not forwarded.
+3357	The endpoint returned a web page. Use your provider API base URL, usually including /v1.
+3358	Access denied. Check your API key, permissions and provider firewall.
+3359	Endpoint not found. Check the base URL, protocol and model ID.
+3360	Rate limit reached or quota exhausted. Check your provider account.
+3361	The endpoint returned invalid streaming data
+3362	A streaming event is too large
+3363	The endpoint did not return a model list. Enter a model ID manually.
+3364	The model list is empty. Enter a model ID manually.
+3365	The model request was rejected. Check the model ID and access permissions.
+3366	The API response does not match the selected protocol
+3367	The model test did not complete. Check model access, quota and server status.
+3368	The API stream ended without a completion event. Check the protocol and server status.
+3369	Автоматически активировать после перезагрузки (нужен Wi-Fi; запускает фоновую службу coxdragon при загрузке)
+3370	Не подтверждать каждую привилегированную команду (на свой риск): после включения команды выполняются сразу, и задачи в фоне больше не застревают в ожидании подтверждения; команды, затрагивающие coxdragon или Shizuku / Sui, по возможности перехватываются с запросом, но не любую форму записи удаётся распознать. Чтобы разрешить только один сеанс, отметьте в окне подтверждения «Разрешать все следующие привилегированные команды этого сеанса»
+3371	По очереди запускает компиляторы, Python, Node, git и прочее из набора инструментов; результат сообщает Codex, что на этом устройстве работает, а что нет. После обновления набора или приложения повторяется сама; если вы что-то исправили и хотите, чтобы Codex сразу узнал, нажмите «Повторить самопроверку».
+3372	Shizuku запущен, но не авторизован для coxdragon
+3373	vivo / iQOO: Настройки → Батарея → Управление фоновым расходом → разрешите <b>высокий фоновый расход</b> для coxdragon; в iManager разрешите <b>автозапуск</b> (обычный путь)
+3374	Huawei / Honor: Настройки → Управление запуском приложений → отключите «Управлять автоматически» для coxdragon и вручную разрешите <b>автозапуск</b> и <b>фоновую активность</b> (обычный путь)
+3375	coxdragon замораживался в фоне {n} раз (в последний раз примерно {sec} с, {at}).
+3376	В системных настройках разрешите coxdragon работу в фоне, отключите оптимизацию батареи и разрешите автозапуск (названия у разных производителей отличаются).
+3377	Парное подключение по отладке по Wi-Fi для coxdragon отозвано: сейчас всё работает, но после перезагрузки автоматически активировать не получится.
+3378	Shizuku запущен не coxdragon, поэтому после перезагрузки coxdragon не сможет его активировать. Достаточно один раз выполнить сопряжение.
+3379	При загрузке система не уведомила coxdragon (сработало управление автозапуском), поэтому автоматически активировать не удалось; при открытии coxdragon всё догонится.
+3380	Чтобы активировать при загрузке: разрешите coxdragon автозапуск / запуск в фоне в сведениях о приложении. Подействует со следующей загрузки.
+3381	Авторизовать coxdragon
+3382	В этой сборке нет нативного слоя, записывается только время ЦП (заряд, экран и время на экране — только в coxdragon).
+3383	Once enabled, Codex and the terminal can run <code>priv 'command'</code> as the shell user (pm / am / settings / dumpsys / logcat / screencap…). Basic development still works without Shizuku; these debugging capabilities require it.
+3384	Инструменты задачи
+3385	Другие параметры
+3386	Спросить Codex
+3387	Размышляю…
+3388	Выполняю команду…
+3389	Изменяю файлы…
+3390	Отвечаю…
+3391	Вызываю инструмент…
+3392	Ожидаю вашего подтверждения
+3393	Краткое рассуждение
+3394	Выбрана Chat Completions. Повторите попытку в новой задаче.
+3395	CodeFlow не смог завершить задачу через Responses. Переключитесь на Chat Completions.
+3396	Переключиться на Chat Completions

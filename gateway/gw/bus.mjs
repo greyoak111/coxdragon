@@ -3,6 +3,7 @@ import { RUNS, runList } from "./runs.mjs";
 import { NEXT, sendJson, uiTag, writePaced } from "./http.mjs";
 import { flushPend, snapshot } from "./queue.mjs";
 import { onTamper, tamperAck, tamperPending } from "./tamper.mjs";
+import { codexActivity, onCodexActivity } from "./codex.mjs";
 
 // ── 事件总线 ──────────────────────────────────────────────────────────
 // Claude Desktop 的做法：一次生成（run）属于网关，不属于哪个 HTTP 请求。
@@ -32,6 +33,7 @@ export function onPublish(fn) {
 }
 
 export function publish(ev) {
+  if (ev.type === "state") ev = { ...ev, codex: codexActivity() };
   const seq = ++BUS.seq;
   // 环里直接存字节：上限按字节算（以前按 UTF-16 字符数，中文一字三字节，32MB 的线实际放进去近百 MB，0.6.9 审计 200-H-3），推给各连接也不用每次再转
   const line = Buffer.from(`id: ${BOOT}.${seq}\ndata: ${JSON.stringify(ev)}\n\n`);
@@ -57,6 +59,7 @@ function busWrite(res, line) {
 if (LIVE) setInterval(() => { for (const c of BUS.clients) busWrite(c, ": hb\n\n"); }, 15000).unref();
 // 篡改留痕（tamper.mjs）：有新的就推给界面，界面提示一次，点「知道了」回 /api/tamper/ack
 onTamper((list) => publish({ type: "tamper", tamper: list }));
+onCodexActivity(publish);
 
 // ── 路由：/api/events /api/state ──
 export async function routeBus(req, res, u, p) {
@@ -78,7 +81,7 @@ export async function routeBus(req, res, u, p) {
     const resume = since >= 0 && since <= BUS.seq && (since === BUS.seq || (first && first.seq <= since + 1));
     // 要补发的先按条取成快照（这一刻的样子；之后的增量走下面的队列），再按对端的接收速度逐条写：
     // 以前拼成一整个字符串一次写出，整轮重放几十 MB 时就是双份内存，对端不收还全堆在缓冲里（审查 v0513b 低-4）
-    const head = "retry: 1500\n\n" + `data: ${JSON.stringify({ type: "hello", boot: BOOT, resume, uiTag: uiTag(), ...snapshot() })}\n\n`;
+    const head = "retry: 1500\n\n" + `data: ${JSON.stringify({ type: "hello", boot: BOOT, resume, uiTag: uiTag(), ...snapshot(), codex: codexActivity() })}\n\n`;
     const tail = `id: ${BOOT}.${BUS.seq}\ndata: {"type":"sync"}\n\n`;
     let lines;
     if (resume) {
@@ -127,7 +130,7 @@ export async function routeBus(req, res, u, p) {
     req.on("close", () => BUS.clients.delete(res));
     return;
   }
-  if (req.method === "GET" && p === "/api/state") return sendJson(res, 200, snapshot());
+  if (req.method === "GET" && p === "/api/state") return sendJson(res, 200, { ...snapshot(), codex: codexActivity() });
   if (req.method === "POST" && p === "/api/tamper/ack") {
     tamperAck(u.searchParams.get("id"));
     return sendJson(res, 200, { ok: true, tamper: tamperPending() });

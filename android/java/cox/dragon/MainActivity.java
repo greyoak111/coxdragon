@@ -36,7 +36,7 @@ import java.net.URL;
 import java.util.concurrent.CountDownLatch;
 
 /**
- * 启动流程：存储权限 → 开发工具包 → 官方 Claude Code → 网关代码 → 前台服务 → 界面。
+ * 启动流程：准备工作环境 → 启动本地网关 → Codex 安装、账号与项目引导。
  * 每一步都能重入：装到一半被杀，下次打开从缺的那一步接着来。
  */
 public class MainActivity extends Activity {
@@ -113,6 +113,9 @@ public class MainActivity extends Activity {
     private ScrollView logScroll;
     private ProgressBar bar;
     private TextView stat;
+    private TextView setupSteps, setupHeading, setupDescription, setupActivity, setupDetails;
+    private boolean setupLogOpen;
+    private Runnable setupBack;
     /** 平时启动（工具包已装好）：只有居中的标识和一行小字，安装页的日志藏在 setupCol 里，出错 / 要下载 / 要选东西时才展开 */
     private View splash;
     private Mark splashMark;
@@ -160,7 +163,7 @@ public class MainActivity extends Activity {
         pending = getIntent();
         java.util.List<String> want = new java.util.ArrayList<>();
         // targetSdk ≥ 30 时这两个存储权限已经不管用（分区存储），改由 askAllFiles 要「所有文件访问」，不挡启动
-        if (getApplicationInfo().targetSdkVersion < 30 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+        if (setupDone() && getApplicationInfo().targetSdkVersion < 30 && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
             want.add(Manifest.permission.READ_EXTERNAL_STORAGE);
             want.add(Manifest.permission.WRITE_EXTERNAL_STORAGE);
         }
@@ -202,8 +205,8 @@ public class MainActivity extends Activity {
 
     private void boot() {
         if (secondaryUser(this)) {
-            say(Tr.t("✗ cccodroid 只能装在手机的主空间里。"));
-            say(Tr.t("分身、第二空间、安全文件夹、工作资料里的应用目录路径不同，开发工具包跑不起来（Termux 也有同样的限制）。请卸载这里的 cccodroid，在主空间安装。"));
+            say(Tr.t("✗ coxdragon 需要安装在手机的主空间。"));
+            say(Tr.t("请在主空间安装并打开 coxdragon，分身、工作资料和安全文件夹暂不支持。"));
             ui.post(() -> stuck.setVisibility(View.VISIBLE));
             return;
         }
@@ -260,7 +263,7 @@ public class MainActivity extends Activity {
                         say(Tr.t("✓ 开发工具包已更新"));
                     } else say(Tr.t("开发工具包更新已下载；有任务在跑，等空闲时再装（也可在设置页手动装）"));
                 }
-                askBatteryExemption();
+                if (setupDone()) askBatteryExemption();
                 say(Tr.t("等待网关…"));
                 waitGateway(true);
                 ui.post(() -> { if (isDestroyed()) return; showWeb(); booted = true; handle(pending); pending = null; });
@@ -549,7 +552,10 @@ public class MainActivity extends Activity {
         else if (ACTION_A11Y_OK.equals(a)) confirmA11y(i.getStringExtra("mode"), i.getBooleanExtra("on", false));
         else if (ACTION_CONSENT.equals(a)) Consent.runNext(this);
         else if (ACTION_PRIV_OK.equals(a)) confirmPriv(i.getStringExtra("id"), i.getStringExtra("cmd"), i.getStringExtra("who"), i.getBooleanExtra("trust", false), i.getBooleanExtra("sess", false), "noask".equals(i.getStringExtra("kind")), "apk".equals(i.getStringExtra("kind")));
-        else if (Notify.ACTION_OPEN.equals(a)) openSession(i.getStringExtra("session"));
+        else if (Notify.ACTION_OPEN.equals(a)) {
+            if ("codex".equals(i.getStringExtra("engine"))) openCodexThread(i.getStringExtra("session"));
+            else openSession(i.getStringExtra("session"));
+        }
     }
 
     // ── 分享进来的东西：文件拷进工作区的 uploads/（和网页上传同一处、同样的命名），文字插进输入框 ──
@@ -861,6 +867,13 @@ public class MainActivity extends Activity {
 
     /** 从「已完成」通知点进来：切到那个会话（界面正显示它就不动）。页面可能还在启动，等 __cc 就绪 */
     private String pendingSid;
+    private String pendingCodexThread;
+    private void openCodexThread(String id) {
+        if (web == null || id == null || !id.matches("[0-9A-Za-z_-]{1,160}")) return;
+        if (!isOwnGateway(web.getUrl())) { pendingCodexThread = id; return; }
+        web.evaluateJavascript("(function f(n){if(window.CODEX&&window.__cc){CODEX.openNotification(" + org.json.JSONObject.quote(id)
+            + ")}else if(n<100)setTimeout(function(){f(n+1)},200)})(0)", null);
+    }
     private void openSession(String sid) {
         if (web == null || sid == null || !sid.matches("[0-9A-Za-z-]{8,64}")) return;
         // 冷启动时页面还在 about:blank / 等网关：这里塞进去的轮询会被真正的导航冲掉。先记着，网关页面落地再发（审查 #49 待确认-2）
@@ -890,6 +903,7 @@ public class MainActivity extends Activity {
                     File mj = ins.download(m ? mmir : mgh, m ? mgh : mmir, new File(env.files, mf), pm.optLong("bytes"), pm.optString("sha256"));
                     byte[] bytes = java.nio.file.Files.readAllBytes(mj.toPath());
                     java.util.List<String> want = chooseModules(new org.json.JSONObject(new String(bytes, java.nio.charset.StandardCharsets.UTF_8)));
+                    if (want == null) continue;
                     ins.installModules(bytes, want, base, pin.getJSONObject("gz").getString("sha256"), m);
                     mj.delete();
                     return;
@@ -910,61 +924,52 @@ public class MainActivity extends Activity {
         final String[] pick = {null};
         CountDownLatch done = new CountDownLatch(1);
         SharedPreferences sp = getSharedPreferences("ui", MODE_PRIVATE);
-        String last = sp.getString("devkitSrc", "");
-        org.json.JSONObject gz = pin.optJSONObject("gz"), tar = pin.optJSONObject("tar");
-        File part = new File(env.files, gz.optString("file") + ".part");
+        String last = sp.getString("devkitSrc", "github");
         ui.post(() -> {
-            boolean dark = uiDark();
-            int fg = BrowserPane.pal(MainActivity.this, dark, "fg"), dim = BrowserPane.pal(MainActivity.this, dark, "dim");
-            int line = BrowserPane.pal(MainActivity.this, dark, "line"), accent = BrowserPane.pal(MainActivity.this, dark, "accent");
             chooser.removeAllViews();
             chooserFoot.removeAllViews();
-            TextView q = new TextView(this);
-            q.setTextColor(fg);
-            q.setTextSize(14);
-            q.setPadding(0, dp(4), 0, dp(8));
-            String txt = Tr.f("开发工具包约 {0} MB（解开后约 {1} GB），从哪里装？",
-                String.valueOf(gz.optLong("bytes") >> 20), String.format(java.util.Locale.ROOT, "%.1f", (tar != null ? tar.optLong("bytes") : 0) / 1073741824.0));
-            if (part.length() > 0) txt += "\n" + Tr.f("已经下了 {0} MB，两个下载源都能接着续传。", String.valueOf(part.length() >> 20));
-            q.setText(txt);
-            chooser.addView(q);
+            setupIntro(Tr.t("在手机上，开始构建。"), Tr.t("用 Codex 理解项目、编写代码、审阅改动。从准备工作环境开始。"));
+            setupFeature("01", Tr.t("准备环境"), Tr.t("安装运行 Codex 和项目工具所需的环境。"));
+            setupFeature("02", Tr.t("连接模型"), Tr.t("选择 ChatGPT、自定义第三方 API，或跳过并稍后连接。"));
+            setupFeature("03", Tr.t("开始第一个任务"), Tr.t("打开项目，把你的想法交给 Codex。"));
+            final String[] source = { "mirror".equals(last) ? "mirror" : "github" };
+            LinearLayout advanced = new LinearLayout(this);
+            advanced.setOrientation(LinearLayout.VERTICAL);
+            advanced.setVisibility(View.GONE);
+            TextView toggle = setupText(Tr.t("下载选项") + "  +", 13, "dim");
+            toggle.setPadding(0, dp(18), 0, dp(12));
+            toggle.setOnClickListener(v -> {
+                boolean open = advanced.getVisibility() != View.VISIBLE;
+                advanced.setVisibility(open ? View.VISIBLE : View.GONE); toggle.setText(Tr.t("下载选项") + (open ? "  −" : "  +"));
+            });
+            toggle.setContentDescription(Tr.t("展开或收起下载选项")); toggle.setFocusable(true);
+            chooser.addView(toggle);
+            android.widget.RadioGroup options = new android.widget.RadioGroup(this);
             String[][] opts = {
-                {"github", Tr.t("从 GitHub 下载"), Tr.t("海外网络一般最快")},
-                {"mirror", Tr.t("从 cccodroid.net 镜像下载"), Tr.t("GitHub 慢或连不上时用；文件与 GitHub 上的一致，照样核对 sha256")},
-                {"local", Tr.t("选择本地文件…"), Tr.t("已经下好的 devkit-cox.dragon.tar.gz（或 .tar）；装之前核对是不是发布版")},
+                {"github", Tr.t("自动选择下载来源 · 推荐"), Tr.t("自动测速，连接失败时切换备用来源。")},
+                {"mirror", Tr.t("优先使用镜像"), Tr.t("适合 GitHub 连接不稳定的网络。")},
+                {"local", Tr.t("使用本地工具包"), Tr.t("选择已下载的工具包，安装前会校验文件。")},
                 local != null ? new String[]{"path", Tr.t("用共享目录里的文件"), local} : null,
             };
+            TextView go = setupButton(Tr.t("设置我的工作台"), true);
             for (String[] o : opts) {
                 if (o == null) continue;
-                LinearLayout card = new LinearLayout(this);
-                card.setOrientation(LinearLayout.VERTICAL);
-                card.setPadding(dp(14), dp(10), dp(14), dp(10));
-                android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-                bg.setCornerRadius(dp(10));
-                bg.setStroke(dp(1), o[0].equals(last) ? accent : line);
-                card.setBackground(bg);
-                TextView t1 = new TextView(this);
-                t1.setText(o[1] + (o[0].equals(last) ? "  · " + Tr.t("上次选的") : ""));
-                t1.setTextColor(fg);
-                t1.setTextSize(15);
-                TextView t2 = new TextView(this);
-                t2.setText(o[2]);
-                t2.setTextColor(dim);
-                t2.setTextSize(12);
-                card.addView(t1);
-                card.addView(t2);
-                card.setClickable(true);
-                card.setOnClickListener(v -> {
-                    if (pick[0] != null) return;
-                    pick[0] = o[0];
-                    sp.edit().putString("devkitSrc", o[0]).apply();
-                    showChooser(false);
-                    done.countDown();
-                });
-                LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
-                lp.bottomMargin = dp(8);
-                chooser.addView(card, lp);
+                android.widget.RadioButton radio = new android.widget.RadioButton(this);
+                radio.setId(View.generateViewId()); radio.setText(o[1] + "\n" + o[2]);
+                radio.setTextSize(12); radio.setTextColor(BrowserPane.pal(this, uiDark(), "fg"));
+                radio.setPadding(0, dp(10), 0, dp(10));
+                options.addView(radio, new LinearLayout.LayoutParams(-1, -2));
+                if (o[0].equals(source[0])) options.check(radio.getId());
+                radio.setOnCheckedChangeListener((v, checked) -> { if (checked) { source[0] = o[0]; go.setText(Tr.t("local".equals(o[0]) || "path".equals(o[0]) ? "选择工具包文件" : "设置我的工作台")); } });
             }
+            advanced.addView(options); chooser.addView(advanced);
+            go.setOnClickListener(v -> {
+                if (done.getCount() == 0) return;
+                pick[0] = source[0]; sp.edit().putString("devkitSrc", source[0]).apply();
+                showChooser(false); done.countDown();
+            });
+            chooserFoot.addView(go, new LinearLayout.LayoutParams(-1, -2));
+            chooserFoot.addView(setupText(Tr.t("下一步可确认下载大小，已下载的内容会保留。"), 11, "dim"));
             showChooser(true);
         });
         awaitAlive(done);
@@ -974,32 +979,44 @@ public class MainActivity extends Activity {
     /** 选项和日志区二选一占剩余高度；选完回到日志 */
     private void showChooser(boolean on) {
         if (on) expandSetup();
+        if (!on) { setupBack = null; setupIntro(Tr.t("正在准备工作环境"), Tr.t("请保持网络连接，完成后可选择 ChatGPT、自定义 API 或跳过连接。")); }
         chooser.setVisibility(on ? View.VISIBLE : View.GONE);
         chooserScroll.setVisibility(on ? View.VISIBLE : View.GONE);
         chooserFoot.setVisibility(on && chooserFoot.getChildCount() > 0 ? View.VISIBLE : View.GONE);
-        logScroll.setVisibility(on ? View.GONE : View.VISIBLE);
+        logScroll.setVisibility(on ? View.GONE : setupLogOpen ? View.VISIBLE : View.INVISIBLE);
+        bar.setVisibility(on ? View.GONE : View.VISIBLE);
+        stat.setVisibility(on ? View.GONE : View.VISIBLE);
+        setupActivity.setVisibility(on ? View.GONE : View.VISIBLE);
+        setupDetails.setVisibility(on ? View.GONE : View.VISIBLE);
         if (on) chooserScroll.scrollTo(0, 0);
     }
 
-    /** 首装默认勾上的模块：Claude 写代码最常用的两样。其余按需在扩展页加装 */
-    static final java.util.Set<String> DEFAULT_MODULES = new java.util.HashSet<>(java.util.Arrays.asList("cli", "build"));
+    /** Codex 首装只带命令行工具；编译器等模块以后在扩展页按需加装。 */
+    static final java.util.Set<String> DEFAULT_MODULES = new java.util.HashSet<>(java.util.Arrays.asList("cli"));
 
     /** 首装勾选表：基础必装（灰着），共享运行库按勾选自动带上；底下实时算合计下载 / 占用。返回勾上的模块 id */
     private java.util.List<String> chooseModules(org.json.JSONObject mj) throws Exception {
         final java.util.List<String> out = new java.util.ArrayList<>();
         final java.util.Set<String> on = new java.util.LinkedHashSet<>(DEFAULT_MODULES);
         CountDownLatch done = new CountDownLatch(1);
+        final boolean[] back = {false};
         org.json.JSONArray all = mj.getJSONArray("modules");
         ui.post(() -> {
             boolean dark = uiDark();
             int fg = BrowserPane.pal(MainActivity.this, dark, "fg"), dim = BrowserPane.pal(MainActivity.this, dark, "dim");
-            int line = BrowserPane.pal(MainActivity.this, dark, "line"), accent = BrowserPane.pal(MainActivity.this, dark, "accent");
             chooser.removeAllViews();
             chooserFoot.removeAllViews();
-            TextView q = new TextView(this);
-            q.setTextColor(fg); q.setTextSize(14); q.setPadding(0, dp(4), 0, dp(8));
-            q.setText(Tr.t("开发工具包按用途分成了模块。勾上要装的，以后也可以在「扩展」页随时加装或卸载。"));
-            chooser.addView(q);
+            setupIntro(Tr.t("准备你的工作环境"), Tr.t("已为你选好基础环境和命令行工具。编译器及其他工具可以以后在「扩展」中添加。"));
+            setupFeature("✓", Tr.t("Codex 基础环境"), Tr.t("运行工作台、管理文件，并在项目中执行命令。"));
+            LinearLayout advanced = new LinearLayout(this);
+            advanced.setOrientation(LinearLayout.VERTICAL); advanced.setVisibility(View.GONE);
+            TextView toggle = setupText(Tr.t("自定义安装模块") + "  +", 13, "dim");
+            toggle.setPadding(0, dp(18), 0, dp(12)); toggle.setFocusable(true);
+            toggle.setOnClickListener(v -> {
+                boolean open = advanced.getVisibility() != View.VISIBLE;
+                advanced.setVisibility(open ? View.VISIBLE : View.GONE); toggle.setText(Tr.t("自定义安装模块") + (open ? "  −" : "  +"));
+            });
+            chooser.addView(toggle); chooser.addView(advanced);
             TextView sum = new TextView(this);
             Runnable recalc = () -> {
                 long dl = 0, inst = 0;
@@ -1023,18 +1040,12 @@ public class MainActivity extends Activity {
                 cb.setEnabled(!req);
                 cb.setPadding(dp(6), dp(6), 0, dp(6));
                 cb.setOnCheckedChangeListener((v, c2) -> { if (c2) on.add(id); else on.remove(id); recalc.run(); });
-                chooser.addView(cb, new LinearLayout.LayoutParams(-1, -2));
+                advanced.addView(cb, new LinearLayout.LayoutParams(-1, -2));
             }
             sum.setTextColor(dim); sum.setTextSize(12); sum.setPadding(0, dp(8), 0, dp(8));
             chooserFoot.addView(sum);
             recalc.run();
-            TextView go = new TextView(this);
-            go.setText(Tr.t("开始安装"));
-            go.setTextColor(accent); go.setTextSize(15); go.setGravity(Gravity.CENTER);
-            go.setPadding(dp(14), dp(10), dp(14), dp(10));
-            android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
-            bg.setCornerRadius(dp(10)); bg.setStroke(dp(1), accent);
-            go.setBackground(bg);
+            TextView go = setupButton(Tr.t("安装并继续"), true);
             go.setOnClickListener(v -> {
                 if (done.getCount() == 0) return;
                 out.addAll(on);
@@ -1042,10 +1053,14 @@ public class MainActivity extends Activity {
                 done.countDown();
             });
             chooserFoot.addView(go, new LinearLayout.LayoutParams(-1, -2));
+            TextView prev = setupButton(Tr.t("上一步"), false);
+            setupBack = () -> { if (done.getCount() == 0) return; back[0] = true; showChooser(false); done.countDown(); };
+            prev.setOnClickListener(v -> { if (setupBack != null) setupBack.run(); });
+            chooserFoot.addView(prev, new LinearLayout.LayoutParams(-1, -2));
             showChooser(true);
         });
         awaitAlive(done);
-        return out;
+        return back[0] ? null : out;
     }
 
     private static Intent devkitPickIntent() {
@@ -1474,6 +1489,47 @@ public class MainActivity extends Activity {
     }
 
     // ── 界面 ───────────────────────────────────────────────────────────
+    /** 首次设置使用私有工作区，完成引导后再按原来的方式提示可选系统权限。 */
+    private boolean setupDone() { return getSharedPreferences("ui", MODE_PRIVATE).getBoolean("codexSetupDone", false); }
+    private TextView setupText(String text, float size, String color) {
+        TextView v = new TextView(this);
+        v.setText(text); v.setTextSize(size);
+        v.setTextColor(BrowserPane.pal(this, uiDark(), color));
+        v.setLineSpacing(dp(2), 1.15f); v.setPadding(0, dp(6), 0, dp(6));
+        return v;
+    }
+
+    private TextView setupButton(String text, boolean primary) {
+        TextView v = setupText(text, 14, primary ? "bg" : "dim");
+        v.setGravity(Gravity.CENTER); v.setPadding(dp(16), dp(14), dp(16), dp(14));
+        v.setMinHeight(dp(48)); v.setClickable(true); v.setFocusable(true);
+        v.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override public void onInitializeAccessibilityNodeInfo(View host, android.view.accessibility.AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info); info.setClassName("android.widget.Button");
+            }
+        });
+        android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+        bg.setCornerRadius(dp(10));
+        if (primary) bg.setColor(BrowserPane.pal(this, uiDark(), "fg"));
+        v.setBackground(bg);
+        return v;
+    }
+
+    private void setupIntro(String title, String description) {
+        setupHeading.setText(title); setupDescription.setText(description);
+    }
+
+    private void setupFeature(String number, String title, String description) {
+        LinearLayout row = new LinearLayout(this);
+        row.setGravity(Gravity.CENTER_VERTICAL); row.setPadding(0, dp(12), 0, dp(12));
+        TextView n = setupText(number, 13, "dim"); n.setTypeface(android.graphics.Typeface.MONOSPACE);
+        row.addView(n, new LinearLayout.LayoutParams(dp(38), -2));
+        LinearLayout copy = new LinearLayout(this); copy.setOrientation(LinearLayout.VERTICAL);
+        TextView heading = setupText(title, 15, "fg"); heading.setPadding(0, 0, 0, dp(3));
+        copy.addView(heading); TextView detail = setupText(description, 12, "dim"); detail.setPadding(0, 0, 0, 0); copy.addView(detail);
+        row.addView(copy, new LinearLayout.LayoutParams(0, -2, 1)); chooser.addView(row);
+    }
+
     private void buildSetupUi() { buildSetupUi(false); }
     /** quick = 平时启动：先只露出居中的标识，安装页整套控件照样建好、藏着，需要时 expandSetup() 换上来 */
     private void buildSetupUi(boolean quick) {
@@ -1483,23 +1539,44 @@ public class MainActivity extends Activity {
         if (pane != null) closePane(true);
         root = new FrameLayout(this);
         root.setBackgroundColor(BrowserPane.pal(this, dark, "bg"));
-        LinearLayout col = new LinearLayout(this);
+        LinearLayout col = new LinearLayout(this) {
+            @Override protected void onMeasure(int width, int height) {
+                boolean compact = View.MeasureSpec.getSize(height) < dp(520);
+                setPadding(dp(24), dp(compact ? 12 : 24), dp(24), dp(compact ? 8 : 16));
+                if (setupSteps != null) setupSteps.setVisibility(compact ? View.GONE : View.VISIBLE);
+                if (setupDescription != null) setupDescription.setVisibility(compact ? View.GONE : View.VISIBLE);
+                if (setupHeading != null) setupHeading.setTextSize(compact ? 22 : 28);
+                super.onMeasure(View.MeasureSpec.makeMeasureSpec(Math.min(View.MeasureSpec.getSize(width), dp(680)), View.MeasureSpec.EXACTLY), height);
+            }
+        };
         setupCol = col;
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(dp(20), dp(40), dp(20), dp(20));
-        // 标题行：标识（一直在扫，表示还在忙）+ cccodroid
+        col.setPadding(dp(24), dp(24), dp(24), dp(16));
+        setupLogOpen = false; setupBack = null;
+        // 与 Codex 网页引导使用同一品牌和步骤顺序。
         LinearLayout head = new LinearLayout(this);
         head.setGravity(android.view.Gravity.CENTER_VERTICAL);
         head.setPadding(0, 0, 0, dp(12));
-        head.addView(new Mark(this, BrowserPane.pal(this, dark, "fg"), Mark.dotColor(this, dark)), new LinearLayout.LayoutParams(dp(34), dp(34)));
+        head.addView(new Mark(this, BrowserPane.pal(this, dark, "fg"), Mark.dotColor(this, dark)), new LinearLayout.LayoutParams(dp(26), dp(26)));
         TextView title = new TextView(this);
-        title.setText("cccodroid");
-        title.setTextSize(24);
+        title.setText("coxdragon");
+        title.setTextSize(18);
         title.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
         title.setPadding(dp(12), 0, 0, 0);
         title.setTextColor(BrowserPane.pal(this, dark, "fg"));
         head.addView(title);
         col.addView(head);
+        col.addView(setupText(Tr.t("独立客户端 · 非 OpenAI 官方应用"), 11, "dim"));
+        setupSteps = setupText(Tr.t("01 准备环境   /   02 连接模型   /   03 开始任务"), 11, "dim");
+        setupSteps.setPadding(0, dp(12), 0, dp(22)); col.addView(setupSteps);
+        setupHeading = setupText(Tr.t("正在准备工作环境"), 28, "fg");
+        setupHeading.setTypeface(android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL));
+        col.addView(setupHeading);
+        setupDescription = setupText(Tr.t("完成后可选择 ChatGPT、自定义 API 或跳过连接。"), 13, "dim");
+        setupDescription.setPadding(0, dp(6), 0, dp(20)); col.addView(setupDescription);
+        setupActivity = setupText(Tr.t("正在检查安装状态…"), 13, "fg");
+        setupActivity.setMaxLines(4); setupActivity.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        setupActivity.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE); col.addView(setupActivity);
         bar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
         bar.setIndeterminate(true);
         bar.setProgressTintList(android.content.res.ColorStateList.valueOf(accent));
@@ -1518,12 +1595,13 @@ public class MainActivity extends Activity {
         log.setLineSpacing(0, 1.15f);
         log.setTypeface(android.graphics.Typeface.MONOSPACE);
         logScroll = new ScrollView(this);
-        logScroll.addView(log);
+        log.setTextIsSelectable(true);
+        logScroll.addView(log); logScroll.setVisibility(View.INVISIBLE);
         col.addView(logScroll, new LinearLayout.LayoutParams(-1, 0, 1));
         retry = new android.widget.Button(this);
         retry.setText(Tr.t("重试"));
         retry.setVisibility(View.GONE);
-        retry.setOnClickListener(v -> { retry.setVisibility(View.GONE); stuck.setVisibility(View.GONE); say(Tr.t("— 重试 —")); boot(); });
+        retry.setOnClickListener(v -> { retry.setVisibility(View.GONE); stuck.setVisibility(View.GONE); bar.setVisibility(View.VISIBLE); bar.setIndeterminate(true); setupIntro(Tr.t("正在准备工作环境"), Tr.t("已下载的内容会保留，从未完成的步骤继续。")); say(Tr.t("— 重试 —")); boot(); });
         // 「我卡住了」：界面还没起来时（安装就失败了）也能把诊断包发出去
         stuck = new android.widget.Button(this);
         stuck.setText(Tr.t("我卡住了：分享诊断"));
@@ -1552,11 +1630,18 @@ public class MainActivity extends Activity {
         chooserFoot.setPadding(0, dp(8), 0, 0);
         chooserFoot.setVisibility(View.GONE);
         col.addView(chooserFoot, new LinearLayout.LayoutParams(-1, -2));
+        setupDetails = setupText(Tr.t("查看安装详情"), 12, "dim");
+        setupDetails.setFocusable(true); setupDetails.setOnClickListener(v -> {
+            setupLogOpen = !setupLogOpen;
+            logScroll.setVisibility(setupLogOpen ? View.VISIBLE : View.INVISIBLE);
+            setupDetails.setText(Tr.t(setupLogOpen ? "收起安装详情" : "查看安装详情"));
+        });
+        col.addView(setupDetails);
         LinearLayout acts = new LinearLayout(this);
         acts.addView(retry, new LinearLayout.LayoutParams(-2, -2));
         acts.addView(stuck, new LinearLayout.LayoutParams(-2, -2));
         col.addView(acts, new LinearLayout.LayoutParams(-1, -2));
-        root.addView(col);
+        root.addView(col, new FrameLayout.LayoutParams(-1, -1, Gravity.CENTER_HORIZONTAL));
         splash = null; splashMark = null; splashStat = null;
         if (quick) {
             col.setVisibility(View.GONE);
@@ -1594,7 +1679,11 @@ public class MainActivity extends Activity {
         android.util.Log.i("cccodroid-setup", m);      // 安装 / 更新出问题时，logcat 里能看到走到了哪一步
         ui.post(() -> {
             if (splashStat != null) splashStat.setText(m);
-            if (m.startsWith("✗")) expandSetup();
+            setupActivity.setText(m.trim());
+            if (m.startsWith("✗")) {
+                expandSetup(); bar.setVisibility(View.GONE);
+                setupIntro(Tr.t("这一步没有完成"), Tr.t("已完成的步骤会保留，可以在这里重试。"));
+            }
             log.append(m + "\n");
             if (log.getLineCount() > 400) log.setText(log.getText().subSequence(log.getText().length() / 2, log.getText().length()));
             logScroll.post(() -> logScroll.fullScroll(View.FOCUS_DOWN));
@@ -1651,7 +1740,7 @@ public class MainActivity extends Activity {
         if (isDestroyed()) return;
         // 下面 removeAllViews 会把窗格摘掉；字段不清的话窗格从此一片空白、关不掉（同上 中-3）
         if (pane != null) closePane(true);
-        askPerms();
+        if (setupDone()) askPerms();
         // 网页调试默认关：开着时任何连上 adb 的电脑都能读页面（含网关令牌）。
         // 要调试就在终端里 touch ~/.webdebug，重开应用。这个文件同 uid 的脚本也建得出来，所以光有它不算数：
         // 第一次要在原生对话框里点头（再用锁屏验证存下来，见 Consent）；删掉文件就连同意一起撤掉（11-03 审查 L-16）
@@ -1760,6 +1849,7 @@ public class MainActivity extends Activity {
                 pushInsets();
                 if (handoff != null && isOwnGateway(url)) ui.postDelayed(MainActivity.this::dropHandoff, 180);
                 if (pendingSid != null && isOwnGateway(url)) { String sid = pendingSid; pendingSid = null; openSession(sid); }
+                if (pendingCodexThread != null && isOwnGateway(url)) { String id = pendingCodexThread; pendingCodexThread = null; openCodexThread(id); }
             }
         });
         web.addJavascriptInterface(new Object() {
@@ -1851,6 +1941,9 @@ public class MainActivity extends Activity {
             /** 界面里的外观设置（auto / light / dark），下次启动时安装页照着上色 */
             /** 界面最终用的语言（i18n.js 解析过的 code，不是 auto）：外壳的通知、安装页、更新文案跟着换 */
             @android.webkit.JavascriptInterface public void langPref(String k, String code) { if (!Env.bridgeOk(k)) return; Tr.set(code); }
+            @android.webkit.JavascriptInterface public void setupDone(String k) { if (!Env.bridgeOk(k)) return;
+                getSharedPreferences("ui", MODE_PRIVATE).edit().putBoolean("codexSetupDone", true).apply();
+            }
             @android.webkit.JavascriptInterface public void themePref(String k, String p) { if (!Env.bridgeOk(k)) return;
                 if ("auto".equals(p) || "light".equals(p) || "dark".equals(p))
                     getSharedPreferences("ui", MODE_PRIVATE).edit().putString("theme", p).commit();
@@ -2542,6 +2635,7 @@ public class MainActivity extends Activity {
     }
 
     @Override public void onBackPressed() {
+        if (web == null && setupBack != null) { setupBack.run(); return; }
         if (web == null) { moveTaskToBack(true); return; }
         // 先让页面关最上层的浮层（侧栏 / 查看器 / 终端 / 弹窗…，见 app.js __ccBack），都没开才退
         web.evaluateJavascript(guarded("__ccBack", "window.__ccBack?__ccBack():false"), v -> {

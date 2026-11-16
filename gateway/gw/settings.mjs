@@ -4,6 +4,7 @@ import { CFG, PATHS, PERM_MODES, log, tz } from "./config.mjs";
 import { API_KEY, BUILTIN_PROVIDER, PROVIDER, PROVIDERS_CFG, applyProvider } from "./providers.mjs";
 import { beginBridgeSwitch, bridgeSwitching, setBridgeUpstream } from "./claude.mjs";
 import { MAX_PARALLEL_CAP, RUNS, maxParallel } from "./runs.mjs";
+import { activityBusy } from "./activity.mjs";
 import { NEXT, readBody, sendJson } from "./http.mjs";
 import { customRefresh } from "./custom.mjs";
 import { clearFollowingModels } from "./projects.mjs";
@@ -44,6 +45,7 @@ export async function routeSettings(req, res, u, p) {
     }
     if (req.method === "POST") {
       const b = JSON.parse((await readBody(req)) || "{}");
+      if (b.restart && (activityBusy() || RUNS.size)) return sendJson(res, 409, { error: tz("还有任务在跑，等它们结束再重启") });
       if ("mode" in b) {
         const m = String(b.mode);
         if (!["auto", "direct", "loader"].includes(m)) return sendJson(res, 400, { error: "bad mode" });
@@ -52,7 +54,6 @@ export async function routeSettings(req, res, u, p) {
         log(`执行方式偏好改为 ${m}`);
       }
       if (b.restart) {
-        if (RUNS.size) return sendJson(res, 409, { error: tz("还有任务在跑，等它们结束再重启") });
         log("按设置重启网关（执行方式）");
         setTimeout(() => process.kill(process.pid, "SIGTERM"), 300);   // 走正常收尾；GatewayService 会马上再拉起
       }

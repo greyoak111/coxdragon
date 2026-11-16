@@ -262,6 +262,7 @@
       && !histEl.querySelector(".msg:not(.welcome)") && !liveEl.querySelector(".msg");
   }
   function newConversation(note) {
+    if (window.CODEX) { openPage("codex"); CODEX.newThread(); return true; }
     view.userNav = true;   // 空白新对话上点「新对话」也要记：启动窗口里正等着接回上次会话（FIND-003）
     // 已经在空白新对话上又点「新对话」（侧栏 / 顶栏 ＋）：现场不动，只收起整页、聚焦输入框。
     // 以前每点一次都重置视图、重连事件流，顶栏在「新会话」「已连接」之间来回闪（#40）。带 note 的（/clear 等）照旧重开
@@ -533,6 +534,8 @@
   // 输入框下方：只留「使用提示」（进帮助页）；原先还有三条示例，用户嫌不好看，去掉了
   const wlBelow = document.createElement("div");
   wlBelow.id = "wl-below";
+  wlBelow.inert = true;
+  wlBelow.setAttribute("aria-hidden", "true");
   $("composer").after(wlBelow);
   function paintWelBelow() {
     wlBelow.innerHTML = `<div class="wl-ex"><button class="wl-chip wl-tips" data-help><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9.3a2.5 2.5 0 0 1 4.8.9c0 1.7-2.4 2.1-2.4 3.6M12 17v.01"/></svg>${esc(t("使用提示"))}</button></div>`;
@@ -723,6 +726,7 @@
   let noticeHold = false;
   let noticeErrShown = false, noticeFetchShown = false;   // 取不到 / 还在取只提示一次：每次切回前台都弹太吵，正常取到一次就复位（195-R.8）
   async function loadNotices() {
+    if (document.documentElement.classList.contains("cx-shell")) return;
     if (noticeHold || document.getElementById("whatsnew") || document.getElementById("notice-pop")) return;
     let r;
     try { r = await api("/api/notices?lang=" + encodeURIComponent(I18N.lang || "zh")); } catch { return; }

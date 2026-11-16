@@ -2,7 +2,7 @@
   const PRIV_TEXT = {
         not_installed: ["warn", t("没装 Shizuku")],
         not_running: ["warn", t("Shizuku 已安装，但服务没在运行（重启手机后需要在 Shizuku 里重新启动）")],
-        no_permission: ["warn", t("Shizuku 在运行，还没授权给 cccodroid")],
+        no_permission: ["warn", t("Shizuku 在运行，还没授权给 coxdragon")],
         unreachable: ["err", t("连不上应用的后台服务")],
   };
   const SETUP_BUSY = ["downloading", "installing", "connecting", "pairing", "starting", "permission"];
@@ -24,17 +24,17 @@
         oppo: t("OPPO / 一加 / 真我：应用信息 → 耗电管理 → <b>允许后台行为</b>、<b>允许自启动</b>（常见路径）"),
         oneplus: t("OPPO / 一加 / 真我：应用信息 → 耗电管理 → <b>允许后台行为</b>、<b>允许自启动</b>（常见路径）"),
         realme: t("OPPO / 一加 / 真我：应用信息 → 耗电管理 → <b>允许后台行为</b>、<b>允许自启动</b>（常见路径）"),
-        vivo: t("vivo / iQOO：设置 → 电池 → 后台耗电管理 → cccodroid <b>允许后台高耗电</b>；i管家里允许<b>自启动</b>（常见路径）"),
-        huawei: t("华为 / 荣耀：设置 → 应用启动管理 → cccodroid 关闭「自动管理」，手动允许<b>自启动</b>和<b>后台活动</b>（常见路径）"),
-        honor: t("华为 / 荣耀：设置 → 应用启动管理 → cccodroid 关闭「自动管理」，手动允许<b>自启动</b>和<b>后台活动</b>（常见路径）"),
+        vivo: t("vivo / iQOO：设置 → 电池 → 后台耗电管理 → coxdragon <b>允许后台高耗电</b>；i管家里允许<b>自启动</b>（常见路径）"),
+        huawei: t("华为 / 荣耀：设置 → 应用启动管理 → coxdragon 关闭「自动管理」，手动允许<b>自启动</b>和<b>后台活动</b>（常见路径）"),
+        honor: t("华为 / 荣耀：设置 → 应用启动管理 → coxdragon 关闭「自动管理」，手动允许<b>自启动</b>和<b>后台活动</b>（常见路径）"),
   };
   function renderBg(fz) {
     const show = fz && fz.count > 0;
     $("bg-field").classList.toggle("hidden", !show);
     if (!show) return;
-        $("bg-state").textContent = t("检测到 cccodroid 在后台被系统冻结过 {n} 次（最近一次约 {sec} 秒，{at}）。", { n: fz.count, sec: Math.round(fz.ms / 1000), at: new Date(fz.at).toLocaleString() }) +
+        $("bg-state").textContent = t("检测到 coxdragon 在后台被系统冻结过 {n} 次（最近一次约 {sec} 秒，{at}）。", { n: fz.count, sec: Math.round(fz.ms / 1000), at: new Date(fz.at).toLocaleString() }) +
       t("冻结期间网关和正在跑的任务全部停住，回到前台才继续。前台服务挡不住这类厂商冻结器。");
-    $("bg-how").innerHTML = BG_HOW[fz.vendor] || t("在系统设置里给 cccodroid 允许后台运行、关闭电池优化、允许自启动（各家叫法不同）。");
+    $("bg-how").innerHTML = BG_HOW[fz.vendor] || t("在系统设置里给 coxdragon 允许后台运行、关闭电池优化、允许自启动（各家叫法不同）。");
   }
   $("bg-actions").addEventListener("click", async (e) => {
     const act = e.target.dataset && e.target.dataset.act;
@@ -45,7 +45,7 @@
   async function loadPriv() {
     let st;
     try { st = await api("/api/priv/status"); } catch { return; }
-    if (st.state === "unsupported") return;          // 旧版：没有这项集成
+    if (st.state === "unsupported" || st.supported === false) return;
     renderBg(st.frozen);
     $("priv-field").classList.remove("hidden");
     const el = $("priv-state");
@@ -74,22 +74,22 @@
         <a class="btn sm ghost" href="https://shizuku.rikka.app/download/" target="_blank" rel="noopener">${t("手动下载")} ↗</a>` :
       st.state === "not_running" ? (wl ? `<button class="btn sm" data-act="activate" ${busy ? "disabled" : ""}>${t("一键激活（无线调试）")}</button>` : "") +
         `<button class="btn sm ghost" data-act="open">${t("打开 Shizuku")}</button>` :
-      st.state === "no_permission" ? `<button class="btn sm" data-act="request">${t("授权给 cccodroid")}</button>` : "";
+      st.state === "no_permission" ? `<button class="btn sm" data-act="request">${t("授权给 coxdragon")}</button>` : "";
     // Shizuku 在跑，但没有（或已失效的）无线调试配对：重启后就没法自动激活。这种情况平时看不出来，主动提示
     if (st.state === "ok" && wl && !st.paired && !busy) {
       se.classList.remove("hidden");
       se.className = "prov-state warn";
       se.textContent = st.pairOk === 0
-                ? t("无线调试里 cccodroid 的配对已被取消：现在还能用，但重启手机后没法自动激活。")
-        : t("Shizuku 不是由 cccodroid 激活的：重启手机后 cccodroid 没法自动激活它。配对一次即可。");
+                ? t("无线调试里 coxdragon 的配对已被取消：现在还能用，但重启手机后没法自动激活。")
+        : t("Shizuku 不是由 coxdragon 激活的：重启手机后 coxdragon 没法自动激活它。配对一次即可。");
       $("priv-actions").insertAdjacentHTML("afterbegin", `<button class="btn sm" data-act="repair">${st.pairOk === 0 ? t("重新配对") : t("配对")}</button>`);
     }
     // 说的是「这次开机」，允许了自启动也要等下次开机才会消失；点「已允许」就收起到下次开机
     if (st.bootMissed && !(st.bootAt && Math.abs(st.bootAt - (+localStorage.getItem("cc.bootAck") || 0)) <= 1)) {
       se.classList.remove("hidden");
       se.className = "prov-state warn";
-      se.textContent = t("这次开机系统没通知 cccodroid（被系统的「自启动」管理拦了），所以开机没能自动激活；打开 cccodroid 时会补上。") +
-        t("想开机就激活：在应用详情里允许 cccodroid 自启动 / 后台启动，下次开机生效。");
+      se.textContent = t("这次开机系统没通知 coxdragon（被系统的「自启动」管理拦了），所以开机没能自动激活；打开 coxdragon 时会补上。") +
+        t("想开机就激活：在应用详情里允许 coxdragon 自启动 / 后台启动，下次开机生效。");
       $("priv-actions").insertAdjacentHTML("beforeend", `<button class="btn sm ghost" data-act="appsettings">${t("去允许自启动")}</button>` +
         (st.bootAt ? `<button class="btn sm ghost" data-act="bootack" data-boot="${esc(st.bootAt)}">${t("已允许，下次开机再看")}</button>` : ""));
     }
@@ -233,7 +233,7 @@
     }
     $("upd-channel").querySelector("option[value=pinned]").textContent = st.channel === "pinned" && st.pin ? t("CLI：固定 {v}", { v: st.pin }) : t("CLI：固定版本…");
     let moving = st.checking;
-    $("upd-items").innerHTML = st.items.map((it) => {
+    $("upd-items").innerHTML = st.items.filter((it) => !document.documentElement.classList.contains("cx-shell") || it.id !== "claude").map((it) => {
       const busy = it.state === "downloading" || it.state === "installing" || it.state === "verifying";
       moving ||= busy;
       const ver = esc(it.current || "?") + (it.latest && it.latest !== it.current && it.state !== "uptodate" ? " → " + esc(it.latest) : "");
@@ -390,7 +390,7 @@
   $("ntf-sys").addEventListener("click", () => appPost("/api/app/notify_settings"));
   $("ntf-retry").addEventListener("click", () => loadNotify());
   // 去系统设置里改完通知权限再回来，设置页不会重新打开：状态要自己重拉一次，不然一直显示改之前的（稳定性报告 FIND-031）
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && setOpen) loadNotify(); });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && pageOn("settings")) { loadNotify(); loadPriv(); } });
 
   // ── 设备工具（只有 cccodroid：DeviceTools.java + A11y.java，经 device-mcp.mjs 给 Claude）──
   const devName = (n) => ({
@@ -676,7 +676,7 @@
     h += enChart(t("本应用 CPU 时间"), "", enBars(d.bars, [["c", ""]], (v) => fmtDur(v * 1000), every));
     if (d.native) h += enChart(t("亮屏时间"), enDot("s", t("亮屏")) + enDot("f", t("本应用在前台")), enBars(d.bars, [["s", "s"], ["f", "f"]], (v) => fmtDur(v * 1000), every));
     if (empty) h += `<div class="tiny">${esc(t("刚开始记录，每 5 分钟采一次，过一会儿再来看。"))}</div>`;
-    if (!d.native) h += `<div class="tiny">${esc(t("这个版本没有原生层，只记 CPU 时间（电量、亮屏、前台时长要 cccodroid）。"))}</div>`;
+    if (!d.native) h += `<div class="tiny">${esc(t("这个版本没有原生层，只记 CPU 时间（电量、亮屏、前台时长要 coxdragon）。"))}</div>`;
     box.innerHTML = h;
     const b = d.battery;
     // currentUa 按微安上报（Android BATTERY_PROPERTY_CURRENT_NOW 的口径）：一律 /1000 成 mA。

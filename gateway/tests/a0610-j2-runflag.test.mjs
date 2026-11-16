@@ -21,7 +21,7 @@ const flagPid = () => { try { return fs.readFileSync(FLAG, "utf8").trim(); } cat
 const sleeper = () => spawn(process.execPath, ["-e", "setTimeout(() => {}, 20000)"], { stdio: "ignore" });
 let n = 0;
 // 每次拿一个新的模块实例：模块加载时会清一次标记（和网关重启时一样）
-const fresh = () => import(`../gw/runs.mjs?t=${Date.now()}-${n++}`);
+const fresh = () => import(`../gw/activity.mjs?t=${Date.now()}-${n++}`);
 
 test("启动时清掉死掉的残留，另一个还活着的网关写的留着", async () => {
   const child = sleeper();

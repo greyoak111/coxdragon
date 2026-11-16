@@ -226,6 +226,8 @@ public final class Share extends ContentProvider {
             parts.put("diagnostics.txt", put(z, "diagnostics.txt", diagnostics(c, env)));
             parts.put("logcat.txt", put(z, "logcat.txt", scrub(logcat())));
             if (env.log.isFile()) parts.put("gateway.log", put(z, "gateway.log", scrub(tail(env.log, 1024 * 1024))));
+            File codex = new File(env.home, ".cache/coxdragon/codex-diagnostics.json");
+            if (codex.isFile()) parts.put("codex-diagnostics.json", put(z, "codex-diagnostics.json", scrub(tail(codex, 64 * 1024))));
             // 网关进程的标准输出 / 错误：node 崩溃的堆栈只在这里
             File gout = new File(env.home, "gateway.out");
             if (gout.isFile()) parts.put("gateway.out", put(z, "gateway.out", scrub(tail(gout, 512 * 1024))));

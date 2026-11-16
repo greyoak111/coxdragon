@@ -29,6 +29,7 @@ if (/[?&](t|k)=/.test(location.search) || /[#&]k=/.test(location.hash)) history.
     try { const l = JSON.parse(localStorage.getItem("cc.errLog") || "[]"); l.push({ at: Date.now(), msg: String(msg).slice(0, 600) }); localStorage.setItem("cc.errLog", JSON.stringify(l.slice(-5))); } catch {}
     const el = document.getElementById("sub-title");
     if (el) { el.textContent = t("界面脚本出错：{msg}", { msg }); el.className = "err"; }
+    if (window.__cc) window.__cc.toast(t("界面脚本出错：{msg}", { msg }), true);
   };
   window.addEventListener("error", (e) => {
     // 光秃秃的「Script error.」没有文件和行号：是从外壳 evaluateJavascript 注入的代码里冒出去的错，WebView 把细节抹了。
@@ -449,6 +450,8 @@ if (/[?&](t|k)=/.test(location.search) || /[#&]k=/.test(location.hash)) history.
   let toastTimer = null;
   // 原生浏览器窗格永远浮在页面上面，提示条落在它底下就看不见了：挪到没被盖住的那一边居中（11-04 报告 三）
   function placeToast() {
+    const host = document.querySelector("dialog[open]") || document.body;
+    if (toastEl.parentElement !== host) host.appendChild(toastEl);
     const s = toastEl.style;
     s.left = s.maxWidth = "";
     const r = window.CCLayout && CCLayout.paneRect && CCLayout.paneRect();
@@ -483,7 +486,10 @@ if (/[?&](t|k)=/.test(location.search) || /[#&]k=/.test(location.hash)) history.
   // ── 保存到（A4）：外壳有 CCApp.saveAs 时，下载 / 导出一律走系统「保存到」面板 ──
   //  不要存储权限，也不会把文件落进用户打不开的私有目录。结果由外壳回调 __ccSaved
   const canSaveAs = () => !!(window.CCApp && window.CCApp.saveAs);
-  const canShare = () => !!(state.serverStatus && state.serverStatus.product === "cccodroid");
+  const canShare = () => {
+    const s = state.serverStatus;
+    return !!s && (typeof s.nativeApp === "boolean" ? s.nativeApp : ["coxdragon", "cccodroid"].includes(s.product));
+  };
   function saveAs(path, mime) { window.CCApp.saveAs(path, path.split("/").pop(), mime || ""); }
   window.__ccSaved = guardHook("__ccSaved", (ok, msg) => {
     if (ok) return toast(t("已保存：{name}", { name: msg }));

@@ -3,6 +3,10 @@
   var setCatShown = "-";   // 上次画的是哪一类：null = 窄屏的分类列表，"-" = 刚打开还没画过
   let setFrom = null;
   function openSettings(cat) {
+    if (window.CODEX) {
+      const tab = cat === "provider" ? "connection" : cat === "claude" ? "extensions" : ["run", "storage", "device", "update", "usage", "trouble"].includes(cat) ? "device" : "general";
+      return CODEX.openSettings(tab);
+    }
     setFrom = document.activeElement;
     OV.closeAll();
     setOpen = true;
@@ -20,7 +24,36 @@
     // 窄屏的分类列表没有选中项、关闭键也藏着：落到第一个看得见的控件（审查 #52 P2-12）
     requestAnimationFrame(() => { if (setOpen) focusInto($("set-ov"), $("set-cats").querySelector("button.on:not(.hidden)")); });
   }
+  // Move working device controls once; retain their IDs, listeners and asynchronous state.
+  // Engine-specific controls stay outside the Codex settings dialog.
+  function mountDeviceSettings(panel) {
+    if (!panel.childElementCount) {
+      panel.addEventListener("click", (e) => {
+        const p = e.target.closest(".sl p.clamp");
+        if (p && !e.target.closest("a, code")) p.classList.toggle("open");
+      });
+      const groups = [
+        [tk("设备与权限"), ["priv-field", "ntf-field", "ntf-err-block"]],
+        [tk("后台运行"), ["bg-field", "set-exec", "mem-field"]],
+        [tk("更新"), ["upd-field"]],
+        [tk("排障"), ["btn-share-logs", "btn-issue", "envfacts-row", "btn-reconcile", "btn-ledger"]],
+      ];
+      for (const [title, ids] of groups) {
+        const section = document.createElement("section");
+        section.className = "cx-device-group";
+        const heading = document.createElement("h3"); heading.textContent = t(title); section.appendChild(heading);
+        for (const id of ids) {
+          const el = $(id);
+          const block = el.matches(".srow, .sblock") ? el : el.closest(".sblock, .srow");
+          section.appendChild(block);
+        }
+        panel.appendChild(section);
+      }
+    }
+    loadSettings(); loadPriv(); loadNotify(); loadUpd(); loadReconcile(false); loadEnvFacts();
+  }
   function closeSettings() {
+    if (window.CODEX?.deviceSettingsOpen()) CODEX.closeSettings();
     if (!setOpen) return;
     setOpen = false;
     const ov = $("set-ov");

@@ -15,13 +15,13 @@ export const SESSION_A = "synthetic-ui-a";
 export const SESSION_B = "synthetic-ui-b";
 
 /** Serve the checkout's real frontend with in-memory APIs on a new loopback-only port. */
-export async function startManagedUiServer() {
+export async function startManagedUiServer({ handleRequest } = {}) {
   const clients = new Set(), held = new Set();
   let eventId = 0, removal = null;
   const now = Date.now();
   const state = {
     requests: [], unexpected: [], removeCount: 0, sseConnections: 0, sourceHashes: {},
-    removalMode: "success", historyDelay: {}, ui: {},
+    removalMode: "success", historyDelay: {}, ui: {}, status: {},
     configRequests: [], configResponses: [], configMode: "success", configDelay: 0,
     modelsRequests: [], modelsResponses: [], modelsMode: "success", modelsDelay: 0,
     repairRequests: [], repairMode: "success", repairDelay: 0,
@@ -83,6 +83,7 @@ export async function startManagedUiServer() {
       res.setHeader("Content-Security-Policy", "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data: blob:; font-src 'self' data:; frame-src 'self' blob:; object-src 'none'; base-uri 'self'");
       res.setHeader("Referrer-Policy", "no-referrer");
       if (p.startsWith("/api/")) state.requests.push({ method: req.method, path: p, query: url.search });
+      if (handleRequest && await handleRequest(req, res, url)) return;
       if (p === "/api/events" && req.method === "GET") {
         res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", "connection": "keep-alive" });
         clients.add(res); state.sseConnections++;
@@ -177,6 +178,7 @@ export async function startManagedUiServer() {
         product: "Synthetic UI acceptance", uiTag: "synthetic-ui", version: "fixture", pid: 0,
         ready: true, provider: "synthetic", providerLabel: "Synthetic (no model)", upstream: "synthetic.invalid",
         keyMode: "key", hasKey: true, bridge: false, model: "synthetic-model", workspace: "/synthetic/workspace", busy: false,
+        ...state.status,
       });
       if (p === "/api/components") return json(res, { supported: true, items: [{ ...state.component }], free: 1073741824 });
       if (p === "/api/sessions") return json(res, { sessions });
@@ -202,6 +204,7 @@ export async function startManagedUiServer() {
         "/api/ext/hooks": { hooks: {}, scopes: [], user: {}, project: {}, workspace: "/synthetic/workspace" },
         "/api/commands": { scopes: [{ scope: "user", items: [] }, { scope: "project", items: [] }], workspace: "/synthetic/workspace" },
         "/api/projects": { projects: [], items: [] }, "/api/sched": { tasks: [], items: [], budget: {}, missed: [] },
+        "/api/work-island": { supported: false },
         "/api/priv/status": { supported: false }, "/api/app/upd_status": { supported: false },
         "/api/app/notify_status": { supported: false }, "/api/app/dev_status": { supported: false },
         "/api/reconcile": { supported: false }, "/api/usage": { hours: [], items: [], providers: {}, sessions: {}, days: [] },

@@ -677,10 +677,17 @@
   }
   /** 打开整页：窄屏收起侧栏、盖住对话；宽屏侧栏照旧常驻，高亮当前项 */
   function openPage(name, cat) {
+    if (window.CODEX && name !== "codex" && name !== "changelog") {
+      if (name === "settings") return openSettings(cat);
+      if (name === "ext" || name === "caps") return CODEX.openSettings("extensions");
+      openPage("codex");
+      return CODEX.openSidebar();
+    }
     if (!PAGES[name] || name === "settings") return openSettings(cat);
     OV.closeAll();
     const prev = curPage;
     curPage = name;
+    document.documentElement.classList.toggle("cx-aux-page", name !== "codex");
     document.documentElement.classList.add("pg-on");   // 整页盖着时藏起会话的上下文用量条（#39：小数缩放下整页上沿和顶栏差一丝，条会漏出来）
     document.documentElement.classList.toggle("pg-lineage", name === "lineage");   // 脉络页整页不滚（地图自己接手势）
     if (name !== "lineage") closeTour();   // 离开脉络页：导览一起收掉
@@ -712,9 +719,13 @@
     schedPollSet(name === "sched");   // 离开就停，进来就开始补拉（195-BB.4）
     if (name === "lineage") { if (prev !== name) { linPickEnd(); linProfClose(true); } if (LIN.g) linPaint(prev !== name); else linState(t("加载中…")); loadLineage(); }   // 头一回进：图还没取回来先说一声，别空白（#38）
     if (prev === "codex" && name !== "codex" && window.CODEX) window.CODEX.onHide();
-    if (name === "codex" && window.CODEX) window.CODEX.onOpen();
+    if (name === "codex" && window.CODEX && !CODEX.state.open) window.CODEX.onOpen();
   }
   function closePage() {
+    if (window.CODEX) {
+      if (curPage !== "codex") openPage("codex");
+      return;
+    }
     if (!curPage) return;
     if (curPage === "codex" && window.CODEX) window.CODEX.onHide();
     curPage = null;
@@ -729,6 +740,7 @@
     renderSideNav();
     paintTitle();
   }
+  $("cx-page-back").addEventListener("click", closePage);
   // 顶栏标题：对话里是会话名 + 状态；整页时是页名 + 这一页的一句概况（照设计稿，整页自己不再有标题条）
   var chatStatus = chatStatus || ["", ""], pageSub = pageSub || "";   // setStatus 可能在这行之前就调过
   function paintTitle() {

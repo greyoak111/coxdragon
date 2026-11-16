@@ -22,7 +22,7 @@ import java.net.URL;
  *   网关是本服务的子进程 —— 服务活着，它就活着；它自己挂了，这里按退避重新拉起。
  */
 public class GatewayService extends Service {
-    static final String TAG = "cccodroid";
+    static final String TAG = "coxdragon";
     static final String CH = "gateway";
     static final String ACTION_STOP = "cox.dragon.STOP";
     static final String ACTION_BOOT = "cox.dragon.BOOT";
@@ -586,7 +586,7 @@ public class GatewayService extends Service {
             PendingIntent.FLAG_IMMUTABLE);
         return new Notification.Builder(this, CH)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
-            .setContentTitle("cccodroid")
+            .setContentTitle("coxdragon")
             .setContentText(text)
             .setStyle(new Notification.BigTextStyle().bigText(text))
             .setOngoing(true)
