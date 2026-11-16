@@ -18,3 +18,12 @@
 - [模型切换后的上下文处理](https://github.com/openclaw/openclaw/blob/ec025eba2df15ab949239fa17dfd99ac4286b50c/src/gateway/sessions-patch-context-window.ts)：模型选择变更后不复用旧预算。
 
 models.dev 保留随包许可证及离线快照。Chat Completions 的用量依赖服务商支持 `stream_options.include_usage`；手动声明能力不会让不支持该能力的上游接口自动获得支持。
+
+## 26.1.2 验证
+
+- 60 项协议/元数据/历史读取回归通过。浏览器回归覆盖 320、390、820、1440px、中英文、自动刷新、迟到结果保留草稿、未知模型手动能力、提供商切换，以及统计行处于输入框下方且正文无重复指标。
+- 固定 `codex-app-server 0.166.0` 在 Windows 和小米 M2012K11AC / Android 13 运行，连接隔离的本地合成接口，验证原生 usage、缓存命中、jsonl 恢复和压缩；不使用真实服务商凭据。
+- 手机已覆盖安装签名版 `26.1.2`，资源标识 `72ccb499e289`。实际 CodeFlow 短请求返回 `CONTEXT_USAGE_OK`；输入约 8.6k、输出 7 token、缓存命中率 97.9%。切换到其他聊天再返回，原会话上下文仍可见。手动上限 64000 保存、重新打开保留，验证后恢复自动。
+- CodeFlow 当前 `/models` 仅提供该模型 ID，没有上下文/强度/多模态声明，models.dev 也未精确匹配；面板保留未知并允许手动指定。用量弹层的 `258400 · Codex` 是引擎报告的当前预算，不能视为服务商声明的模型硬上限。
+- [GitHub 检查](https://github.com/leemwood/coxdragon/actions/runs/43936258184)包含 Linux 网关全量测试、真实引擎、浏览器和 Java 检查。标准版和 targetSdk 36 版均已本地构建并核对签名与资源；targetSdk 36 版未在该手机安装。
+- 强制停止应用再启动的冷启动命令被自动审批以 `blocked by policy` 拒绝，本轮使用正常打开面板和重新打开历史完成验证。
