@@ -18,12 +18,70 @@ function reset() {
   cx.stopServer(); runFlag(false);
   cx.S.rpc = { stderr: "", respond() {}, respondError() {} };
   cx.S.child = null; cx.S.starting = null; cx.S.activeThread = { id: "a" }; cx.S.activeTurn = null;
-  for (const key of ["runningTurns", "startingTurns", "endedTurns", "approvals", "sse", "loadedThreads", "operations", "contexts", "compacting"]) cx.S[key].clear();
+  for (const key of ["runningTurns", "startingTurns", "endedTurns", "approvals", "sse", "loadedThreads", "threadCwds", "operations", "contexts", "compacting"]) cx.S[key].clear();
   // The protocol fixture represents an engine with these two threads loaded.
   cx.S.loadedThreads.add("a"); cx.S.loadedThreads.add("b");
-  cx.S.models = []; cx.S.model = ""; cx.S.effort = "";
+  cx.S.models = []; cx.S.model = ""; cx.S.effort = ""; cx.S.permissionMode = "ask"; cx.S.metrics.clear();
 }
 after(() => { cx.stopServer(); runFlag(false); });
+
+test("Codex：四种权限传给引擎，运行中禁止改变权限", async () => {
+  reset(); const calls=[];
+  cx.S.rpc.request=async(method,params)=>{calls.push({method,params});return method==="turn/start"?{turn:{id:"permission-turn",status:"completed"}}:{thread:{id:"permission-thread",cwd:CFG.workspace,turns:[]}};};
+  for(const [mode,sandbox,approval,reviewer] of [["read","read-only","never","user"],["ask","workspace-write","untrusted","user"],["auto","workspace-write","on-request","auto_review"],["full","danger-full-access","never","user"]]){
+    cx.updatePermissions(mode);
+    assert.equal(cx.status().permissions.mode,mode);
+    await cx.startThread(CFG.workspace); const created=calls.at(-1).params;
+    assert.equal(created.sandbox,sandbox);assert.equal(created.approvalPolicy,approval);assert.equal(created.approvalsReviewer,reviewer);
+    await cx.startTurn("permission check","permission-thread"); const turn=calls.at(-1).params;
+    assert.equal(turn.approvalPolicy,approval);assert.equal(turn.approvalsReviewer,reviewer);
+    assert.equal(turn.sandboxPolicy.type,({read:"readOnly",ask:"workspaceWrite",auto:"workspaceWrite",full:"dangerFullAccess"})[mode]);
+  }
+  cx.S.runningTurns.set("b",{id:"busy",status:"inProgress"});
+  assert.throws(()=>cx.updatePermissions("full"),/任务结束/);
+  assert.throws(()=>cx.updatePermissions("invalid"),/无效/);
+  cx.S.runningTurns.clear();cx.updatePermissions("ask");
+});
+
+test("Codex：自定义上下文上限保存、重启生效并拒绝无效或运行中修改", () => {
+  reset();const baseUrl="https://context-override.test/v1";
+  try{
+    cx.setConnection({mode:"custom",baseUrl,model:"context-fixture",noKey:true});cx.S.rpc={stderr:""};
+    cx.updateSettings({model:"context-fixture",effort:"",contextWindow:48000});
+    assert.equal(connectionStatus().contextWindow,48000);assert.equal(cx.status().contextWindow,48000);assert.equal(cx.S.rpc,null);
+    assert(connectionLaunch().args.includes("model_context_window=48000"));
+    assert.throws(()=>cx.updateSettings({contextWindow:10}),/上下文/);
+    cx.S.runningTurns.set("a",{id:"busy",status:"inProgress"});assert.throws(()=>cx.updateSettings({contextWindow:64000}),/任务结束/);
+    assert.equal(connectionStatus().contextWindow,48000);
+  }finally{cx.stopServer();cx.setConnection({mode:"chatgpt"});}
+});
+
+test("Codex：会话指标记录请求时模型强度、真实用量和首个输出至完成的时间", () => {
+  reset();cx.S.model="fixture-model";cx.S.effort="high";
+  const usage={last:{totalTokens:900,inputTokens:800,outputTokens:100,cachedInputTokens:600},total:{totalTokens:900,inputTokens:800,outputTokens:100,cachedInputTokens:600},modelContextWindow:64000};
+  cx.handleNotify({method:"turn/started",params:{threadId:"b",turn:{id:"metric-turn",status:"inProgress"}}});
+  cx.S.model="next-model";cx.S.effort="low";
+  cx.handleNotify({method:"item/agentMessage/delta",params:{threadId:"b",turnId:"metric-turn",delta:"hello"}});
+  cx.handleNotify({method:"thread/tokenUsage/updated",params:{threadId:"b",turnId:"metric-turn",tokenUsage:usage}});
+  cx.handleNotify({method:"turn/completed",params:{threadId:"b",turn:{id:"metric-turn",status:"completed"}}});
+  const metric=cx.status().metrics["metric-turn"];
+  assert.equal(metric.model,"fixture-model");assert.equal(metric.effort,"high");assert.equal(metric.outputTokens,100);
+  assert.equal(metric.total.cachedInputTokens,600);assert(metric.firstOutputAt>=metric.startedAt);assert(metric.completedAt>=metric.firstOutputAt);
+  const saved=JSON.parse(fs.readFileSync(path.join(CFG.home,"coxdragon-codex-metrics.json")));
+  assert.equal(saved["metric-turn"].total.inputTokens,800);
+});
+
+test("Codex：显式引用只接受已启用的技能、已安装插件和可访问文件", async () => {
+  reset();cx.S.rpc.request=async method=>method==="skills/list"?{data:[{skills:[{name:"review",path:"/fixture/SKILL.md",enabled:true}]}]}:method==="plugin/list"?{marketplaces:[{plugins:[{id:"review@local",name:"review",installed:true,enabled:true,source:{type:"local",path:"/fixture/plugin"}}]}]}:{data:[]};
+  const filename=path.join(CFG.workspace,"reference.txt");fs.writeFileSync(filename,"fixture");
+  const input=await cx.referenceInput([{type:"skill",path:"/fixture/SKILL.md"},{type:"plugin",path:"review@local"},{type:"file",path:filename}],CFG.workspace);
+  assert.deepEqual(input[0],{type:"skill",name:"review",path:"/fixture/SKILL.md"});
+  assert.deepEqual(input[1],{type:"mention",name:"review",path:"plugin://review@local"});
+  assert(input[2].text.includes("reference.txt"));
+  await assert.rejects(cx.referenceInput([{type:"skill",path:"/missing/SKILL.md"}],CFG.workspace),/技能/);
+  await assert.rejects(cx.referenceInput([{type:"file",path:path.join(CFG.home,"coxdragon-codex-connection.json")}],CFG.workspace),/文件无法引用/);
+  await assert.rejects(cx.referenceInput(Array(21).fill({type:"file",path:filename}),CFG.workspace),/20/);
+});
 
 test("Codex：上下文按线程记录实际最近用量、上限与累计数，停止前落盘", () => {
   reset();
@@ -313,8 +371,9 @@ test("Codex：请求失败释放后台标记；持久设置只接受模型支持
   await assert.rejects(cx.startTurn("failure", "b"), /synthetic RPC failure/);
   assert.equal(codexActivity().busy, false); assert.equal(activityBusy(), false);
   cx.S.models = [{ id: "test-model", supportedReasoningEfforts: [{ reasoningEffort: "high" }] }];
-  assert.deepEqual(cx.updateSettings({ model: "test-model", effort: "high" }), { model: "test-model", effort: "high" });
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(CFG.home, "coxdragon-codex.json"), "utf8")), { model: "test-model", effort: "high" });
+  assert.deepEqual(cx.updateSettings({ model: "test-model", effort: "high" }), { model: "test-model", effort: "high", contextWindow: 0 });
+  const savedPrefs=JSON.parse(fs.readFileSync(path.join(CFG.home, "coxdragon-codex.json"), "utf8"));
+  assert.equal(savedPrefs.model,"test-model");assert.equal(savedPrefs.effort,"high");assert.equal(savedPrefs.contextWindow,0);
   assert.throws(() => cx.updateSettings({ model: "test-model", effort: "low" }), /不支持/);
   assert.throws(() => cx.updateSettings({ model: "missing" }), /不支持/);
   assert.equal(cx.S.effort, "high");

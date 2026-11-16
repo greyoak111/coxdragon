@@ -43,6 +43,7 @@
     pin: '<path d="m9 3 6 0-1 6 4 4v2H6v-2l4-4-1-6ZM12 15v6"/>',
     settings: '<circle cx="12" cy="12" r="3"/><path d="M12 3v2m0 14v2M3 12h2m14 0h2M6 6l1.5 1.5m9 9L18 18M6 18l1.5-1.5m9-9L18 6"/>',
     refresh: '<path d="M20 7v5h-5M4 17v-5h5"/><path d="M6 7a7 7 0 0 1 12-1l2 6M4 12l2 6a7 7 0 0 0 12-1"/>',
+    shield: '<path d="M12 3 4 6v6c0 4 8 9 8 9s8-5 8-9V6Z"/><path d="m8 12 3 3 5-6"/>',
   };
   const ico = (name) => `<svg viewBox="0 0 24 24" aria-hidden="true">${icons[name] || icons.folder}</svg>`;
   const leaf = (p) => String(p || "").replace(/[\\/]+$/, "").split(/[\\/]/).pop() || t("工作区");
@@ -65,6 +66,7 @@
     skipLogin: LS.get("skipLogin", "") === "1", connectionBusy: false,
     automation: null, automationBusy: false, automationError: "",
     contexts: new Map(), compacting: new Set(), compactBusy: false,
+    metrics: new Map(), references: [], controlTab: "model", permissionBusy: false, filePath: "", referenceSeq: 0,
   };
   try { st.pins = JSON.parse(LS.get("pins", "[]")); if (!Array.isArray(st.pins)) st.pins = []; } catch {}
 
@@ -104,9 +106,12 @@
       <div class="cx-approvals" id="cx-approvals"></div>
       <div class="cx-mobile-suggestions" id="cx-mobile-suggestions"></div>
       <div class="cx-composer">
-        <button class="cx-add" data-act="mobile-tools" aria-label="${esc(t("任务工具"))}" aria-haspopup="dialog" aria-controls="cx-mobile-menu" aria-expanded="false">${ico("plus")}</button>
         <textarea id="cx-input" rows="2" placeholder="${esc(t("描述任务，或接着问一个问题…"))}" aria-label="${esc(t("任务内容"))}" autocomplete="off" spellcheck="false"></textarea>
+        <div class="cx-reference-chips" id="cx-reference-chips"></div>
         <div class="cx-composer-bar"><div class="cx-model-slot" id="cx-model-slot"><div class="cx-models" id="cx-models"></div></div>
+          <button class="cx-compose-model" data-act="composer-model" aria-label="${esc(t("模型设置"))}" aria-haspopup="dialog">${ico("settings")}<span>${esc(t("模型"))}</span></button>
+          <button class="cx-compose-permission" id="cx-compose-permission" data-act="composer-permission" aria-label="${esc(t("权限控制"))}" aria-haspopup="dialog">${ico("shield")}<span></span></button>
+          <span class="cx-compose-spacer"></span><button class="cx-add" data-act="composer-reference" aria-label="${esc(t("添加引用"))}" aria-haspopup="dialog">${ico("plus")}</button>
           <button class="cx-send" data-act="send" id="cx-send" title="${esc(t("发送"))}" aria-label="${esc(t("发送"))}">${ico("arrow")}</button>
           <button class="cx-stop hidden" data-act="stop" id="cx-stop" title="${esc(t("停止"))}" aria-label="${esc(t("停止"))}"><span></span></button>
         </div>
@@ -156,6 +161,7 @@
       <button data-act="settings">${ico("settings")}<span>${esc(t("设置"))}</span></button>
     </div>
   </dialog>
+  <dialog class="cx-dialog cx-mobile-sheet cx-controls" id="cx-controls" aria-labelledby="cx-controls-title"><div class="cx-sheet-handle" aria-hidden="true"></div><div class="cx-dialog-head"><h2 id="cx-controls-title"></h2><button class="cx-icon" data-act="controls-close" aria-label="${esc(t("关闭"))}">${ico("close")}</button></div><div id="cx-controls-body"></div></dialog>
 </div>`;
     dom = {
       acct: $("cx-acct"), threads: $("cx-threads"), head: $("cx-head"),
@@ -169,6 +175,8 @@
       mobileMenu: $("cx-mobile-menu"), activity: $("cx-activity"),
     };
     root.addEventListener("click", onClick);
+    $("cx-controls").addEventListener("close", () => { if($("cx-controls").open)return;st.referenceSeq++; const action = st.controlTab === "model" ? "composer-model" : st.controlTab === "permission" ? "composer-permission" : "composer-reference"; root.querySelector(`[data-act="${action}"]`)?.focus(); });
+    dom.input.addEventListener("input", () => { if (/(?:^|\s)@$/.test(dom.input.value)) openControls("references"); });
     document.addEventListener("click", (event) => {
       const context = $("cx-context");
       if (context.open && !event.composedPath().includes(context)) context.open = false;
@@ -191,7 +199,7 @@
       if (e.key === "Escape" && back()) e.preventDefault();
     });
     window.addEventListener("keydown", (e) => {
-      if (!st.open || !(e.ctrlKey || e.metaKey) || e.altKey || dom.dialog.open || dom.preferences.open || dom.mobileMenu.open) return;
+      if (!st.open || !(e.ctrlKey || e.metaKey) || e.altKey || dom.dialog.open || dom.preferences.open || dom.mobileMenu.open || $("cx-controls").open) return;
       if (e.key.toLowerCase() === "j") { e.preventDefault(); newThread(); }
       if (e.key === "`") { e.preventDefault(); openTool("terminal"); }
     });
@@ -218,6 +226,15 @@
     if (act === "mobile-tools" || act === "mobile-more") return openMobileMenu(act === "mobile-tools");
     if (act === "mobile-menu-close") return dom.mobileMenu.close();
     if (act === "tool-copy") return copyTool(el);
+    if (act === "composer-model") return openControls("model");
+    if (act === "composer-permission") return openControls("permission");
+    if (act === "composer-reference") return openControls("references");
+    if (act === "controls-close") return $("cx-controls").close();
+    if (act === "permission-mode") return savePermission(el.dataset.mode);
+    if (act === "reference-tab") { st.referenceTab = el.dataset.tab; return paintReferences(); }
+    if (act === "reference-add") return addReference({ type: el.dataset.type, path: el.dataset.path, name: el.dataset.name });
+    if (act === "reference-remove") { st.references.splice(+el.dataset.index, 1); saveDraft(); return paintReferenceChips(); }
+    if (act === "reference-dir") return loadReferenceFiles(el.dataset.path);
     if (act === "compact") return compact();
     if (el.closest("#cx-mobile-menu") && dom.mobileMenu.open) dom.mobileMenu.close();
     if (act === "sidebar") return toggleSidebar();
@@ -273,7 +290,7 @@
     if (act === "retry") return refresh();
   }
 
-  function saveDraft() { if (dom) LS.set("draft." + (st.threadId || "new"), dom.input.value); }
+  function saveDraft() { if (dom) { LS.set("draft." + (st.threadId || "new"), dom.input.value); LS.set("references." + (st.threadId || "new"), JSON.stringify(st.references)); } }
   function resizeInput() {
     dom.input.style.height = "auto";
     const limit = matchMedia("(max-width:760px)").matches ? Math.min(180, Math.max(80, innerHeight * .3)) : 180;
@@ -299,7 +316,11 @@
     root.querySelectorAll('[aria-controls="cx-mobile-menu"]').forEach((b) => b.setAttribute("aria-expanded", String(b.dataset.act === (compose ? "mobile-tools" : "mobile-more"))));
     dom.mobileMenu.showModal();
   }
-  function restoreDraft() { dom.input.value = LS.get("draft." + (st.threadId || "new"), ""); resizeInput(); }
+  function restoreDraft() {
+    dom.input.value = LS.get("draft." + (st.threadId || "new"), "");
+    try { const refs = JSON.parse(LS.get("references." + (st.threadId || "new"), "[]")); st.references = Array.isArray(refs) ? refs.filter(r => r && typeof r.path === "string" && typeof r.name === "string").slice(0,20) : []; } catch { st.references = []; }
+    resizeInput(); paintReferenceChips();
+  }
   function currentCwd() { return st.thread?.cwd || st.cwd || st.status?.cwd || ""; }
   function projectList() {
     const dirs = new Map();
@@ -364,6 +385,7 @@
     st.approvals = new Map((s.approvals || []).map((a) => [String(a.id), { method: a.method, params: a.params }]));
     if (s.contexts) st.contexts = new Map(Object.entries(s.contexts));
     st.compacting = new Set(s.compacting || []);
+    st.metrics = new Map(Object.entries(s.metrics || {}));
   }
   function toggleReview(force) {
     st.review = force == null ? !st.review : force;
@@ -481,6 +503,11 @@
     paintSetup();
     paintActivity();
     paintContext();
+    paintReferenceChips(); paintMetrics();
+    const mode = st.status?.permissions?.mode || "ask";
+    $("cx-compose-permission").dataset.mode = mode;
+    $("cx-compose-permission").querySelector("span").textContent = t(({ read: "只读", ask: "询问", auto: "帮我批准", full: "完全访问" })[mode] || "询问");
+    if ($("cx-controls").open && st.controlTab === "permission") paintPermissions();
   }
 
   const tokenNumber = value => value >= 1e6 ? (value / 1e6).toFixed(2).replace(/0+$/, "").replace(/\.$/, "") + "M" : value >= 1000 ? (value / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(value);
@@ -492,7 +519,7 @@
   function paintContext() {
     if (!dom) return;
     const context = st.contexts.get(st.threadId), model = selectedModel();
-    const used = context?.last?.totalTokens, limit = context?.modelContextWindow || model?.contextWindow;
+    const used = context?.last?.totalTokens, limit = context?.modelContextWindow || st.status?.contextWindow || model?.contextWindow;
     const known = Number.isFinite(used), ratio = known && limit ? Math.min(100, Math.round(used / limit * 100)) : null;
     $("cx-context").dataset.level = ratio >= 90 ? "high" : ratio >= 75 ? "warn" : "normal";
     $("cx-context-ring").style.setProperty("--usage", (ratio || 0) + "%");
@@ -920,7 +947,7 @@
 
   function handle(ev) {
     if (!ev || !ev.type) return;
-    if (ev.type === "settings") { st.model = ev.model; st.effort = ev.effort; paint(); return; }
+    if (ev.type === "settings") { st.model = ev.model; st.effort = ev.effort; if(st.status && ev.contextWindow !== undefined)st.status.contextWindow=ev.contextWindow;paint(); return; }
     if (ev.type === "status") { syncStatus(ev.status); paint(); return; }
     if (ev.type === "install") {
       if (st.status) st.status.install = ev.install;
@@ -951,8 +978,9 @@
     if (ev.type === "approval-done") { st.approvals.delete(String(ev.id)); paintApprovals(); return; }
     if (ev.type !== "rpc") return;
     const m = ev.method, p = ev.params || {};
+    if(ev.metric?.turnId)st.metrics.set(ev.metric.turnId,ev.metric);
     if (m === "thread/tokenUsage/updated" && p.threadId) {
-      st.contexts.set(p.threadId, p.tokenUsage); paintContext(); return;
+      st.contexts.set(p.threadId, p.tokenUsage); paintContext(); paintMetrics(); return;
     }
     if (m === "item/started" && p.item?.type === "contextCompaction") st.compacting.add(p.threadId);
     if ((m === "item/completed" && p.item?.type === "contextCompaction") || m === "turn/completed") st.compacting.delete(p.threadId);
@@ -968,6 +996,7 @@
       case "item/started":
       case "item/completed":
         if (p.item) renderItem(p.item, p.turnId, m === "item/completed");
+        paintMetrics();
         break;
       case "item/agentMessage/delta": appendDelta(p.itemId, p.delta, "text", p.turnId); break;
       case "item/reasoning/summaryTextDelta":
@@ -1140,15 +1169,19 @@
     if (!st.status || !st.status.installed) return toast("先安装 Codex 引擎", true);
     if (!connected()) { saveDraft(); openSettings("connection"); return toast(t("连接模型后即可发送，草稿已保留。")); }
     if (!st.threadId) {
+      const pendingReferences=st.references;
       await newThread();
       if (!st.threadId) return;
+      st.references=pendingReferences;paintReferenceChips();
       dom.input.value = text; saveDraft(); resizeInput();
     }
     st.busy = true; dom.send.disabled = true;
     const target = st.threadId;
-    post("/api/codex/turn", { text, threadId: target }).then((r) => {
+    const references = st.references.map(ref => ({ ...ref }));
+    post("/api/codex/turn", { text, threadId: target, references }).then((r) => {
       // 回执到达前用户可能已经开始写下一条，不能把新输入连同草稿一起清掉。
       if (dom.input.value.trim() === text) dom.input.value = "";
+      if (JSON.stringify(st.references) === JSON.stringify(references)) st.references = [];
       resizeInput(); saveDraft(); scrollBottom();
       if (r.turn?.status === "inProgress" && !st.endedTurns.has(r.turn.id)) st.running.set(target, r.turn);
       paint();
@@ -1236,17 +1269,141 @@
     catch (e) { toast(e.message, true); }
   }
 
-  async function saveSettings(model, effort) {
+  async function saveSettings(model, effort, contextWindow) {
     if (st.settingsBusy) return;
     st.settingsBusy = true; paint();
     try {
-      const saved = await post("/api/codex/settings", { model, effort });
+      const saved = await post("/api/codex/settings", { model, effort, ...(contextWindow === undefined ? {} : { contextWindow }) });
       st.model = saved.model; st.effort = saved.effort;
       if (st.status) Object.assign(st.status, saved);
       LS.set("model", st.model); LS.set("effort", st.effort);
       toast(t("设置已保存，将用于下一次发送。"));
-    } catch (e) { toast(e.message, true); }
+      return true;
+    } catch (e) { toast(e.message, true); return false; }
     finally { st.settingsBusy = false; paint(); if (dom.preferences.open) paintSettings(); }
+  }
+
+  function openControls(tab) {
+    ensureDom(); st.controlTab = tab;
+    $("cx-controls-title").textContent = t(tab === "model" ? "模型设置" : tab === "permission" ? "权限控制" : "添加引用");
+    if (tab === "model") paintModelControls();
+    else if (tab === "permission") paintPermissions();
+    else { st.referenceTab = "all"; st.referenceFiles = null; st.filePath = currentCwd(); paintReferences(); loadReferenceCatalog(); }
+    if (!$("cx-controls").open) $("cx-controls").showModal();
+  }
+  function paintModelControls() {
+    const box = $("cx-controls-body"), s = st.status || {}, custom = s.connection?.mode === "custom";
+    const providers = s.providers?.length ? s.providers : [{ id:"chatgpt", name:"ChatGPT", models: custom ? [] : s.models || [] }, { id:"custom", name:s.connection?.baseUrl || "Custom API", models: custom ? s.models || [] : [] }];
+    box.innerHTML = `<form id="cx-compose-model-form"><label>${esc(t("提供商"))}<select id="cx-compose-provider">${providers.map(p=>`<option value="${esc(p.id)}"${p.id === (custom ? "custom" : "chatgpt") ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label><button type="button" data-act="composer-configure">${esc(t("配置提供商"))}</button><label>${esc(t("模型"))}<select id="cx-compose-model"></select></label><p id="cx-compose-capabilities"></p><label>${esc(t("上下文大小"))}<input id="cx-compose-context" inputmode="numeric" type="number" min="1024" max="1000000000" step="1" placeholder="${esc(t("自动"))}" value="${s.contextWindow || ""}"></label><p class="cx-field-note">${esc(t("留空跟随模型；修改上限会在空闲时重建引擎。"))}</p><label>${esc(t("思考强度"))}<select id="cx-compose-effort"></select></label><button type="submit" class="cx-primary">${esc(t("保存"))}</button><p class="cx-form-error" id="cx-compose-model-error" role="alert"></p></form>`;
+    const provider = $("cx-compose-provider"), model = $("cx-compose-model"), effort = $("cx-compose-effort");
+    const paintEfforts = () => {
+      const models = providers.find(p=>p.id===provider.value)?.models || [], selected = models.find(m=>m.id===model.value) || models.find(m=>m.isDefault);
+      effort.innerHTML = `<option value="">${esc(t("默认"))}</option>` + (selected?.supportedReasoningEfforts || []).map(e=>`<option value="${esc(e.reasoningEffort)}"${e.reasoningEffort===st.effort && model.value===st.model ? " selected" : ""}>${esc(e.reasoningEffort)}</option>`).join("");
+      $("cx-compose-capabilities").textContent = capabilityText(selected) + " · " + t("上下文上限") + " " + (selected?.contextWindow ? tokenNumber(selected.contextWindow) : t("未知")) + (Object.values(selected?.capabilitySources || {}).includes("models.dev") ? " · models.dev · " + t("目录能力仅供参考，以接口实际支持为准。") : "");
+      $("cx-compose-context").placeholder = selected?.contextWindow ? String(selected.contextWindow) : t("自动");
+    };
+    const paintModels = () => {
+      const models = (providers.find(p=>p.id===provider.value)?.models || []).filter(m=>!m.hidden);
+      model.innerHTML = models.length ? models.map(m=>`<option value="${esc(m.id)}"${m.id===st.model ? " selected" : ""}>${esc(m.displayName||m.id)}</option>`).join("") : `<option value="">${esc(t("请先配置提供商"))}</option>`;
+      model.disabled = !models.length; paintEfforts();
+    };
+    paintModels(); provider.addEventListener("change",()=>{ $("cx-compose-context").value="";paintModels(); });
+    model.addEventListener("change",()=>{ $("cx-compose-context").value="";paintEfforts(); });
+    box.querySelector('[data-act="composer-configure"]').onclick=()=>{ $("cx-controls").close();openSettings("connection"); };
+    $("cx-compose-model-form").onsubmit = async event => {
+      event.preventDefault(); const error=$("cx-compose-model-error");error.textContent="";
+      const nextProvider=provider.value;
+      if(nextProvider !== (custom ? "custom":"chatgpt")) {
+        try {
+          if(nextProvider === "custom") {
+            if(!s.connection?.model) { $("cx-controls").close();return openSettings("connection"); }
+            await saveConnectionConfig({ mode:"custom", baseUrl:s.connection.baseUrl, model:model.value||s.connection.model, wireApi:s.connection.wireApi, noKey:s.connection.noKey });
+          } else await saveConnectionConfig({ mode:"chatgpt" });
+        } catch(e){error.textContent=t(e.message);return;}
+      }
+      if(!model.value) { $("cx-controls").close();return openSettings("connection"); }
+      const windowSize=$("cx-compose-context").value ? Number($("cx-compose-context").value) : 0;
+      box.querySelector('[type=submit]').disabled=true;
+      if(await saveSettings(model.value,effort.value,windowSize)) $("cx-controls").close();
+      else {box.querySelector('[type=submit]').disabled=false;error.textContent=t("保存失败，请检查设置后重试。");}
+    };
+  }
+  function paintPermissions() {
+    const mode = st.status?.permissions?.mode || "ask";
+    const descriptions = { read:"只能读取，禁止写入和提权。", ask:"工作区内执行，风险操作向你询问。", auto:"由 Codex 自动审批器判断提权请求。", full:"允许访问应用可用的文件和网络，无操作审批。" };
+    $("cx-controls-body").innerHTML = `<div class="cx-permission-options">${[["read","只读"],["ask","询问"],["auto","帮我批准"],["full","完全访问"]].map(([id,name])=>`<button class="cx-permission-option" data-act="permission-mode" data-mode="${id}" aria-pressed="${id===mode}"${st.permissionBusy ? " disabled":""}>${ico("shield")}<span><b>${esc(t(name))}</b><small>${esc(t(descriptions[id]))}</small></span><i>${id===mode?"✓":""}</i></button>`).join("")}</div><p class="cx-field-note">${esc(t("权限由 Codex 引擎执行，仍受 Android 应用权限边界约束。"))}</p><p class="cx-form-error" role="alert">${esc(st.permissionError || "")}</p>`;
+  }
+  async function savePermission(mode) {
+    if(st.permissionBusy)return; st.permissionBusy=true;st.permissionError="";paintPermissions();
+    try{syncStatus(await post("/api/codex/permissions",{mode}));$("cx-controls").close();}
+    catch(e){st.permissionError=t(e.message);}
+    finally{st.permissionBusy=false;paint();}
+  }
+  function paintReferenceChips() {
+    if(!dom)return;
+    $("cx-reference-chips").innerHTML=st.references.map((r,i)=>`<span><b>${esc(r.type==="file"?r.name:"@"+r.name)}</b><button data-act="reference-remove" data-index="${i}" aria-label="${esc(t("移除引用"))}">×</button></span>`).join("");
+  }
+  function addReference(ref) {
+    if(!st.references.some(r=>r.type===ref.type&&r.path===ref.path)) {
+      if(st.references.length>=20)return toast(t("每条消息最多引用 20 项"),true);
+      st.references.push(ref);
+    }
+    dom.input.value=dom.input.value.replace(/(?:^|\s)@$/," ").trimStart();saveDraft();paintReferenceChips();
+    $("cx-controls").close();dom.input.focus();
+  }
+  async function loadReferenceCatalog() {
+    const seq=++st.referenceSeq;st.referenceLoading=true;st.referenceError="";paintReferences();
+    try { const data=await api("/api/codex/extensions?cwd="+encodeURIComponent(currentCwd()));if(seq===st.referenceSeq)st.referenceCatalog=data; }
+    catch(e){if(seq===st.referenceSeq)st.referenceError=t(e.message);}
+    finally{if(seq===st.referenceSeq){st.referenceLoading=false;paintReferences();}}
+  }
+  async function loadReferenceFiles(dir) {
+    const seq=++st.referenceSeq;st.filePath=dir;st.referenceLoading=true;st.referenceError="";paintReferences();
+    try { const data=await api("/api/files?path="+encodeURIComponent(dir));if(seq===st.referenceSeq)st.referenceFiles=data; }
+    catch(e){if(seq===st.referenceSeq)st.referenceError=t(e.message);}
+    finally{if(seq===st.referenceSeq){st.referenceLoading=false;paintReferences();}}
+  }
+  function paintReferences() {
+    if(st.controlTab!=="references")return;
+    const tab=st.referenceTab||"all", data=st.referenceCatalog||{};
+    const row=(type,path,name,detail)=>`<button class="cx-reference-row" data-act="reference-add" data-type="${type}" data-path="${esc(path)}" data-name="${esc(name)}"><span><b>${esc(type==="file"?name:"@"+name)}</b><small>${esc(detail||path)}</small></span>${ico("plus")}</button>`;
+    $("cx-controls-body").innerHTML=`<nav class="cx-reference-tabs">${[["all","全部"],["plugin","插件"],["skill","技能"],["mcp","MCP"],["file","本地文件"]].map(([id,name])=>`<button data-act="reference-tab" data-tab="${id}" aria-pressed="${tab===id}">${esc(t(name))}</button>`).join("")}</nav><div id="cx-reference-list"></div>`;
+    const box=$("cx-reference-list");
+    if(st.referenceLoading){box.textContent=t("加载中…");return;}
+    if(st.referenceError){box.innerHTML=`<p class="cx-form-error">${esc(st.referenceError)}</p>`;return;}
+    if(tab==="file") {
+      const files=st.referenceFiles;
+      box.innerHTML=`<form id="cx-reference-path-form"><label>${esc(t("目录"))}<input id="cx-reference-path" value="${esc(st.filePath||currentCwd())}"></label><button type="submit">${esc(t("打开目录"))}</button></form>`;
+      $("cx-reference-path-form").onsubmit=e=>{e.preventDefault();loadReferenceFiles($("cx-reference-path").value);};
+      if(!files){box.insertAdjacentHTML("beforeend",`<button data-act="reference-dir" data-path="${esc(currentCwd())}">${esc(t("浏览当前项目"))}</button>`);return;}
+      if(files.parent)box.insertAdjacentHTML("beforeend",`<button data-act="reference-dir" data-path="${esc(files.parent)}">↑ ${esc(t("上级目录"))}</button>`);
+      box.insertAdjacentHTML("beforeend",(files.entries||[]).map(f=>f.dir?`<button class="cx-reference-row" data-act="reference-dir" data-path="${esc((files.path||st.filePath).replace(/\/$/,"")+"/"+f.name)}">${ico("folder")}<span>${esc(f.name)}</span></button>`:row("file",(files.path||st.filePath).replace(/\/$/,"")+"/"+f.name,f.name,t("作为本地路径引用，由模型按需读取。"))).join("")||`<p>${esc(t("目录为空"))}</p>`);
+      return;
+    }
+    let html="";
+    if(tab==="all"||tab==="plugin")html+=(data.plugins||[]).map(p=>row("plugin",p.id,p.name,p.displayName)).join("")+(data.pluginsError?`<p class="cx-field-note">${esc(data.pluginsError)}</p>`:"");
+    if(tab==="all"||tab==="skill")html+=(data.skills||[]).flatMap(g=>g.skills||[]).filter(s=>s.enabled).map(s=>row("skill",s.path,s.name,s.description)).join("");
+    if(tab==="all"||tab==="mcp")html+=(data.mcp||[]).map(m=>row("mcp",m.name,m.name,"MCP")).join("");
+    box.innerHTML=html||`<p>${esc(t("没有可引用的项目，请配置插件、技能或 MCP。"))}</p>`;
+  }
+  function paintMetrics() {
+    if(!dom)return;
+    for(const [turnId,metric] of st.metrics) {
+      if(metric.threadId!==st.threadId)continue;
+      const messages=[...st.items.values()].filter(item=>item.turnId===turnId&&item.type==="agentMessage");
+      if(!messages.length)continue;
+      const target=messages.at(-1).el;
+      for(const item of messages.slice(0,-1))item.el.querySelector(".cx-response-meta")?.remove();
+      let footer=target.querySelector(".cx-response-meta");
+      if(!footer){footer=document.createElement("div");footer.className="cx-response-meta";footer.tabIndex=0;target.appendChild(footer);}
+      const totals=st.contexts.get(st.threadId)?.total||metric.total;
+      const elapsed=metric.completedAt&&metric.firstOutputAt?(metric.completedAt-metric.firstOutputAt)/1000:null;
+      const speed=elapsed>0&&Number.isFinite(metric.outputTokens)?(metric.outputTokens/elapsed).toFixed(1)+" tok/s":"— tok/s";
+      const input=totals?.inputTokens, output=totals?.outputTokens, cached=totals?.cachedInputTokens;
+      const cache=Number.isFinite(input)&&input>0&&Number.isFinite(cached)?Math.min(100,cached/input*100).toFixed(1)+"%":"—";
+      const value=[metric.provider,metric.model,metric.effort||t("默认"),speed,t("输入")+" "+(Number.isFinite(input)?tokenNumber(input):"—"),t("输出")+" "+(Number.isFinite(output)?tokenNumber(output):"—"),t("缓存命中率")+" "+cache].filter(Boolean).join(" · ");
+      footer.textContent=value;footer.title=value+" · "+t("会话累计用量；速度从首个输出事件至完成估算。");
+    }
   }
 
   function openSettings(tab = "general") {
@@ -1275,8 +1432,8 @@
       <label>${esc(t("思考强度"))}<select id="cx-pref-effort"><option value="">${esc(t("默认"))}</option>${(cur?.supportedReasoningEfforts || []).map((e) => `<option value="${esc(e.reasoningEffort)}"${e.reasoningEffort === st.effort ? " selected" : ""}>${esc(e.reasoningEffort)}</option>`).join("")}</select></label>
       <p id="cx-model-capabilities">${esc(t("输入能力"))}：${esc(capabilityText(cur))} · ${esc(t("上下文上限"))}：${cur?.contextWindow ? esc(tokenNumber(cur.contextWindow)) : esc(t("未知"))}${Object.values(cur?.capabilitySources || {}).includes("models.dev") ? " · models.dev" : ""}</p>
       <p>${esc(t("模型和思考强度保存在本机，将用于下一次发送。"))}</p><button class="cx-pref-save" type="submit"${st.settingsBusy || !models.length ? " disabled" : ""}>${esc(t("保存"))}</button></form></section>
-      <section><h3>${esc(t("权限与运行"))}</h3><p>${esc(t("非受信命令由 Codex 请求确认。任务以安卓应用身份执行，可访问本应用和已授权的共享目录；当前未启用额外的项目目录隔离。"))}</p>
-      ${row("审批策略", "<code>untrusted</code>")}${row("执行沙箱", "<code>danger-full-access</code>")}
+      <section><h3>${esc(t("权限与运行"))}</h3><p>${esc(t("权限由 Codex 引擎执行，仍受 Android 应用权限边界约束。"))}</p>
+      ${row("审批策略", "<code>"+esc(s.permissions?.approvalPolicy||"untrusted")+"</code>")}${row("执行沙箱", "<code>"+esc(s.permissions?.sandbox||"workspace-write")+"</code>")}
       ${row("后台任务", esc(t("正在运行 {n} 个任务", { n: st.running.size })))}<button data-act="device-settings">${esc(t("应用与设备设置"))}</button></section>
       <section><h3>${esc(t("通知"))}</h3><div id="cx-notify-status">${esc(t("加载中…"))}</div></section>
       <section><h3>${esc(t("外观与语言"))}</h3><label>${esc(t("外观"))}<select id="cx-pref-theme">${[["auto", "跟随系统"], ["light", "浅色"], ["dark", "深色"]].map(([v, k]) => `<option value="${v}"${v === (window.Theme?.pref || "auto").replace(/^(qs|zy|gc|ss)-/, "") ? " selected" : ""}>${esc(t(k))}</option>`).join("")}</select></label>
@@ -1499,6 +1656,7 @@
     if (dom.mobileMenu.open) { dom.mobileMenu.close(); return true; }
     if (dom.preferences.open) { dom.preferences.close(); return true; }
     if (dom.dialog.open) { dom.dialog.close(); return true; }
+    if ($("cx-controls").open) { $("cx-controls").close(); return true; }
     if ($("cx-context").open) { $("cx-context").open = false; $("cx-context").querySelector("summary").focus(); return true; }
     if (st.sidebar) { toggleSidebar(false); return true; }
     if (st.review) { toggleReview(false); return true; }
@@ -1527,6 +1685,7 @@
     if (dom.dialog.open) dom.dialog.close();
     if (dom.preferences.open) dom.preferences.close();
     if (dom.mobileMenu.open) dom.mobileMenu.close();
+    if ($("cx-controls").open) $("cx-controls").close();
     disconnect();
   }
 

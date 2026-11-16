@@ -115,12 +115,12 @@ try {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
   rememberApiModels(baseUrl, [{ id: "process-fixture", contextWindow: 64000, supportedReasoningEfforts: ["high"] }]);
-  async function start(wireApi) {
+  async function start(wireApi, permission = { approvalPolicy: "never", sandbox: "danger-full-access", approvalsReviewer: "user" }) {
     updateConnection({ mode: "custom", baseUrl, model: "process-fixture", noKey: true, wireApi, effort: "high" });
     const launch = await prepareConnectionLaunch(); adapterClose = launch.close;
     const driver = new Driver(launch); await driver.init();
-    const { thread } = await driver.request("thread/start", { cwd: temporary, model: "process-fixture", modelProvider: launch.modelProvider, approvalPolicy: "never", sandbox: "danger-full-access" });
-    return { driver, thread, launch };
+    const response = await driver.request("thread/start", { cwd: temporary, model: "process-fixture", modelProvider: launch.modelProvider, ...permission });
+    return { driver, thread:response.thread, launch, response };
   }
   const first = await start("responses");
   assert.equal((await first.driver.turn(first.thread.id)).status, "completed");
@@ -140,6 +140,24 @@ try {
   await second.request("thread/resume", { threadId: first.thread.id, modelProvider: first.launch.modelProvider, approvalPolicy: "never", sandbox: "danger-full-access" });
   assert.equal((await second.turn(first.thread.id)).status, "completed");
   await second.stop(); results.push("persisted thread resumes in a new engine process");
+
+  for(const [name,sandbox,approvalPolicy,approvalsReviewer,policyType] of [["read","read-only","never","user","readOnly"],["ask","workspace-write","untrusted","user","workspaceWrite"],["auto","workspace-write","on-request","auto_review","workspaceWrite"],["full","danger-full-access","never","user","dangerFullAccess"]]){
+    mode="responses";requests=[];
+    const {driver,response}=await start("responses",{sandbox,approvalPolicy,approvalsReviewer});
+    // Without the optional Windows sandbox setup, Codex narrows workspace-write
+    // to read-only. It must never broaden either policy to full access.
+    assert([policyType,...(process.platform==="win32"&&["ask","auto"].includes(name)?["readOnly"]:[])].includes(response.sandbox.type),name+": actual engine sandbox "+response.sandbox.type);
+    assert.equal(response.approvalPolicy,approvalPolicy);assert.equal(response.approvalsReviewer,approvalsReviewer);
+    results.push({permission:name,effectiveSandbox:response.sandbox.type,reviewer:response.approvalsReviewer});await driver.stop();
+  }
+  results.push("real engine accepts all four permission policies and automatic approval reviewer");
+
+  mode="chat-valid";requests=[];fs.rmSync(marker,{force:true});
+  const readOnly=await start("chat",{sandbox:"read-only",approvalPolicy:"never",approvalsReviewer:"user"});
+  await readOnly.driver.turn(readOnly.thread.id,{sandboxPolicy:{type:"readOnly",networkAccess:false},approvalPolicy:"never",approvalsReviewer:"user"});
+  await readOnly.driver.stop();adapterClose?.();adapterClose=null;
+  assert.equal(executionCount(),0,"read-only sandbox cannot execute a write to the workspace");
+  results.push("read-only policy prevents a real tool from writing to the workspace");
 
   for (const scenario of ["chat-valid", "chat-invalid-json", "chat-unknown-tool", "chat-truncated", "responses-interrupted"]) {
     mode = scenario; requests = []; fs.rmSync(marker, { force: true });

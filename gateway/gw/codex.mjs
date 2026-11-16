@@ -54,6 +54,17 @@ const PREF_FILE = path.join(CFG.home, "coxdragon-codex.json");
 const prefs = loadState(PREF_FILE, { max: 4096, shape: (j) => j && typeof j === "object" && !Array.isArray(j) ? j : undefined }).data;
 const CONTEXT_FILE = path.join(CFG.home, "coxdragon-codex-context.json");
 const savedContexts = loadState(CONTEXT_FILE, { max: 1 << 20, shape: j => j && typeof j === "object" && !Array.isArray(j) ? j : undefined }).data;
+const METRICS_FILE = path.join(CFG.home, "coxdragon-codex-metrics.json");
+const savedMetrics = loadState(METRICS_FILE, { max: 1 << 20, shape: j => j && typeof j === "object" && !Array.isArray(j) ? j : undefined }).data;
+const PERMISSIONS = {
+  read: { sandbox: "read-only", approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly", networkAccess: false } },
+  ask: { sandbox: "workspace-write", approvalPolicy: "untrusted", approvalsReviewer: "user", sandboxPolicy: { type: "workspaceWrite", networkAccess: false } },
+  auto: { sandbox: "workspace-write", approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandboxPolicy: { type: "workspaceWrite", networkAccess: false } },
+  full: { sandbox: "danger-full-access", approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "dangerFullAccess" } },
+};
+function threadPermissions() { const { sandbox, approvalPolicy, approvalsReviewer } = PERMISSIONS[S.permissionMode]; return { sandbox, approvalPolicy, approvalsReviewer }; }
+function contextOverride() { return connectionStatus().mode === "custom" ? connectionStatus().contextWindow || 0 : prefs.contextWindow || 0; }
+function providerName() { try { return new URL(connectionStatus().baseUrl).hostname; } catch { return "Custom API"; } }
 
 // ── 小工具 ───────────────────────────────────────────────────────────
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
@@ -382,13 +393,15 @@ const S = {
   child: null, rpc: null, starting: null, generation: 0, closeAdapter: null, connectionProbe: null,
   account: null, models: [],
   activeThread: null, activeTurn: null, runningTurns: new Map(), startingTurns: new Set(), endedTurns: new Set(),
-  loadedThreads: new Set(), operations: new Set(),
+  loadedThreads: new Set(), threadCwds: new Map(), operations: new Set(),
   contexts: new Map(Object.entries(savedContexts).filter(([id, value]) => id.length <= 200 && Number.isSafeInteger(value?.last?.totalTokens) && value.last.totalTokens >= 0).slice(-200)), compacting: new Set(),
   cwd: CFG.workspace,
   approvals: new Map(), sse: new Set(),
   lastError: "", stderr: "", startedAt: 0,
   model: connectionStatus().mode === "custom" ? connectionStatus().model : typeof prefs.model === "string" ? prefs.model.slice(0, 200) : "",
-  effort: connectionStatus().mode === "custom" ? "" : typeof prefs.effort === "string" ? prefs.effort.slice(0, 40) : "",
+  effort: connectionStatus().mode === "custom" ? connectionStatus().effort || "" : typeof prefs.effort === "string" ? prefs.effort.slice(0, 40) : "",
+  permissionMode: Object.hasOwn(PERMISSIONS, prefs.permissionMode) ? prefs.permissionMode : "ask",
+  metrics: new Map(Object.entries(savedMetrics).filter(([, m]) => m && typeof m.threadId === "string").slice(-300)),
   titles: new Map(),
   diagnostics: [],
 };
@@ -484,12 +497,14 @@ function status() {
     activeThread: slimThread(S.activeThread),
     activeTurn: S.activeTurn ? { id: S.activeTurn.id, status: S.activeTurn.status } : null,
     runningTurns: [...S.runningTurns].map(([threadId, turn]) => ({ threadId, turn: { id: turn.id, status: turn.status } })),
-    contexts: Object.fromEntries(S.contexts), compacting: [...S.compacting],
+    contexts: Object.fromEntries(S.contexts), compacting: [...S.compacting], metrics: Object.fromEntries(S.metrics), contextWindow: contextOverride(),
+    providers: [{ id: "chatgpt", name: "ChatGPT", models: connectionStatus().mode === "chatgpt" ? S.models.map(slimModel) : [] },
+      { id: "custom", name: providerName(), models: connectionStatus().model ? customModels(connectionStatus().baseUrl, connectionStatus().model) : [] }],
     approvals: [...S.approvals.values()].map((p) => ({ ...p, id: String(p.id) })),
     cwd: S.cwd,
     model: S.model || "",
     effort: S.effort || "",
-    permissions: { approvalPolicy: "untrusted", sandbox: "danger-full-access", boundary: "android-app-uid" },
+    permissions: { mode: S.permissionMode, ...threadPermissions(), boundary: "android-app-uid" },
     lastError: S.lastError,
     stderr: (S.rpc ? S.rpc.stderr : S.stderr).slice(-4000),
     proxy: proxy ? { port: proxy.port } : null,
@@ -523,8 +538,9 @@ let contextSaveTimer;
 function saveContexts() {
   clearTimeout(contextSaveTimer); contextSaveTimer = null;
   saveState(CONTEXT_FILE, JSON.stringify(Object.fromEntries(S.contexts)), { mode: 0o600 });
+  saveState(METRICS_FILE, JSON.stringify(Object.fromEntries(S.metrics)), { mode: 0o600 });
 }
-function rememberUsage(threadId, usage) {
+function rememberUsage(threadId, usage, turnId) {
   if (typeof threadId !== "string" || !usage || !usage.last) return;
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
   const breakdown = value => Object.fromEntries(["totalTokens", "inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens"].map(key => [key, count(value?.[key])]));
@@ -532,6 +548,13 @@ function rememberUsage(threadId, usage) {
   S.contexts.delete(threadId);
   S.contexts.set(threadId, { last: breakdown(usage.last), total: breakdown(usage.total),
     modelContextWindow: count(usage.modelContextWindow) || null, model: S.model, updatedAt: Date.now() });
+  const metric = S.metrics.get(turnId);
+  if (metric) {
+    const totalOutput = count(usage.total?.outputTokens), lastOutput = count(usage.last?.outputTokens);
+    if (metric.baseOutput == null && totalOutput != null && lastOutput != null) metric.baseOutput = Math.max(0, totalOutput - lastOutput);
+    metric.outputTokens = totalOutput != null && metric.baseOutput != null ? Math.max(0, totalOutput - metric.baseOutput) : lastOutput;
+    metric.total = breakdown(usage.total);
+  }
   if (S.contexts.size > 200) S.contexts.delete(S.contexts.keys().next().value);
   if (!contextSaveTimer) contextSaveTimer = setTimeout(saveContexts, 1000).unref();
 }
@@ -540,7 +563,13 @@ function handleNotify(m) {
   let done;
   S.stderr = S.rpc ? S.rpc.stderr : S.stderr;
   switch (m.method) {
-    case "thread/tokenUsage/updated": rememberUsage(m.params?.threadId, m.params?.tokenUsage); break;
+    case "thread/tokenUsage/updated": rememberUsage(m.params?.threadId, m.params?.tokenUsage, m.params?.turnId); break;
+    case "item/agentMessage/delta":
+    case "item/reasoning/summaryTextDelta": {
+      const metric = S.metrics.get(m.params?.turnId);
+      if (metric && !metric.firstOutputAt) metric.firstOutputAt = Date.now();
+      break;
+    }
     case "item/started":
       if (m.params?.item?.type === "contextCompaction") S.compacting.add(m.params.threadId);
       break;
@@ -551,13 +580,21 @@ function handleNotify(m) {
       const p = m.params || {};
       S.lastError = "";
       if (p.threadId && p.turn) S.runningTurns.set(p.threadId, p.turn);
+      if (p.turn?.id && !S.metrics.has(p.turn.id)) {
+        const c = connectionStatus(); let provider = "ChatGPT"; try { if (c.mode === "custom") provider = new URL(c.baseUrl).hostname; } catch {}
+        const selected = S.models.find(m => m.id === S.model) || S.models.find(m => m.isDefault);
+        S.metrics.set(p.turn.id, { threadId: p.threadId, turnId: p.turn.id, provider, model: selected?.displayName || S.model || "", effort: S.effort || selected?.defaultReasoningEffort || "", startedAt: Date.now(), firstOutputAt: null, baseOutput: S.contexts.get(p.threadId)?.total?.outputTokens ?? null, outputTokens: null });
+        if (S.metrics.size > 300) S.metrics.delete(S.metrics.keys().next().value);
+      }
       if (p.threadId === S.activeThread?.id) S.activeTurn = p.turn || null;
       break;
     }
     case "turn/completed": {
       const p = m.params || {}, running = S.runningTurns.get(p.threadId);
       S.compacting.delete(p.threadId);
-      if (contextSaveTimer) saveContexts();
+      const metric = S.metrics.get(p.turn?.id);
+      if (metric) metric.completedAt = Date.now();
+      if (contextSaveTimer || metric) saveContexts();
       if (p.turn?.error) S.lastError = connectionErrorMessage(p.turn.error);
       if (p.turn?.id) { S.endedTurns.add(p.turn.id); if (S.endedTurns.size > 200) S.endedTurns.delete(S.endedTurns.values().next().value); }
       if (!running || !p.turn || p.turn.id === running.id) S.runningTurns.delete(p.threadId);
@@ -589,7 +626,7 @@ function handleNotify(m) {
   }
   if (["turn/started", "turn/completed", "error"].includes(m.method)) recordTaskEvent(m.method, m.params);
   if (["turn/started", "turn/completed", "serverRequest/resolved"].includes(m.method) || (["item/started", "item/completed"].includes(m.method) && m.params?.item?.type === "contextCompaction")) activityChanged(done);
-  broadcast({ type: "rpc", method: m.method, params: m.params });
+  broadcast({ type: "rpc", method: m.method, params: m.params, metric: S.metrics.get(m.params?.turnId || m.params?.turn?.id) });
 }
 
 const APPROVAL_METHODS = new Set([
@@ -658,6 +695,7 @@ async function startRpc(generation) {
   if (connectionStatus().mode === "custom") { delete env.OPENAI_API_KEY; delete env.CODEX_API_KEY; delete env.OPENAI_BASE_URL; }
   Object.assign(env, connection.env);
   const argv = [...connection.args, "--listen", "stdio://"];
+  if (connectionStatus().mode !== "custom" && contextOverride()) argv.unshift("-c", "model_context_window=" + contextOverride());
   const child = spawn(er || BIN, er ? ["-f", BIN, ...argv] : argv, { cwd: isDir(S.cwd) ? S.cwd : CFG.workspace, env, stdio: ["pipe", "pipe", "pipe"] });
   // 停止或换过引擎之后，旧进程缓冲区里剩下的事件和审批不能进入新会话。
   const rpc = new Rpc(child, {
@@ -729,13 +767,12 @@ async function startThread(cwd) {
     const params = {
       cwd: dir,
       modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
-      sandbox: "danger-full-access",
-      approvalPolicy: "untrusted",
+      ...threadPermissions(),
     };
     if (S.model) params.model = S.model;
     const r = await rpc.request("thread/start", params, 60000);
     check();
-    if (r && r.thread) { S.loadedThreads.add(r.thread.id); S.activeThread = r.thread; rememberTitle(r.thread); S.activeTurn = null; S.cwd = dir; broadcast({ type: "thread", thread: slimThread(r.thread) }); }
+    if (r && r.thread) { S.loadedThreads.add(r.thread.id); S.threadCwds.set(r.thread.id, dir); S.activeThread = r.thread; rememberTitle(r.thread); S.activeTurn = null; S.cwd = dir; broadcast({ type: "thread", thread: slimThread(r.thread) }); }
     return r;
   });
 }
@@ -746,12 +783,12 @@ async function resumeThread(threadId, { select = true } = {}) {
       threadId: String(threadId),
       modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
       ...(S.model ? { model: S.model } : {}),
-      sandbox: "danger-full-access",
-      approvalPolicy: "untrusted",
+      ...threadPermissions(),
     }, 60000);
     check();
     if (r && r.thread) {
       S.loadedThreads.add(r.thread.id);
+      if(r.thread.cwd)S.threadCwds.set(r.thread.id,r.thread.cwd);
       if (select) S.activeThread = r.thread;
       rememberTitle(r.thread);
       // 恢复会话只改变当前视图，不能把正在后台执行的轮次当成结束。
@@ -764,7 +801,7 @@ async function resumeThread(threadId, { select = true } = {}) {
     return r;
   });
 }
-async function startTurn(text, threadId) {
+async function startTurn(text, threadId, references = []) {
   const s = String(text || "");
   if (!s.trim()) throw new Error("消息是空的");
   if (s.length > 200000) throw new Error("消息太长");
@@ -780,7 +817,10 @@ async function startTurn(text, threadId) {
     if (!initial && !S.activeThread) await startThread(S.cwd);
     assertRpc(rpc, generation);
     const target = initial || S.activeThread.id;
-    const params = { threadId: target, input: [{ type: "text", text: s }] };
+    const input = await referenceInput(references, S.threadCwds.get(target) || (S.activeThread?.id === target ? S.activeThread.cwd : null) || S.cwd);
+    assertRpc(rpc, generation);
+    const permission = PERMISSIONS[S.permissionMode];
+    const params = { threadId: target, input: [{ type: "text", text: s }, ...input], approvalPolicy: permission.approvalPolicy, approvalsReviewer: permission.approvalsReviewer, sandboxPolicy: permission.sandboxPolicy };
     if (S.model) params.model = S.model;
     if (S.effort) params.effort = S.effort;
     let r = await rpc.request("turn/start", params, 60000);
@@ -876,25 +916,40 @@ function updateSettings(body) {
   const selected = S.models.find((m) => m.id === model || m.model === model) || (!model ? S.models.find((m) => m.isDefault) || S.models[0] : null);
   if (model && S.models.length && !selected) throw new Error("当前账号不支持这个模型，请刷新模型列表");
   if (effort && selected && !(selected.supportedReasoningEfforts || []).some((x) => x.reasoningEffort === effort)) throw new Error("这个模型不支持所选思考强度");
+  const previousWindow = contextOverride();
+  const contextWindow = body.contextWindow === undefined ? model === S.model ? previousWindow : 0 : body.contextWindow;
+  if (!Number.isSafeInteger(contextWindow) || contextWindow < 0 || (contextWindow > 0 && contextWindow < 1024) || contextWindow > 1e9) throw new Error("上下文大小应为 1024 到 1000000000 的整数，留空使用默认值");
+  if ((model !== S.model || contextWindow !== previousWindow) && codexActivity().busy) throw Object.assign(new Error("请等待任务结束后再切换模型"), { statusCode: 409 });
   if (connectionStatus().mode === "custom") {
     model = model || selected?.id || connectionStatus().model;
     const changed = model !== connectionStatus().model;
     // The context limit is a process override. Recreate the idle engine so a
     // different model never inherits the previous model's context window.
     if (changed && codexActivity().busy) throw Object.assign(new Error("请等待任务结束后再切换模型"), { statusCode: 409 });
-    updateCustomSelection(model, effort);
-    if (changed) stopServer();
+    updateCustomSelection(model, effort, contextWindow);
+    if (changed || contextWindow !== previousWindow) stopServer();
     S.models = customModels(connectionStatus().baseUrl, model);
   }
   else {
-    const next = { model, effort };
+    const next = { ...prefs, model, effort, contextWindow };
     if (!saveState(PREF_FILE, JSON.stringify(next), { mode: 0o600 })) throw new Error("设置没有保存，请检查存储空间后重试");
     Object.assign(prefs, next);
+    if (contextWindow !== previousWindow || (model !== S.model && previousWindow)) stopServer();
   }
   S.model = model; S.effort = effort;
   broadcast({ type: "status", status: status() });
-  broadcast({ type: "settings", model, effort });
-  return { model, effort };
+  broadcast({ type: "settings", model, effort, contextWindow });
+  return { model, effort, contextWindow };
+}
+
+function updatePermissions(mode) {
+  if (!Object.hasOwn(PERMISSIONS, mode)) throw Object.assign(new Error("无效的权限模式"), { statusCode: 400 });
+  if (codexActivity().busy) throw Object.assign(new Error("请等待任务结束后再修改权限"), { statusCode: 409 });
+  const next = { ...prefs, permissionMode: mode };
+  if (!saveState(PREF_FILE, JSON.stringify(next), { mode: 0o600 })) throw new Error("权限设置没有保存");
+  Object.assign(prefs, next); S.permissionMode = mode;
+  broadcast({ type: "status", status: status() });
+  return status();
 }
 
 function setConnection(body) {
@@ -912,16 +967,50 @@ async function extensions(cwd) {
   const dir = safeCwd(cwd);
   if (!dir) throw new Error("项目目录不存在");
   const rpc = await ensureRpc();
-  const [skills, mcp] = await Promise.allSettled([
+  const [skills, mcp, plugins] = await Promise.allSettled([
     rpc.request("skills/list", { cwds: [dir], forceReload: true }, 30000),
     rpc.request("mcpServerStatus/list", { limit: 100 }, 30000),
+    rpc.request("plugin/list", { cwds: [dir], forceRefetch: false, marketplaceKinds: ["local"] }, 30000),
   ]);
   return { cwd: dir, codexHome: CODEX_HOME, configPath: path.join(CODEX_HOME, "config.toml"), agentsPath: path.join(dir, "AGENTS.md"),
     skills: skills.status === "fulfilled" ? skills.value.data || [] : null,
     skillsError: skills.status === "rejected" ? errMsg(skills.reason) : "",
     mcp: mcp.status === "fulfilled" ? mcp.value.data || [] : null,
     mcpNextCursor: mcp.status === "fulfilled" ? mcp.value.nextCursor || null : null,
-    mcpError: mcp.status === "rejected" ? errMsg(mcp.reason) : "" };
+    mcpError: mcp.status === "rejected" ? errMsg(mcp.reason) : "",
+    plugins: plugins.status === "fulfilled" ? (plugins.value.marketplaces || []).flatMap(market => (market.plugins || []).filter(p => p.installed && p.enabled).map(p => ({ id: p.id, name: p.name, displayName: p.interface?.displayName || p.name, path: p.source?.type === "local" ? p.source.path : "" }))) : [],
+    pluginsError: plugins.status === "rejected" ? errMsg(plugins.reason) : "" };
+}
+
+async function referenceInput(references, cwd) {
+  if (!Array.isArray(references) || references.length > 20) throw new Error("每条消息最多引用 20 项");
+  if (!references.length) return [];
+  const { safeFilePath } = await import("./files.mjs");
+  const catalog = references.some(r => ["skill", "plugin", "mcp"].includes(r?.type)) ? await extensions(cwd) : null;
+  return references.map(ref => {
+    if (!ref || typeof ref.path !== "string" || ref.path.length > 4096) throw new Error("引用无效");
+    if (ref.type === "skill") {
+      const skill = (catalog.skills || []).flatMap(g => g.skills || []).find(s => s.path === ref.path && s.enabled);
+      if (!skill) throw new Error("技能已停用或不在当前项目中，请重新选择");
+      return { type: "skill", name: skill.name, path: skill.path };
+    }
+    if (ref.type === "plugin") {
+      const plugin = (catalog.plugins || []).find(p => p.id === ref.path);
+      if (!plugin) throw new Error("插件已停用或未安装，请重新选择");
+      return { type: "mention", name: plugin.name, path: "plugin://" + plugin.id };
+    }
+    if (ref.type === "mcp") {
+      const server = (catalog.mcp || []).find(s => s.name === ref.path);
+      if (!server) throw new Error("MCP 服务已不在清单中");
+      return { type: "text", text: "Use the MCP server " + JSON.stringify(server.name) + " for this task when relevant." };
+    }
+    if (ref.type === "file") {
+      const file = safeFilePath(ref.path);
+      if (file.error) throw new Error("本地文件无法引用：" + file.error);
+      return { type: "text", text: "Referenced local file: " + JSON.stringify(file.file) };
+    }
+    throw new Error("不支持的引用类型");
+  });
 }
 
 async function setSkill(cwd, skillPath, enabled) {
@@ -965,7 +1054,8 @@ export async function routeCodex(req, res, u, p) {
       if (p === "/api/codex/stop") { stopServer(); return json(res, 200, { ok: true }); }
       if (p === "/api/codex/thread") { const r = await startThread(body.cwd); return json(res, 200, { thread: slimThread(r && r.thread) }); }
       if (p === "/api/codex/open-thread") { const r = await resumeThread(body.threadId); return json(res, 200, { thread: slimThread(r && r.thread) }); }
-      if (p === "/api/codex/turn") { const r = await startTurn(body.text, body.threadId); return json(res, 200, { turn: r && r.turn ? { id: r.turn.id, status: r.turn.status } : null }); }
+      if (p === "/api/codex/turn") { const r = await startTurn(body.text, body.threadId, body.references); return json(res, 200, { turn: r && r.turn ? { id: r.turn.id, status: r.turn.status } : null }); }
+      if (p === "/api/codex/permissions") return json(res, 200, updatePermissions(body.mode));
       if (p === "/api/codex/steer") { const r = await steerTurn(body.text); return json(res, 200, r || {}); }
       if (p === "/api/codex/interrupt") { const r = await interruptTurn(body.threadId); return json(res, 200, r || {}); }
       if (p === "/api/codex/compact") { await compactThread(body.threadId); return json(res, 200, { ok: true }); }
@@ -999,4 +1089,4 @@ export async function routeCodex(req, res, u, p) {
 }
 
 // 只供隔离测试注入协议替身，正式网关不暴露内部状态。
-export const _codexForTest = LIVE ? null : { S, status, handleNotify, handleRequest, startThread, startTurn, resumeThread, interruptTurn, compactThread, stopServer, approve, refreshModels, updateSettings, setConnection, extensions, setSkill, downloadTo };
+export const _codexForTest = LIVE ? null : { S, status, handleNotify, handleRequest, startThread, startTurn, resumeThread, interruptTurn, compactThread, stopServer, approve, refreshModels, updateSettings, updatePermissions, referenceInput, setConnection, extensions, setSkill, downloadTo };

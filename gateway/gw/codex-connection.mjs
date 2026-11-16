@@ -16,6 +16,7 @@ let connection = {
   noKey: stored.noKey === true,
   wireApi: stored.wireApi === "chat" ? "chat" : "responses",
   effort: typeof stored.effort === "string" ? stored.effort : "",
+  contextWindow: Number.isSafeInteger(stored.contextWindow) && stored.contextWindow >= 1024 ? stored.contextWindow : 0,
 };
 
 // Older automatic probes selected Responses for CodeFlow + DeepSeek even though
@@ -63,14 +64,16 @@ export function connectionDraft(body, { requireModel = true, allowAuto = false }
   }
   const effort = typeof body.effort === "string" ? body.effort : baseUrl === connection.baseUrl && model === connection.model ? connection.effort : "";
   if (effort && !customModels(baseUrl, model).find(m => m.id === model)?.supportedReasoningEfforts.some(e => e.reasoningEffort === effort)) throw invalid("这个模型不支持所选思考强度");
-  return { mode: "custom", baseUrl, model, apiKey, noKey, wireApi, effort };
+  const contextWindow = body.contextWindow === undefined ? baseUrl === connection.baseUrl && model === connection.model ? connection.contextWindow : 0 : body.contextWindow;
+  if (!Number.isSafeInteger(contextWindow) || contextWindow < 0 || (contextWindow > 0 && contextWindow < 1024) || contextWindow > 1e9) throw invalid("上下文大小应为 1024 到 1000000000 的整数，留空使用默认值");
+  return { mode: "custom", baseUrl, model, apiKey, noKey, wireApi, effort, contextWindow };
 }
 
 export function connectionStatus() {
   let configured = false;
   try { configured = connection.mode === "custom" && normalizeApiUrl(connection.baseUrl) === connection.baseUrl && !!connection.model && (connection.noKey || !!connection.apiKey); } catch {}
   return { mode: connection.mode, baseUrl: connection.baseUrl, model: connection.model,
-    hasKey: !!connection.apiKey, noKey: connection.noKey, configured, wireApi: connection.wireApi, effort: connection.effort };
+    hasKey: !!connection.apiKey, noKey: connection.noKey, configured, wireApi: connection.wireApi, effort: connection.effort, contextWindow: connection.contextWindow };
 }
 
 export function connectionErrorMessage(error) {
@@ -85,8 +88,8 @@ export function updateConnection(body) {
   return connectionStatus();
 }
 
-export function updateCustomSelection(model, effort) {
-  return updateConnection({ ...connection, model, effort });
+export function updateCustomSelection(model, effort, contextWindow = model === connection.model ? connection.contextWindow : 0) {
+  return updateConnection({ ...connection, model, effort, contextWindow });
 }
 
 // CLI 覆盖本客户端的连接，不改写用户的 config.toml。Key 只经子进程环境传入，
@@ -109,7 +112,7 @@ export function connectionLaunch(adapter) {
     [`model_providers.${CUSTOM_PROVIDER}.stream_idle_timeout_ms`]: 90000,
   };
   const model = customModels(connection.baseUrl, connection.model).find(m => m.id === connection.model);
-  if (model?.contextWindow) overrides.model_context_window = model.contextWindow;
+  if (connection.contextWindow || model?.contextWindow) overrides.model_context_window = connection.contextWindow || model.contextWindow;
   if (connection.effort) overrides.model_reasoning_effort = connection.effort;
   // Hosted web search is a Responses-only tool. Do not advertise it to a Chat API.
   if (connection.wireApi === "chat") overrides.web_search = "disabled";

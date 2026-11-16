@@ -155,3 +155,27 @@ html.cx-shell[data-theme][data-skin]{--bar-bg:var(--bg);--bar-bg2:var(--bg2);--a
 #cx-model-capabilities,#cx-api-capabilities{font-size:12px;line-height:1.7;color:var(--fg3);overflow-wrap:anywhere}
 @media(max-width:760px){.cx-context{margin:3px 7px -5px;font-size:10px}.cx-context>summary{min-height:30px}.cx-tool{margin-bottom:12px}.cx-command{font-size:12px}.cx-tool-copy{min-height:36px}.cx-context-pop{inset-inline-end:14px}}
 @media(prefers-reduced-motion:reduce){.cx-compaction[data-done=false] span{animation:none}.cx-tool-details>.cx-tool-head::before{transition:none}}
+
+/* Composer controls: model, permissions, references, send. */
+.cx-compose-model,.cx-compose-permission{display:inline-flex;align-items:center;gap:5px;min-height:36px;padding:5px 8px;border:0;background:transparent;border-radius:12px;color:var(--fg2);font-size:12px;white-space:nowrap}
+.cx-compose-model svg,.cx-compose-permission svg{width:20px;height:20px;flex:none}.cx-compose-permission[data-mode=full]{color:var(--err)!important;background:color-mix(in srgb,var(--err) 9%,transparent)}
+.cx-compose-model,.cx-compose-permission,.cx-compose-spacer{display:none}.cx-composer-bar{gap:5px}.cx-composer-bar>.cx-model-slot{display:block;flex:1;min-width:0}.cx-composer-bar>.cx-add{display:none;place-items:center;width:36px;height:36px;padding:7px;border:0;border-radius:50%;background:none;color:var(--fg)}.cx-composer-bar>.cx-add svg{width:24px;height:24px}
+.cx-reference-chips{display:flex;flex-wrap:wrap;gap:5px;padding:0 2px}.cx-reference-chips:empty{display:none}.cx-reference-chips>span{display:flex;align-items:center;min-width:0;max-width:100%;background:var(--bg3);border:1px solid var(--line);border-radius:9px;padding:2px 3px 2px 8px;gap:4px;font-size:11px;color:var(--fg2)}.cx-reference-chips b{font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.cx-reference-chips button{border:0;background:transparent;padding:4px 6px;color:var(--fg3);font-size:15px}
+.cx-controls{width:min(480px,calc(100% - 32px))}.cx-controls label{display:flex;flex-direction:column;gap:7px;margin:15px 0 7px;font-size:12px;color:var(--fg2)}
+.cx-controls input,.cx-controls select{width:100%;min-width:0;min-height:42px;border:1px solid var(--line);border-radius:10px;background:var(--bg2);color:var(--fg);padding:9px 11px;font-size:14px}
+.cx-controls .cx-primary{width:100%;margin-top:16px}.cx-field-note,#cx-compose-capabilities{color:var(--fg3);font-size:11px;line-height:1.7;overflow-wrap:anywhere;margin:8px 0}
+.cx-permission-options{display:flex;flex-direction:column;gap:8px}.cx-permission-option{display:flex;align-items:center;gap:12px;width:100%;padding:12px;border:1px solid var(--line);background:transparent;border-radius:14px;text-align:start;color:var(--fg2)}
+.cx-permission-option>svg{width:23px;height:23px;flex:none}.cx-permission-option>span{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0}.cx-permission-option b{font-size:14px;font-weight:500}.cx-permission-option small{color:var(--fg3);font-size:11px;line-height:1.6}.cx-permission-option i{font-style:normal}.cx-permission-option[aria-pressed=true]{border-color:var(--fg3);background:var(--bg2)}.cx-permission-option[data-mode=full]{color:var(--err)!important}.cx-permission-option[data-mode=full] small{color:var(--err)}
+.cx-reference-tabs{display:flex;gap:5px;overflow:auto;margin-bottom:12px}.cx-reference-tabs button{padding:8px 10px;white-space:nowrap;border:1px solid var(--line);border-radius:12px;font-size:12px;background:none;color:var(--fg2)}.cx-reference-tabs [aria-pressed=true]{background:var(--fg);color:var(--bg)}
+.cx-reference-row{display:flex;align-items:center;gap:10px;width:100%;text-align:start;padding:12px 4px;background:none;border:0;border-bottom:1px solid var(--line);color:var(--fg2)}.cx-reference-row>span{display:flex;flex-direction:column;gap:4px;flex:1;min-width:0;overflow-wrap:anywhere}.cx-reference-row b{font-size:13px;font-weight:500}.cx-reference-row small{font-size:11px;color:var(--fg3);line-height:1.5}.cx-reference-row svg{width:20px;height:20px;flex:none}
+.cx-response-meta{font:10px/1.7 var(--font,sans-serif);color:var(--fg3);white-space:nowrap;overflow-x:auto;max-width:100%;scrollbar-width:none;letter-spacing:0}.cx-response-meta::-webkit-scrollbar{display:none}
+@media(max-width:760px){
+  .cx-composer{display:flex;flex-direction:column;align-items:stretch;gap:4px;padding:14px 12px 8px;border-radius:27px}
+  .cx-composer textarea{min-height:64px;width:100%;padding:2px 6px 8px;font-size:16px;line-height:25px}
+  .cx-composer-bar{display:flex;align-items:center;margin-top:0;gap:3px;min-height:42px}
+  .cx-compose-model,.cx-compose-permission{display:inline-flex;min-height:40px;padding:6px;font-size:12px}.cx-compose-model svg,.cx-compose-permission svg{width:22px;height:22px}.cx-compose-spacer{display:block;flex:1}.cx-composer-bar>.cx-model-slot{display:none}
+  .cx-composer-bar>.cx-add{display:grid}.cx-composer-bar>.cx-add,.cx-send,.cx-stop{width:40px;height:40px;padding:9px;flex:none}.cx-composer-bar>.cx-add svg{width:25px;height:25px}
+  .cx-send,.cx-stop{grid-area:auto}.cx-reference-chips{padding:0 5px 5px}.cx-controls.cx-mobile-sheet{width:100%;max-height:calc(100dvh - var(--safe-t) - 22px)}
+  .cx-response-meta{font-size:10px;margin-top:5px}
+}
+@media(max-width:360px){.cx-compose-model>span{display:none}.cx-composer{padding-inline:9px}.cx-compose-permission{font-size:11px}.cx-compose-model,.cx-compose-permission{gap:3px}}

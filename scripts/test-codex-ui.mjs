@@ -94,7 +94,7 @@ try {
   await cdp.eval("__cc.openPage('settings','provider')");
   await until(() => cdp.eval("document.querySelector('#cx-preferences').open && !!document.querySelector('#cx-api-url')"), "old provider entry routes to Codex connection");
   await click('[data-act="settings-tab"][data-tab="general"]');
-  assert.equal(await cdp.eval("document.querySelector('#cx-preferences-body').innerText.includes('danger-full-access')"), true);
+  assert.equal(await cdp.eval("document.querySelector('#cx-preferences-body').innerText.includes('workspace-write')"), true);
   await change("#cx-pref-model", "fixture-model"); await change("#cx-pref-effort", "high");
   await click("#cx-settings-form button[type=submit]");
   await until(() => cdp.eval("CODEX.state.effort === 'high' && !CODEX.state.settingsBusy"), "persistent settings saved");
@@ -188,17 +188,29 @@ try {
   assert.equal(await cdp.eval("!!document.querySelector('#cx-input').value && !document.querySelector('#cx-send').disabled && !document.querySelector('#cx-mobile-suggestions').getClientRects().length"), true);
   await screenshot("mobile-input");
   await click('.cx-add');
-  await until(() => cdp.eval("document.querySelector('#cx-mobile-menu').open"), "phone task tools");
+  await until(() => cdp.eval("document.querySelector('#cx-controls').open && !!document.querySelector('.cx-reference-tabs')"), "phone references");
   await screenshot("mobile-tools");
-  assert.equal(await cdp.eval("document.querySelector('#cx-model').getClientRects().length > 0"), true);
-  assert.equal(await cdp.eval("document.activeElement.closest('#cx-mobile-menu') !== null"), true);
-  await click('#cx-mobile-menu [data-act="files"]');
-  assert.deepEqual(await cdp.eval("__toolCalls.at(-1)"), ["files", "/synthetic/coxdragon"]);
-  await click('.cx-add'); await click('#cx-mobile-menu [data-act="terminal"]');
-  assert.deepEqual(await cdp.eval("__toolCalls.at(-1)"), ["terminal", { cwd: "/synthetic/coxdragon" }]);
+  await until(()=>cdp.eval("!!document.querySelector('[data-type=plugin]')"),"plugin inventory");
+  await click('[data-type=plugin]');assert.equal(await cdp.eval("CODEX.state.references[0].path"),"project-plugin@local");
+  fixture.codex.skillEnabled=true;
+  await click('.cx-add');await until(()=>cdp.eval("!!document.querySelector('[data-type=skill]')"),"skill inventory");await click('[data-type=skill]');
+  await click('.cx-add');await click('[data-act=reference-tab][data-tab=file]');await click('[data-act=reference-dir]');await until(()=>cdp.eval("!!document.querySelector('[data-type=file]')"),"local file inventory");await click('[data-type=file]');
+  assert.equal(await cdp.eval("CODEX.state.references.length"),3);
   await click('.cx-add');
   assert.equal(await cdp.eval("__ccBack()"), true);
-  await until(() => cdp.eval("!document.querySelector('#cx-mobile-menu').open && document.activeElement.classList.contains('cx-add')"), "tools Back restores focus");
+  await until(() => cdp.eval("!document.querySelector('#cx-controls').open && document.activeElement.classList.contains('cx-add')"), "references Back restores focus");
+  await click('[data-act=composer-model]');
+  assert.equal(await cdp.eval("!!document.querySelector('#cx-compose-provider') && !!document.querySelector('#cx-compose-context') && !!document.querySelector('#cx-compose-effort')"),true);
+  await fill('#cx-compose-context','48000');await click('#cx-compose-model-form [type=submit]');
+  await until(()=>cdp.eval("!document.querySelector('#cx-controls').open && CODEX.state.status.contextWindow===48000"),"context override saved from composer");
+  await click('[data-act=composer-permission]');fixture.codex.permissionFailure=true;
+  await click('[data-act=permission-mode][data-mode=full]');await until(()=>cdp.eval("document.querySelector('#cx-controls-body').textContent.includes('Synthetic permission save failure')"),"permission save failure");
+  assert.equal(await cdp.eval("CODEX.state.status.permissions.mode"),"ask");fixture.codex.permissionFailure=false;
+  await click('[data-act=permission-mode][data-mode=full]');await until(()=>cdp.eval("!document.querySelector('#cx-controls').open && document.querySelector('#cx-compose-permission').dataset.mode==='full'"),"full access applies");
+  assert.equal(await cdp.eval("getComputedStyle(document.querySelector('#cx-compose-permission')).color===getComputedStyle(document.querySelector('.cx-send')).color"),false);
+  await screenshot('composer-full-access');
+  await click('[data-act=composer-permission]');await click('[data-act=permission-mode][data-mode=ask]');
+  await until(()=>cdp.eval("!document.querySelector('#cx-controls').open"),"restore ask mode");
   assert.equal(await cdp.eval("!!document.querySelector('#cx-input').value"), true);
   await fill("#cx-input", Array(14).fill("Multiline draft on a phone").join("\n"));
   await cdp.call("Emulation.setDeviceMetricsOverride", { width: 390, height: 430, deviceScaleFactor: 1, mobile: true });
@@ -208,6 +220,8 @@ try {
   await cdp.call("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await fill("#cx-input", "Check the project"); await click("#cx-send");
   await until(() => cdp.eval("CODEX.state.running.has('b') && !CODEX.state.busy"), "mobile turn starts");
+  assert.equal(fixture.codex.requests.filter(r=>r.path==="/api/codex/turn").at(-1).body.references.length,3);
+  assert.equal(await cdp.eval("CODEX.state.references.length"),0);
   const mobileTurn = await cdp.eval("CODEX.state.running.get('b').id");
   fixture.emit({type:"rpc",method:"item/started",params:{threadId:"b",turnId:mobileTurn,item:{id:"mobile-user",type:"userMessage",content:[{type:"text",text:"检查这个项目"}]}}});
   fixture.emit({type:"rpc",method:"item/started",params:{threadId:"b",turnId:mobileTurn,item:{id:"mobile-reasoning",type:"reasoning",summary:[]}}});
@@ -248,6 +262,12 @@ try {
   emitItem("item/completed", { id: "copy-mcp", type: "mcpToolCall", status: "completed", server: "fixture", tool: "read", arguments: { x: 1 }, result: { content: "full result" } });
   emitItem("item/completed", { id: "spacing-reason", type: "reasoning", summary: ["A compact summary."] });
   emitItem("item/completed", { id: "spacing-answer", type: "agentMessage", text: "A nearby answer." });
+  const responseMetric={threadId:"b",turnId:mobileTurn,provider:"fixture.test",model:"Codex Demo",effort:"high",firstOutputAt:1000,completedAt:3000,outputTokens:100,total:{inputTokens:800,outputTokens:100,cachedInputTokens:600}};
+  fixture.codex.metrics[mobileTurn]=responseMetric;
+  fixture.emit({type:"rpc",method:"thread/tokenUsage/updated",metric:responseMetric,params:{threadId:"b",turnId:mobileTurn,tokenUsage:{last:{totalTokens:900},total:responseMetric.total,modelContextWindow:64000}}});
+  await until(()=>cdp.eval("document.querySelector('[data-item=spacing-answer] .cx-response-meta')?.textContent.includes('75.0%')"),"output footer metrics");
+  assert.equal(await cdp.eval("document.querySelector('[data-item=spacing-answer] .cx-response-meta').textContent.includes('fixture.test · Codex Demo · high · 50.0 tok/s')"),true);
+  assert.equal(await cdp.eval("document.querySelectorAll('.cx-response-meta').length"),1,"one footer per turn");
   await until(() => cdp.eval("!!document.querySelector('[data-item=spacing-answer] .cx-body p')"), "answer rendered for spacing measurement");
   assert.equal(await cdp.eval("document.querySelector('[data-item=copy-patch]>details').open || document.querySelector('[data-item=copy-mcp]>details').open"), false);
   const gap = await cdp.eval("document.querySelector('[data-item=spacing-answer]').getBoundingClientRect().top-document.querySelector('[data-item=spacing-reason]').getBoundingClientRect().bottom");
@@ -310,7 +330,7 @@ try {
   await cdp.eval("CODEX.openNotification('b')");
   assert.equal(await cdp.eval("document.querySelector('#cx-input').value"), "preserve notification draft");
   ok("mobile settings and notification opens correct Codex task without losing current draft");
-  await click('.cx-add'); await click('#cx-mobile-menu [data-act="choose-project"]'); await until(() => cdp.eval("document.querySelector('#cx-project-dialog').open"), "project dialog");
+  await click('[data-act="mobile-tools"]'); await click('#cx-mobile-menu [data-act="choose-project"]'); await until(() => cdp.eval("document.querySelector('#cx-project-dialog').open"), "project dialog");
   await fill("#cx-project-input-name", "new project"); await fill("#cx-project-input-path", "/synthetic/new-project");
   await click("#cx-project-submit"); await until(() => cdp.eval("CODEX.state.thread?.cwd === '/synthetic/new-project' && !CODEX.state.switching"), "new project task");
   ok("add existing project directory and start task");
@@ -592,6 +612,7 @@ try {
   assert.deepEqual(errors, [], "no runtime exceptions"); assert.deepEqual(blocked, [], "no external network"); assert.deepEqual(fixture.state.unexpected, [], "all actual app API calls covered");
   console.log(JSON.stringify({ synthetic: true, viewports: ["1440x960", "820x1180", "390x844", "320x568"], languages: ["zh", "en"], errors: 0, externalRequests: 0, realModelCalls: 0 }));
 } catch (err) {
+  if(cdp)try{console.error(JSON.stringify(await cdp.eval("({controls:document.querySelector('#cx-controls-body')?.innerText,loading:CODEX.state.referenceLoading,error:CODEX.state.referenceError,sequence:CODEX.state.referenceSeq})")));}catch{}
   console.error(err.stack); if (cdp) { try { console.error(JSON.stringify(await cdp.eval("({thread:window.CODEX?.state.threadId,layout:[...document.querySelectorAll('.cx-side,.cx-pin,#pages,#drawer')].map(e=>{const r=e.getBoundingClientRect();return {id:e.id,cls:e.className,rect:[r.x,r.y,r.width,r.height],inert:e.inert,visibility:getComputedStyle(e).visibility,hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,220)}})})"))); } catch {} } process.exitCode = 1;
 } finally {
   if (cdp) { try { await cdp.call("Browser.close"); } catch {} cdp.ws.close(); }

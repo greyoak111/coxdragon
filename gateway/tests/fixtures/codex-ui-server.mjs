@@ -7,7 +7,7 @@ export async function startCodexUiServer() {
     installed: true, server: true, account: { email: "developer@example.test", planType: "Plus" }, install: { state: "done" },
     installFailures: 0, loginDelay: 0, cancelFailure: false, authorizeOnRefresh: false,
     model: "", effort: "", settingsFailure: false, skillEnabled: true, extensionFailure: false, connectionFailure: false,
-    apiDelay: 0, apiFailure: false, contexts: {}, compacting: [], compactFailure: false,
+    apiDelay: 0, apiFailure: false, contexts: {}, compacting: [], compactFailure: false, metrics: {}, permissionMode: "ask", contextWindow: 0, permissionFailure: false,
     schedules: [{ id: "legacy-task", name: "旧自动化", prompt: "整理项目", on: true, nextAt: Date.now() + 60000 }], scheduleRunning: ["legacy-task"], scheduleFailure: false,
     connection: { mode: "chatgpt", baseUrl: "", model: "", hasKey: false, noKey: false, configured: false, wireApi: "responses" },
     notify: { ok: true, done: true, ask: true, system: true, chDone: true, chAsk: true } };
@@ -26,7 +26,8 @@ export async function startCodexUiServer() {
   const snapshot = () => ({ installed: state.installed, server: state.server, version: "fixture", account: state.account,
     cwd: projects[0].path, activeThread: threads.find((th) => th.id === state.active) || null, approvals: state.pending,
     model: state.model, effort: state.effort, connection: { ...state.connection }, paths: { codexHome: "/synthetic/home/.codex" },
-    contexts: state.contexts, compacting: state.compacting,
+    contexts: state.contexts, compacting: state.compacting, metrics: state.metrics, contextWindow: state.contextWindow,
+    permissions: { mode: state.permissionMode, sandbox: state.permissionMode === "full" ? "danger-full-access" : "workspace-write" },
     runningTurns: state.running, models: state.connection.mode === "custom" ? [{ id: state.connection.model, displayName: state.connection.model, isDefault: true, supportedReasoningEfforts: [] }] :
       [{ id: "fixture-model", displayName: "Codex · Demo", isDefault: true, inputModalities: ["text", "image", "audio"], contextWindow: 128000, capabilitySources: { input: "codex", context: "models.dev" }, supportedReasoningEfforts: [{ reasoningEffort: "high" }] },
       { id: "fixture-fast", displayName: "Codex · Fast", supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], install: state.install });
@@ -106,7 +107,11 @@ export async function startCodexUiServer() {
     }
     if (p === "/api/codex/settings") {
       if (state.settingsFailure) return reply(res, { error: "Synthetic storage full" }, 500);
-      state.model = body.model; state.effort = body.effort; return reply(res, body);
+      state.model = body.model; state.effort = body.effort; if(body.contextWindow!==undefined)state.contextWindow=body.contextWindow;return reply(res, {...body,contextWindow:state.contextWindow});
+    }
+    if (p === "/api/codex/permissions") {
+      if(state.permissionFailure)return reply(res,{error:"Synthetic permission save failure"},503);
+      state.permissionMode=body.mode;return reply(res,snapshot());
     }
     if (p === "/api/codex/connection/models" || p === "/api/codex/connection/test") {
       if (state.apiDelay) await new Promise((r) => setTimeout(r, state.apiDelay));
@@ -131,6 +136,7 @@ export async function startCodexUiServer() {
       cwd: url.searchParams.get("cwd"), codexHome: "/synthetic/home/.codex", configPath: "/synthetic/home/.codex/config.toml", agentsPath: url.searchParams.get("cwd") + "/AGENTS.md",
       skills: [{ cwd: url.searchParams.get("cwd"), skills: [{ name: "project-review", path: "/synthetic/home/.agents/skills/review/SKILL.md", description: "Review project changes", enabled: state.skillEnabled }], errors: [] }],
       mcp: [{ name: "project-tools", authStatus: "notLoggedIn", tools: { review: {} } }],
+      plugins: [{id:"project-plugin@local",name:"project-plugin",displayName:"Project tools"}],
     }, state.extensionFailure ? 500 : 200);
     if (p === "/api/codex/skill") { state.skillEnabled = body.enabled; return reply(res, { ok: true }); }
     if (p === "/api/app/notify_status") return reply(res, state.notify);
