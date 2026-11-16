@@ -12,7 +12,7 @@ import { startCodexUiServer } from "../gateway/tests/fixtures/codex-ui-server.mj
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-async function until(fn, label) { const end = Date.now() + 12000; while (Date.now() < end) { const v = await fn(); if (v) return v; await sleep(50); } throw new Error("Timeout: " + label); }
+async function until(fn, label, timeout = 12000) { const end = Date.now() + timeout; while (Date.now() < end) { const v = await fn(); if (v) return v; await sleep(50); } throw new Error("Timeout: " + label); }
 class CDP {
   constructor(ws) {
     this.ws = ws; this.seq = 0; this.pending = new Map(); this.handlers = new Map();
@@ -37,9 +37,15 @@ const q = JSON.stringify;
 try {
   fixture = await startCodexUiServer();
   const bin = process.env.CHROMIUM_BIN || (process.platform === "win32" ? "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" : "chromium-headless");
-  browser = spawn(bin, ["--headless=new", "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-extensions", "--no-proxy-server", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", `--user-data-dir=${temporary}`, "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1", "about:blank"], { windowsHide: true, stdio: "ignore" });
+  // Disposable CI runners may disable unprivileged user namespaces. This opt-in
+  // applies only to synthetic loopback fixtures, never to the product WebView.
+  const ciFlags = process.env.CHROMIUM_NO_SANDBOX === "1" ? ["--no-sandbox", "--disable-dev-shm-usage"] : [];
+  browser = spawn(bin, ["--headless=new", ...ciFlags, "--disable-gpu", "--no-first-run", "--no-default-browser-check", "--disable-background-networking", "--disable-component-update", "--disable-sync", "--disable-extensions", "--no-proxy-server", "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1", `--user-data-dir=${temporary}`, "--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1", "about:blank"], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] });
+  let browserStderr = "";
+  browser.stderr.on("data", data => { browserStderr = (browserStderr + data).slice(-2000); });
   browser.on("error", (e) => { launchError = e; });
-  const port = await until(async () => { if (launchError) throw launchError; try { return Number((await fs.readFile(path.join(temporary, "DevToolsActivePort"), "utf8")).split("\n")[0]); } catch { return false; } }, "browser startup");
+  browser.on("exit", code => { if (!cdp) launchError = new Error("Browser exited " + code + ": " + browserStderr); });
+  const port = await until(async () => { if (launchError) throw launchError; try { return Number((await fs.readFile(path.join(temporary, "DevToolsActivePort"), "utf8")).split("\n")[0]); } catch { return false; } }, "browser startup", 30000);
   const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   const ws = new WebSocket(targets.find((t) => t.type === "page").webSocketDebuggerUrl); await once(ws, "open"); cdp = new CDP(ws);
   cdp.on("Runtime.exceptionThrown", ({ exceptionDetails: d }) => errors.push(d.exception?.description || d.text));
