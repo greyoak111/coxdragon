@@ -13,7 +13,10 @@ const { PROJECTS } = await import("../gw/projects.mjs");
 const { _schedForTest: S, routeSched } = await import("../gw/sched.mjs");
 const { QUEUE, START_GUARDS, END_HOOKS } = await import("../gw/queue.mjs");
 const { RUNS, maxParallel } = await import("../gw/runs.mjs");
-const srv = http.createServer(async (req, res) => { const u = new URL(req.url, "http://x"); if ((await routeSched(req, res, u, u.pathname)) === NEXT) res.writeHead(404).end(); });
+const srv = http.createServer(async (req, res) => {
+  try { const u = new URL(req.url, "http://x"); if ((await routeSched(req, res, u, u.pathname)) === NEXT) res.writeHead(404).end(); }
+  catch (error) { res.writeHead(500, { "content-type": "application/json" }).end(JSON.stringify({ error: error.message })); }
+});
 await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
 after(() => srv.close());
 const post = async (p, b) => { const r = await fetch(`http://127.0.0.1:${srv.address().port}${p}`, { method: "POST", body: JSON.stringify(b) }); return { status: r.status, body: await r.json() }; };
@@ -118,7 +121,7 @@ test("Codex 设置停止旧自动化：暂停并移除其队列，不影响其�
   S.DB.allowLogin = true;
   const t = mk({ freq: { kind: "daily", time: "09:30" }, retry: 1 });
   let first;
-  const unrelated = { id: "unrelated-schedule", sched: { taskId: "other", key: "other" }, held: true };
+  const unrelated = { id: "unrelated-schedule", message: "fixture", sched: { taskId: "other", key: "other" }, held: true };
   try {
     first = await S.fire(t, { reason: "manual" });
     assert.ok(QUEUE.includes(first));
@@ -142,6 +145,41 @@ test("用户中止的自动化不安排失败重试", async () => {
     for (const hook of END_HOOKS) hook({ sched: item.sched, sessionId: null, denied: [], aborted: true }, { failed: true });
     assert.equal(S.hasRetry(t.id), false);
   } finally { drop(t, item); S.DB.allowLogin = false; }
+});
+
+test("停止执行中的旧自动化：中止当前运行且不重试", async () => {
+  S.DB.allowLogin = true;
+  const t = mk({ retry: 1 });
+  let item, run;
+  try {
+    item = await S.fire(t, { reason: "manual" });
+    QUEUE.splice(QUEUE.indexOf(item), 1);
+    run = { id: "active-schedule-stop", sched: item.sched, sessionId: null, text: "", log: [], denied: [], startedAt: Date.now(), lane: "stop-test", preSpawn: true };
+    RUNS.set(run.id, run);
+    const response = await post(`/api/sched/${t.id}/stop`, {});
+    assert.equal(response.status, 200, JSON.stringify(response.body));
+    assert.equal(run.aborted, true);
+    assert.equal(run.ended, true);
+    assert.equal(RUNS.has(run.id), false);
+    assert.equal(t.on, false);
+    assert.equal(S.hasRetry(t.id), false);
+  } finally { if (run) RUNS.delete(run.id); drop(t, item); S.DB.allowLogin = false; }
+});
+
+test("停止后重新启用也不能复活已经取消的手动等待任务", async (context) => {
+  const timeout = globalThis.setTimeout;
+  context.mock.method(globalThis, "setTimeout", (fn, ms, ...args) => timeout(fn, ms === 30000 ? 25 : ms, ...args));
+  S.DB.allowLogin = true;
+  const t = mk({ busy: "queue", freq: { kind: "daily", time: "09:30" } });
+  const waiting = S.fire(t, { reason: "manual" });
+  try {
+    assert.equal(S.running().some(item => item.taskId === t.id), true);
+    assert.equal((await post(`/api/sched/${t.id}/stop`, {})).status, 200);
+    t.on = true;
+    assert.equal(await waiting, undefined);
+    assert.equal(QUEUE.some(item => item.sched?.taskId === t.id), false);
+    assert.equal(S.running().some(item => item.taskId === t.id), false);
+  } finally { await waiting; drop(t); S.DB.allowLogin = false; }
 });
 
 test("「跳过下一次」遇到错过的计划：消费标记，不让再下一次也被跳", () => {
