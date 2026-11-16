@@ -8,6 +8,7 @@ import { CFG, PREFIX } from "../gw/config.mjs";
 import { activityBusy, runFlag } from "../gw/activity.mjs";
 import { _codexForTest as cx, codexActivity, onCodexActivity } from "../gw/codex.mjs";
 import { connectionStatus, connectionLaunch } from "../gw/codex-connection.mjs";
+import { rememberApiModels } from "../gw/codex-models.mjs";
 
 // The legacy status module imports Android usage accounting. This test only reads
 // protocol state; its isolated Windows process needs a synthetic UID for that import.
@@ -17,12 +18,79 @@ function reset() {
   cx.stopServer(); runFlag(false);
   cx.S.rpc = { stderr: "", respond() {}, respondError() {} };
   cx.S.child = null; cx.S.starting = null; cx.S.activeThread = { id: "a" }; cx.S.activeTurn = null;
-  for (const key of ["runningTurns", "startingTurns", "endedTurns", "approvals", "sse", "loadedThreads", "operations"]) cx.S[key].clear();
+  for (const key of ["runningTurns", "startingTurns", "endedTurns", "approvals", "sse", "loadedThreads", "operations", "contexts", "compacting"]) cx.S[key].clear();
   // The protocol fixture represents an engine with these two threads loaded.
   cx.S.loadedThreads.add("a"); cx.S.loadedThreads.add("b");
   cx.S.models = []; cx.S.model = ""; cx.S.effort = "";
 }
 after(() => { cx.stopServer(); runFlag(false); });
+
+test("Codex：上下文按线程记录实际最近用量、上限与累计数，停止前落盘", () => {
+  reset();
+  const usage = { last: { totalTokens: 4500, inputTokens: 4000, outputTokens: 500 }, total: { totalTokens: 12000 }, modelContextWindow: 64000 };
+  cx.handleNotify({ method: "thread/tokenUsage/updated", params: { threadId: "b", tokenUsage: usage } });
+  cx.handleNotify({ method: "thread/tokenUsage/updated", params: { threadId: "a", tokenUsage: { ...usage, last: { totalTokens: 900 } } } });
+  cx.handleNotify({ method: "thread/tokenUsage/updated", params: { threadId: "a", tokenUsage: { last: { totalTokens: -1 } } } });
+  assert.equal(cx.status().contexts.b.last.totalTokens, 4500);
+  assert.equal(cx.status().activeThread.context.last.totalTokens, 900);
+  assert.equal(cx.status().contexts.b.modelContextWindow, 64000);
+  assert.equal(cx.status().contexts.b.total.totalTokens, 12000);
+  cx.stopServer();
+  const disk = JSON.parse(fs.readFileSync(path.join(CFG.home, "coxdragon-codex-context.json")));
+  assert.equal(disk.b.last.totalTokens, 4500); assert.equal(disk.a.last.totalTokens, 900);
+});
+
+test("Codex：压缩锁住目标线程，后台压缩不切换视图，生命周期完成后可发送", async () => {
+  reset(); let acknowledge; const calls = [];
+  cx.S.rpc.request = async (method, params) => {
+    calls.push({ method, params });
+    if (method === "thread/compact/start") return new Promise(resolve => { acknowledge = resolve; });
+    return { turn: { id: "a-next", status: "inProgress" } };
+  };
+  const pending = cx.compactThread("b"); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(calls[0], { method: "thread/compact/start", params: { threadId: "b" } });
+  assert.equal(cx.status().activeThread.id, "a"); assert.equal(codexActivity().busy, true);
+  await assert.rejects(cx.compactThread("b"), /等待/);
+  await assert.rejects(cx.startTurn("cannot race", "b"), /还在运行/);
+  cx.handleNotify({ method: "item/started", params: { threadId: "b", item: { id: "compact", type: "contextCompaction" } } });
+  cx.handleNotify({ method: "item/completed", params: { threadId: "b", item: { id: "compact", type: "contextCompaction" } } });
+  acknowledge({}); await pending;
+  assert.equal(cx.S.compacting.size, 0, "完成先于回执时不能复活压缩状态");
+  await cx.startTurn("continue", "b");
+});
+
+test("Codex：压缩失败或引擎停止释放锁，旧失败不能清掉新引擎压缩", async () => {
+  reset();
+  cx.S.rpc.request = async () => { throw new Error("Synthetic compact failure"); };
+  await assert.rejects(cx.compactThread("a"), /Synthetic compact failure/);
+  assert.equal(cx.S.compacting.size, 0);
+  let rejectOld; cx.S.rpc.request = () => new Promise((_, reject) => { rejectOld = reject; });
+  const pending = cx.compactThread("b"); await new Promise(resolve => setImmediate(resolve));
+  cx.stopServer(); cx.S.compacting.add("b"); rejectOld(new Error("Old engine gone"));
+  await assert.rejects(pending, /Old engine gone/);
+  assert.equal(cx.S.compacting.has("b"), true);
+});
+
+test("Codex：第三方模型强度保存和刷新一致，换模型重建空闲引擎并更新上下文覆盖", async () => {
+  reset(); const baseUrl = "https://model-fixture.test/v1";
+  rememberApiModels(baseUrl, [{ id: "first", contextWindow: 64000, supportedReasoningEfforts: ["low", "high"] }, { id: "second", contextWindow: 128000, supportedReasoningEfforts: ["max"] }]);
+  try {
+    cx.setConnection({ mode: "custom", baseUrl, model: "first", noKey: true });
+    cx.S.rpc = { stderr: "", request: async () => ({ turn: { id: "selected-effort", status: "inProgress" } }) };
+    cx.updateSettings({ model: "", effort: "high" });
+    await cx.refreshModels(); assert.equal(cx.S.effort, "high"); assert.equal(cx.S.model, "first");
+    assert(connectionLaunch().args.includes("model_context_window=64000"));
+    cx.S.runningTurns.set("a", { id: "busy", status: "inProgress" });
+    assert.throws(() => cx.updateSettings({ model: "second", effort: "max" }), /任务结束/);
+    assert.equal(connectionStatus().model, "first"); cx.S.runningTurns.clear();
+    cx.updateSettings({ model: "second", effort: "max" });
+    assert.equal(cx.S.rpc, null); assert.equal(cx.S.model, "second");
+    assert(connectionLaunch().args.includes("model_context_window=128000"));
+    assert.equal(cx.S.models.find(m => m.isDefault).id, "second");
+    let params; cx.S.rpc = { stderr: "", request: async (method, body) => { params = body; return { turn: { id: "next", status: "inProgress" } }; } };
+    cx.S.loadedThreads.add("a"); await cx.startTurn("next", "a"); assert.equal(params.effort, "max"); assert.equal(params.model, "second");
+  } finally { cx.stopServer(); cx.setConnection({ mode: "chatgpt" }); }
+});
 
 test("Codex：失败记录落盘保留协议和错误、重试、结束状态，不包含消息或密钥", () => {
   reset();

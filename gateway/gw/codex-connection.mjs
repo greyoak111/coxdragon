@@ -2,6 +2,7 @@ import path from "node:path";
 import { CFG, log } from "./config.mjs";
 import { loadState, writeAtomic } from "./statefile.mjs";
 import { safeApiMessage } from "./codex-api-http.mjs";
+import { customModels } from "./codex-models.mjs";
 
 const FILE = path.join(CFG.home, "coxdragon-codex-connection.json");
 export const CUSTOM_PROVIDER = "coxdragon_custom";
@@ -14,6 +15,7 @@ let connection = {
   apiKey: typeof stored.apiKey === "string" ? stored.apiKey : "",
   noKey: stored.noKey === true,
   wireApi: stored.wireApi === "chat" ? "chat" : "responses",
+  effort: typeof stored.effort === "string" ? stored.effort : "",
 };
 
 // Older automatic probes selected Responses for CodeFlow + DeepSeek even though
@@ -59,14 +61,16 @@ export function connectionDraft(body, { requireModel = true, allowAuto = false }
     if (baseUrl !== connection.baseUrl || !connection.apiKey) throw invalid("请输入 API Key，或选择接口无需密钥");
     apiKey = connection.apiKey;
   }
-  return { mode: "custom", baseUrl, model, apiKey, noKey, wireApi };
+  const effort = typeof body.effort === "string" ? body.effort : baseUrl === connection.baseUrl && model === connection.model ? connection.effort : "";
+  if (effort && !customModels(baseUrl, model).find(m => m.id === model)?.supportedReasoningEfforts.some(e => e.reasoningEffort === effort)) throw invalid("这个模型不支持所选思考强度");
+  return { mode: "custom", baseUrl, model, apiKey, noKey, wireApi, effort };
 }
 
 export function connectionStatus() {
   let configured = false;
   try { configured = connection.mode === "custom" && normalizeApiUrl(connection.baseUrl) === connection.baseUrl && !!connection.model && (connection.noKey || !!connection.apiKey); } catch {}
   return { mode: connection.mode, baseUrl: connection.baseUrl, model: connection.model,
-    hasKey: !!connection.apiKey, noKey: connection.noKey, configured, wireApi: connection.wireApi };
+    hasKey: !!connection.apiKey, noKey: connection.noKey, configured, wireApi: connection.wireApi, effort: connection.effort };
 }
 
 export function connectionErrorMessage(error) {
@@ -79,6 +83,10 @@ export function updateConnection(body) {
   if (!writeAtomic(FILE, JSON.stringify(next), { mode: 0o600 })) throw new Error("连接设置没有保存，请检查存储空间后重试");
   connection = next;
   return connectionStatus();
+}
+
+export function updateCustomSelection(model, effort) {
+  return updateConnection({ ...connection, model, effort });
 }
 
 // CLI 覆盖本客户端的连接，不改写用户的 config.toml。Key 只经子进程环境传入，
@@ -100,6 +108,9 @@ export function connectionLaunch(adapter) {
     [`model_providers.${CUSTOM_PROVIDER}.stream_max_retries`]: 0,
     [`model_providers.${CUSTOM_PROVIDER}.stream_idle_timeout_ms`]: 90000,
   };
+  const model = customModels(connection.baseUrl, connection.model).find(m => m.id === connection.model);
+  if (model?.contextWindow) overrides.model_context_window = model.contextWindow;
+  if (connection.effort) overrides.model_reasoning_effort = connection.effort;
   // Hosted web search is a Responses-only tool. Do not advertise it to a Chat API.
   if (connection.wireApi === "chat") overrides.web_search = "disabled";
   if (adapter || !connection.noKey) overrides[`model_providers.${CUSTOM_PROVIDER}.env_key`] = KEY_ENV;

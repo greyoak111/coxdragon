@@ -18,6 +18,8 @@ product: the user downloads them from their official channels and runs them
 unmodified, subject to their respective terms.
 
 Bundled third-party components:
+  - models.dev model metadata (MIT), reduced offline snapshot —
+    gateway/data/models-dev-LICENSE.txt; source: https://models.dev/api.json
   - Shizuku-API 13.1.5 (MIT) — third_party/shizuku/LICENSE
   - xz-decompress 0.2.3 (MIT) — devkit/vendor/xz-decompress (build-time only)
   - node-forge 1.4.0 (BSD-3-Clause OR GPL-2.0, used under BSD-3-Clause) —

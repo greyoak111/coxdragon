@@ -27,8 +27,9 @@ import { NEXT, readBody, sendJson } from "./http.mjs";
 import { SETTINGS } from "./settings-store.mjs";
 import { runFlag } from "./activity.mjs";
 import { loadState, writeAtomic as saveState } from "./statefile.mjs";
-import { connectionStatus, prepareConnectionLaunch, updateConnection, connectionErrorMessage, CUSTOM_PROVIDER } from "./codex-connection.mjs";
+import { connectionStatus, prepareConnectionLaunch, updateConnection, updateCustomSelection, connectionErrorMessage, CUSTOM_PROVIDER } from "./codex-connection.mjs";
 import { discoverApiModels, testApiConnection } from "./codex-api.mjs";
+import { customModels, modelDetails } from "./codex-models.mjs";
 
 // ── 钉住的 Codex 版本 ─────────────────────────────────────────────────
 // 升级只改这里，并把新的 tar / 二进制 sha256 一起换掉。和 cccodroid 的 devkit 无关。
@@ -51,6 +52,8 @@ const CACHE = path.join(CFG.home, ".cache", "coxdragon");
 const LOG_LIMIT = 24 * 1024;
 const PREF_FILE = path.join(CFG.home, "coxdragon-codex.json");
 const prefs = loadState(PREF_FILE, { max: 4096, shape: (j) => j && typeof j === "object" && !Array.isArray(j) ? j : undefined }).data;
+const CONTEXT_FILE = path.join(CFG.home, "coxdragon-codex-context.json");
+const savedContexts = loadState(CONTEXT_FILE, { max: 1 << 20, shape: j => j && typeof j === "object" && !Array.isArray(j) ? j : undefined }).data;
 
 // ── 小工具 ───────────────────────────────────────────────────────────
 const isDir = (p) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } };
@@ -380,6 +383,7 @@ const S = {
   account: null, models: [],
   activeThread: null, activeTurn: null, runningTurns: new Map(), startingTurns: new Set(), endedTurns: new Set(),
   loadedThreads: new Set(), operations: new Set(),
+  contexts: new Map(Object.entries(savedContexts).filter(([id, value]) => id.length <= 200 && Number.isSafeInteger(value?.last?.totalTokens) && value.last.totalTokens >= 0).slice(-200)), compacting: new Set(),
   cwd: CFG.workspace,
   approvals: new Map(), sse: new Set(),
   lastError: "", stderr: "", startedAt: 0,
@@ -408,7 +412,7 @@ const activityListeners = new Set();
 export const onCodexActivity = (fn) => { activityListeners.add(fn); return () => activityListeners.delete(fn); };
 export function codexActivity() {
   return {
-    busy: !!(S.starting || S.operations.size || S.runningTurns.size || S.startingTurns.size || S.approvals.size),
+    busy: !!(S.starting || S.operations.size || S.compacting.size || S.runningTurns.size || S.startingTurns.size || S.approvals.size),
     running: S.runningTurns.size, starting: S.startingTurns.size + S.operations.size + (S.starting ? 1 : 0),
     approvals: [...S.approvals.values()].map((p) => ({
       id: "codex:" + p.id, engine: "codex", sessionId: p.params?.threadId || "",
@@ -446,6 +450,8 @@ function slimModel(m) {
     defaultReasoningEffort: m.defaultReasoningEffort,
     supportedReasoningEfforts: (m.supportedReasoningEfforts || []).map((x) => ({ reasoningEffort: x.reasoningEffort, description: x.description })),
     inputModalities: m.inputModalities || [],
+    outputModalities: m.outputModalities || [], contextWindow: m.contextWindow || null,
+    reasoning: m.reasoning ?? null, capabilitySources: m.capabilitySources || {},
     serviceTiers: m.serviceTiers || [],
     defaultServiceTier: m.defaultServiceTier ?? null,
     multiAgentVersion: m.multiAgentVersion ?? null,
@@ -457,6 +463,7 @@ function slimThread(t) {
     id: t.id, name: t.name || "", preview: t.preview || "", cwd: t.cwd, model: t.model,
     modelProvider: t.modelProvider, createdAt: t.createdAt, updatedAt: t.updatedAt,
     status: t.status, turns: Array.isArray(t.turns) ? t.turns : undefined,
+    context: S.contexts.get(t.id) || null,
   };
 }
 
@@ -477,6 +484,7 @@ function status() {
     activeThread: slimThread(S.activeThread),
     activeTurn: S.activeTurn ? { id: S.activeTurn.id, status: S.activeTurn.status } : null,
     runningTurns: [...S.runningTurns].map(([threadId, turn]) => ({ threadId, turn: { id: turn.id, status: turn.status } })),
+    contexts: Object.fromEntries(S.contexts), compacting: [...S.compacting],
     approvals: [...S.approvals.values()].map((p) => ({ ...p, id: String(p.id) })),
     cwd: S.cwd,
     model: S.model || "",
@@ -502,19 +510,43 @@ async function refreshModels() {
   if (!rpc) return [];
   const connection = connectionStatus();
   if (connection.mode === "custom") {
-    S.model = connection.model; S.effort = "";
-    S.models = [{ id: connection.model, model: connection.model, displayName: connection.model, isDefault: true, supportedReasoningEfforts: [] }];
+    S.model = connection.model; S.effort = connection.effort || "";
+    S.models = customModels(connection.baseUrl, connection.model);
     return S.models;
   }
-  try { const r = await rpc.request("model/list", {}); assertRpc(rpc, generation); S.models = Array.isArray(r && r.data) ? r.data : []; }
+  try { const r = await rpc.request("model/list", {}); assertRpc(rpc, generation); S.models = Array.isArray(r && r.data) ? r.data.map(m => ({ ...m, ...modelDetails(m, { engine: true }) })) : []; }
   catch (e) { log("[codex] model/list 失败：" + errMsg(e)); }
   return S.models;
+}
+
+let contextSaveTimer;
+function saveContexts() {
+  clearTimeout(contextSaveTimer); contextSaveTimer = null;
+  saveState(CONTEXT_FILE, JSON.stringify(Object.fromEntries(S.contexts)), { mode: 0o600 });
+}
+function rememberUsage(threadId, usage) {
+  if (typeof threadId !== "string" || !usage || !usage.last) return;
+  const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
+  const breakdown = value => Object.fromEntries(["totalTokens", "inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens"].map(key => [key, count(value?.[key])]));
+  if (count(usage.last.totalTokens) == null) return;
+  S.contexts.delete(threadId);
+  S.contexts.set(threadId, { last: breakdown(usage.last), total: breakdown(usage.total),
+    modelContextWindow: count(usage.modelContextWindow) || null, model: S.model, updatedAt: Date.now() });
+  if (S.contexts.size > 200) S.contexts.delete(S.contexts.keys().next().value);
+  if (!contextSaveTimer) contextSaveTimer = setTimeout(saveContexts, 1000).unref();
 }
 
 function handleNotify(m) {
   let done;
   S.stderr = S.rpc ? S.rpc.stderr : S.stderr;
   switch (m.method) {
+    case "thread/tokenUsage/updated": rememberUsage(m.params?.threadId, m.params?.tokenUsage); break;
+    case "item/started":
+      if (m.params?.item?.type === "contextCompaction") S.compacting.add(m.params.threadId);
+      break;
+    case "item/completed":
+      if (m.params?.item?.type === "contextCompaction") S.compacting.delete(m.params.threadId);
+      break;
     case "turn/started": {
       const p = m.params || {};
       S.lastError = "";
@@ -524,6 +556,8 @@ function handleNotify(m) {
     }
     case "turn/completed": {
       const p = m.params || {}, running = S.runningTurns.get(p.threadId);
+      S.compacting.delete(p.threadId);
+      if (contextSaveTimer) saveContexts();
       if (p.turn?.error) S.lastError = connectionErrorMessage(p.turn.error);
       if (p.turn?.id) { S.endedTurns.add(p.turn.id); if (S.endedTurns.size > 200) S.endedTurns.delete(S.endedTurns.values().next().value); }
       if (!running || !p.turn || p.turn.id === running.id) S.runningTurns.delete(p.threadId);
@@ -636,7 +670,7 @@ async function startRpc(generation) {
       S.closeAdapter?.(); S.closeAdapter = null;
       S.child = null; S.rpc = null; S.activeTurn = null;
       S.generation++;
-      S.starting = null; S.loadedThreads.clear(); S.operations.clear();
+      S.starting = null; S.loadedThreads.clear(); S.operations.clear(); S.compacting.clear();
       S.runningTurns.clear(); S.startingTurns.clear(); S.approvals.clear();
       activityChanged();
       broadcast({ type: "server", state: "exited", code, signal, stderr: rpc.stderr.slice(-4000) });
@@ -674,9 +708,10 @@ function ensureRpc() {
 
 function stopServer() {
   const c = S.child;
+  if (contextSaveTimer) saveContexts();
   S.closeAdapter?.(); S.closeAdapter = null;
   S.generation++;
-  S.starting = null; S.loadedThreads.clear(); S.operations.clear();
+  S.starting = null; S.loadedThreads.clear(); S.operations.clear(); S.compacting.clear();
   S.child = null; S.rpc = null; S.activeTurn = null;
   S.runningTurns.clear(); S.startingTurns.clear(); S.approvals.clear();
   activityChanged();
@@ -684,7 +719,7 @@ function stopServer() {
   broadcast({ type: "server", state: "stopped" });
 }
 
-process.on("exit", () => { S.closeAdapter?.(); if (S.child) { try { S.child.kill("SIGKILL"); } catch {} } if (proxy) { try { proxy.srv.close(); } catch {} } });
+process.on("exit", () => { if (contextSaveTimer) saveContexts(); S.closeAdapter?.(); if (S.child) { try { S.child.kill("SIGKILL"); } catch {} } if (proxy) { try { proxy.srv.close(); } catch {} } });
 
 // ── 高级动作 ─────────────────────────────────────────────────────────
 async function startThread(cwd) {
@@ -735,7 +770,7 @@ async function startTurn(text, threadId) {
   if (s.length > 200000) throw new Error("消息太长");
   const initial = String(threadId || S.activeThread?.id || "");
   const pendingKey = initial || "@new", generation = S.generation;
-  if (S.runningTurns.has(pendingKey) || S.startingTurns.has(pendingKey)) throw new Error("这个任务还在运行，请先停止或等待完成");
+  if (S.runningTurns.has(pendingKey) || S.startingTurns.has(pendingKey) || S.compacting.has(pendingKey)) throw new Error("这个任务还在运行，请先停止或等待完成");
   S.startingTurns.add(pendingKey);
   activityChanged();
   try {
@@ -765,6 +800,23 @@ async function steerTurn(text) {
   if (!S.activeThread || !S.activeTurn) throw new Error("当前没有在跑的轮次");
   const rpc = await ensureRpc();
   return rpc.request("turn/steer", { threadId: S.activeThread.id, expectedTurnId: S.activeTurn.id, input: [{ type: "text", text: String(text || "") }] }, 60000);
+}
+async function compactThread(threadId) {
+  const target = typeof threadId === "string" ? threadId.trim() : "";
+  if (!target) throw Object.assign(new Error("请选择要压缩的任务"), { statusCode: 400 });
+  if (S.runningTurns.has(target) || S.startingTurns.has(target) || S.compacting.has(target) || [...S.approvals.values()].some(a => a.params?.threadId === target)) throw Object.assign(new Error("请等待当前任务结束后再压缩"), { statusCode: 409 });
+  const generation = S.generation;
+  S.compacting.add(target); activityChanged();
+  try {
+    return await rpcOperation(async (rpc, check) => {
+      if (!S.loadedThreads.has(target)) await resumeThread(target, { select: false });
+      check();
+      if (S.runningTurns.has(target) || [...S.approvals.values()].some(a => a.params?.threadId === target)) throw Object.assign(new Error("请等待当前任务结束后再压缩"), { statusCode: 409 });
+      const result = await rpc.request("thread/compact/start", { threadId: target }, 60000);
+      check();
+      return result;
+    });
+  } catch (error) { if (S.generation === generation) S.compacting.delete(target); activityChanged(); throw error; }
 }
 async function interruptTurn(threadId) {
   const target = String(threadId || S.activeThread?.id || "");
@@ -818,16 +870,29 @@ function approve(id, decision, answers) {
 }
 
 function updateSettings(body) {
-  const model = typeof body.model === "string" ? body.model : S.model;
+  let model = typeof body.model === "string" ? body.model : S.model;
   const effort = typeof body.effort === "string" ? body.effort : S.effort;
   if (model.length > 200 || effort.length > 40) throw new Error("设置值太长");
   const selected = S.models.find((m) => m.id === model || m.model === model) || (!model ? S.models.find((m) => m.isDefault) || S.models[0] : null);
   if (model && S.models.length && !selected) throw new Error("当前账号不支持这个模型，请刷新模型列表");
   if (effort && selected && !(selected.supportedReasoningEfforts || []).some((x) => x.reasoningEffort === effort)) throw new Error("这个模型不支持所选思考强度");
-  const next = connectionStatus().mode === "custom" ? { model: prefs.model || "", effort: prefs.effort || "" } : { model, effort };
-  if (!saveState(PREF_FILE, JSON.stringify(next), { mode: 0o600 })) throw new Error("设置没有保存，请检查存储空间后重试");
-  Object.assign(prefs, next);
+  if (connectionStatus().mode === "custom") {
+    model = model || selected?.id || connectionStatus().model;
+    const changed = model !== connectionStatus().model;
+    // The context limit is a process override. Recreate the idle engine so a
+    // different model never inherits the previous model's context window.
+    if (changed && codexActivity().busy) throw Object.assign(new Error("请等待任务结束后再切换模型"), { statusCode: 409 });
+    updateCustomSelection(model, effort);
+    if (changed) stopServer();
+    S.models = customModels(connectionStatus().baseUrl, model);
+  }
+  else {
+    const next = { model, effort };
+    if (!saveState(PREF_FILE, JSON.stringify(next), { mode: 0o600 })) throw new Error("设置没有保存，请检查存储空间后重试");
+    Object.assign(prefs, next);
+  }
   S.model = model; S.effort = effort;
+  broadcast({ type: "status", status: status() });
   broadcast({ type: "settings", model, effort });
   return { model, effort };
 }
@@ -837,7 +902,8 @@ function setConnection(body) {
   const connection = updateConnection(body);
   stopServer(); S.account = null; S.models = []; S.activeThread = null;
   S.model = connection.mode === "custom" ? connection.model : prefs.model || "";
-  S.effort = connection.mode === "custom" ? "" : prefs.effort || "";
+  S.effort = connection.mode === "custom" ? connection.effort || "" : prefs.effort || "";
+  if (connection.mode === "custom") S.models = customModels(connection.baseUrl, connection.model);
   broadcast({ type: "status", status: status() });
   return status();
 }
@@ -902,6 +968,7 @@ export async function routeCodex(req, res, u, p) {
       if (p === "/api/codex/turn") { const r = await startTurn(body.text, body.threadId); return json(res, 200, { turn: r && r.turn ? { id: r.turn.id, status: r.turn.status } : null }); }
       if (p === "/api/codex/steer") { const r = await steerTurn(body.text); return json(res, 200, r || {}); }
       if (p === "/api/codex/interrupt") { const r = await interruptTurn(body.threadId); return json(res, 200, r || {}); }
+      if (p === "/api/codex/compact") { await compactThread(body.threadId); return json(res, 200, { ok: true }); }
       if (p === "/api/codex/login") { const r = await login(); return json(res, 200, r || {}); }
       if (p === "/api/codex/login-cancel") { const r = await loginCancel(body.loginId); return json(res, 200, r || {}); }
       if (p === "/api/codex/logout") { const r = await logout(); return json(res, 200, r || {}); }
@@ -932,4 +999,4 @@ export async function routeCodex(req, res, u, p) {
 }
 
 // 只供隔离测试注入协议替身，正式网关不暴露内部状态。
-export const _codexForTest = LIVE ? null : { S, status, handleNotify, handleRequest, startThread, startTurn, resumeThread, interruptTurn, stopServer, approve, refreshModels, updateSettings, setConnection, extensions, setSkill, downloadTo };
+export const _codexForTest = LIVE ? null : { S, status, handleNotify, handleRequest, startThread, startTurn, resumeThread, interruptTurn, compactThread, stopServer, approve, refreshModels, updateSettings, setConnection, extensions, setSkill, downloadTo };

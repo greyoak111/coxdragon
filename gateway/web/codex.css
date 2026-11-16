@@ -89,7 +89,7 @@ html.cx-shell[data-theme][data-skin]{--bar-bg:var(--bg);--bar-bg2:var(--bg2);--a
   .cx-empty{display:none}
   .cx-msg{margin-bottom:30px;gap:0}.cx-user .cx-body{max-width:88%;font-size:16px;line-height:1.65;padding:11px 17px;border-radius:24px}
   .cx-agent .cx-role{display:none}.cx-agent .cx-body{font-size:15px;line-height:1.9}.cx-agent .cx-body pre{font-size:12px}
-  .cx-think{font-size:13px;margin-bottom:22px}.cx-think summary{min-height:34px;line-height:34px}.cx-think-body{max-height:260px;font-size:13px}
+  .cx-think{font-size:13px;margin-bottom:6px}.cx-think summary{min-height:28px;line-height:28px}.cx-think-body{max-height:260px;font-size:13px}
   .cx-tool{border-radius:14px;margin-block:4px 22px}.cx-tool-head{padding:12px}.cx-out{font-size:12px}
   .cx-activity{display:flex;align-items:center;gap:10px;margin:5px 0 24px;color:var(--fg3);font-size:14px;min-height:32px}.cx-activity[hidden]{display:none}
   .cx-activity>i{width:17px;height:17px;border-radius:50%;background:var(--fg3);opacity:.25;flex:none;animation:cx-pulse 1.8s infinite}
@@ -127,3 +127,31 @@ html.cx-shell[data-theme][data-skin]{--bar-bg:var(--bg);--bar-bg2:var(--bg2);--a
   .cx-menu-list>button{display:flex;align-items:center;gap:14px;width:100%;min-height:54px;border:0;border-radius:13px;background:none;padding:12px 10px;text-align:start;font-size:15px}.cx-menu-list>button>span{flex:1;min-width:0}.cx-menu-list svg{width:22px;height:22px}.cx-menu-list b{font-weight:400;color:var(--fg3);font-size:13px}
 }
 @media(max-width:360px){.cx-dock{padding-inline:14px}.cx-head{padding-inline:12px}.cx-log{padding-inline:16px}.cx-side{padding-inline:12px}.cx-brand b{font-size:21px}.cx-dialog.cx-mobile-sheet{padding-inline:16px}.cx-menu-grid{gap:6px}.cx-mobile-model{font-size:11px!important}}
+
+/* Reasoning stays attached to the answer; tool contents open on demand. */
+.cx-think{margin-bottom:6px}.cx-think-body{margin-block:5px 6px}
+.cx-tool-details>.cx-tool-head{cursor:pointer;list-style:none;user-select:none}
+.cx-tool-details>.cx-tool-head::-webkit-details-marker{display:none}
+.cx-tool-details>.cx-tool-head::before{content:"›";color:var(--fg3);font-size:17px;line-height:1;transition:transform .15s}
+.cx-tool-details[open]>.cx-tool-head::before{transform:rotate(90deg)}
+.cx-tool-details>.cx-tool-head:focus-visible{outline:2px solid var(--fg3);outline-offset:-3px;border-radius:8px}
+.cx-tool-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:6px;padding:6px 10px;border-top:1px solid var(--line)}
+.cx-tool-copy{font-size:11px!important;padding:6px 9px!important;border:1px solid var(--line);border-radius:7px;background:transparent;color:var(--fg2)}
+.cx-command{margin:0;padding:10px 12px;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.7 var(--mono);color:var(--fg);user-select:text;border-top:1px solid var(--line)}
+.cx-out{user-select:text}.cx-tool .cx-change{min-width:0;overflow-wrap:anywhere}
+.cx-compaction{display:flex;align-items:center;gap:12px;max-width:var(--cx-content);margin:20px auto;color:var(--fg3);font-size:11px}
+.cx-compaction::before,.cx-compaction::after{content:"";height:1px;background:var(--line);flex:1;min-width:12px}
+.cx-compaction span{max-width:80%;text-align:center}.cx-compaction[data-done=false] span{animation:cx-pulse 1.5s infinite}
+.cx-dock{position:relative}.cx-context{width:fit-content;margin:6px 3px 0;font-size:10px;color:var(--fg3)}
+.cx-context>summary{display:flex;align-items:center;gap:6px;min-height:28px;cursor:pointer;list-style:none;border-radius:6px;user-select:none}
+.cx-context>summary::-webkit-details-marker{display:none}.cx-context>summary:focus-visible{outline:2px solid var(--fg3);outline-offset:2px}
+#cx-context-ring{--usage:0%;display:block;flex:none;width:13px;height:13px;border-radius:50%;background:conic-gradient(var(--fg3) var(--usage),var(--line) 0);position:relative}
+#cx-context-ring::after{content:"";position:absolute;inset:3px;border-radius:50%;background:var(--bg)}
+.cx-context[data-level=warn] #cx-context-ring{background:conic-gradient(var(--warn) var(--usage),var(--line) 0)}
+.cx-context[data-level=high] #cx-context-ring{background:conic-gradient(var(--err) var(--usage),var(--line) 0)}
+.cx-context-pop{position:absolute;inset-block-end:calc(100% - 4px);inset-inline-end:max(12px,calc((100% - var(--cx-content))/2));width:min(330px,calc(100% - 28px));max-height:min(440px,60dvh);overflow:auto;z-index:5;padding:15px;border:1px solid var(--line);border-radius:15px;background:var(--bg2);box-shadow:0 8px 30px var(--shadow);font-size:12px;line-height:1.6;color:var(--fg2);overflow-wrap:anywhere}
+.cx-context:not([open])>.cx-context-pop{display:none}.cx-context-pop>b{font-weight:500;color:var(--fg)}.cx-context-pop p{margin:7px 0}.cx-context-note{color:var(--fg3);font-size:11px}
+.cx-context-pop>button{margin-top:5px;padding:8px 12px;border:1px solid var(--line);border-radius:9px;background:var(--bg);color:var(--fg);font-size:12px}.cx-context-pop .cx-form-error:empty{display:none}
+#cx-model-capabilities,#cx-api-capabilities{font-size:12px;line-height:1.7;color:var(--fg3);overflow-wrap:anywhere}
+@media(max-width:760px){.cx-context{margin:3px 7px -5px;font-size:10px}.cx-context>summary{min-height:30px}.cx-tool{margin-bottom:12px}.cx-command{font-size:12px}.cx-tool-copy{min-height:36px}.cx-context-pop{inset-inline-end:14px}}
+@media(prefers-reduced-motion:reduce){.cx-compaction[data-done=false] span{animation:none}.cx-tool-details>.cx-tool-head::before{transition:none}}

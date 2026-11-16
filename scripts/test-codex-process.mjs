@@ -13,6 +13,7 @@ assert.match(spawnSync(binary, ["--version"], { encoding: "utf8", windowsHide: t
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "coxdragon-process-test-"));
 Object.assign(process.env, { CCAPP_TEST: "1", CCAPP_HOME: temporary, CCAPP_WORKSPACE: temporary, CCAPP_LOG: path.join(temporary, "gateway.log") });
 const { updateConnection, prepareConnectionLaunch } = await import("../gateway/gw/codex-connection.mjs");
+const { rememberApiModels } = await import("../gateway/gw/codex-models.mjs");
 const marker = path.join(temporary, "executed.txt");
 const quote = text => "'" + text.replaceAll("'", "'\\''") + "'";
 const command = process.platform === "win32" ? `Add-Content -LiteralPath '${marker.replaceAll("'", "''")}' -Value 'executed'` : `printf '%s\\n' executed >> ${quote(marker)}`;
@@ -40,6 +41,7 @@ const server = http.createServer(async (req, res) => {
       if (!(mode === "responses-interrupted" && requests.length > 1)) send({ type: "response.completed", response: { id, object: "response", status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
     } else {
       assert(body.tools.some(tool => tool.function.name === "exec_command"));
+      assert.equal(body.reasoning_effort, "high", "Chat 适配器保留所选思考强度");
       send({ choices: [{ delta: { reasoning_content: "Synthetic reasoning summary." }, finish_reason: null }] });
       if (mode === "chat-valid" && requests.length > 1) {
         assert(body.messages.some(message => message.role === "tool" && message.tool_call_id === "call_fixture"));
@@ -92,8 +94,8 @@ class Driver {
     });
   }
   async init() { await this.request("initialize", { clientInfo: { name: "coxdragon_process_test", version: "1" }, capabilities: { experimentalApi: true } }); }
-  async turn(threadId) {
-    const { turn } = await this.request("turn/start", { threadId, input: [{ type: "text", text: "synthetic fixture" }] });
+  async turn(threadId, extra = {}) {
+    const { turn } = await this.request("turn/start", { threadId, input: [{ type: "text", text: "synthetic fixture" }], ...extra });
     const end = Date.now() + 40000;
     while (Date.now() < end) {
       const result = this.events.find(event => event.method === "turn/completed" && event.params.turn.id === turn.id);
@@ -112,8 +114,9 @@ class Driver {
 try {
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+  rememberApiModels(baseUrl, [{ id: "process-fixture", contextWindow: 64000, supportedReasoningEfforts: ["high"] }]);
   async function start(wireApi) {
-    updateConnection({ mode: "custom", baseUrl, model: "process-fixture", noKey: true, wireApi });
+    updateConnection({ mode: "custom", baseUrl, model: "process-fixture", noKey: true, wireApi, effort: "high" });
     const launch = await prepareConnectionLaunch(); adapterClose = launch.close;
     const driver = new Driver(launch); await driver.init();
     const { thread } = await driver.request("thread/start", { cwd: temporary, model: "process-fixture", modelProvider: launch.modelProvider, approvalPolicy: "never", sandbox: "danger-full-access" });
@@ -121,6 +124,16 @@ try {
   }
   const first = await start("responses");
   assert.equal((await first.driver.turn(first.thread.id)).status, "completed");
+  const usage = first.driver.events.find(event => event.method === "thread/tokenUsage/updated");
+  assert(usage?.params.tokenUsage.last.totalTokens > 0, "实际引擎报告最近请求 token 数");
+  assert(usage.params.tokenUsage.modelContextWindow > 0 && usage.params.tokenUsage.modelContextWindow <= 64000, "使用所选模型上限而非引擎默认值");
+  assert.equal(requests[0].reasoning?.effort, "high", "所选思考强度发送到真实 Responses 请求");
+  await first.driver.request("thread/compact/start", { threadId: first.thread.id });
+  const compactEnd = Date.now() + 20000;
+  while (Date.now() < compactEnd && !first.driver.events.some(event => event.method === "item/completed" && event.params.item.type === "contextCompaction")) await new Promise(resolve => setTimeout(resolve, 50));
+  assert(first.driver.events.some(event => event.method === "item/started" && event.params.item.type === "contextCompaction"), "实际压缩开始事件");
+  assert(first.driver.events.some(event => event.method === "item/completed" && event.params.item.type === "contextCompaction"), "实际压缩完成事件");
+  results.push("real context usage and manual context compaction lifecycle");
   await first.driver.stop();
   const second = new Driver(first.launch); await second.init();
   await assert.rejects(second.request("turn/start", { threadId: first.thread.id, input: [{ type: "text", text: "before resume" }] }), /thread.*not found/i);

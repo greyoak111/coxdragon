@@ -7,7 +7,7 @@ export async function startCodexUiServer() {
     installed: true, server: true, account: { email: "developer@example.test", planType: "Plus" }, install: { state: "done" },
     installFailures: 0, loginDelay: 0, cancelFailure: false, authorizeOnRefresh: false,
     model: "", effort: "", settingsFailure: false, skillEnabled: true, extensionFailure: false, connectionFailure: false,
-    apiDelay: 0, apiFailure: false,
+    apiDelay: 0, apiFailure: false, contexts: {}, compacting: [], compactFailure: false,
     schedules: [{ id: "legacy-task", name: "旧自动化", prompt: "整理项目", on: true, nextAt: Date.now() + 60000 }], scheduleRunning: ["legacy-task"], scheduleFailure: false,
     connection: { mode: "chatgpt", baseUrl: "", model: "", hasKey: false, noKey: false, configured: false, wireApi: "responses" },
     notify: { ok: true, done: true, ask: true, system: true, chDone: true, chAsk: true } };
@@ -26,8 +26,9 @@ export async function startCodexUiServer() {
   const snapshot = () => ({ installed: state.installed, server: state.server, version: "fixture", account: state.account,
     cwd: projects[0].path, activeThread: threads.find((th) => th.id === state.active) || null, approvals: state.pending,
     model: state.model, effort: state.effort, connection: { ...state.connection }, paths: { codexHome: "/synthetic/home/.codex" },
+    contexts: state.contexts, compacting: state.compacting,
     runningTurns: state.running, models: state.connection.mode === "custom" ? [{ id: state.connection.model, displayName: state.connection.model, isDefault: true, supportedReasoningEfforts: [] }] :
-      [{ id: "fixture-model", displayName: "Codex · Demo", isDefault: true, supportedReasoningEfforts: [{ reasoningEffort: "high" }] },
+      [{ id: "fixture-model", displayName: "Codex · Demo", isDefault: true, inputModalities: ["text", "image", "audio"], contextWindow: 128000, capabilitySources: { input: "codex", context: "models.dev" }, supportedReasoningEfforts: [{ reasoningEffort: "high" }] },
       { id: "fixture-fast", displayName: "Codex · Fast", supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], install: state.install });
   const send = (res, ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`);
   const emit = (ev) => { for (const res of clients) if (!res.destroyed) send(res, ev); };
@@ -97,6 +98,12 @@ export async function startCodexUiServer() {
       return reply(res, { ok: true });
     }
     if (p === "/api/codex/approve") { state.pending = state.pending.filter((a) => String(a.id) !== body.id); emit({ type: "approval-done", id: body.id }); return reply(res, { ok: true }); }
+    if (p === "/api/codex/compact") {
+      if (state.compactFailure) return reply(res, { error: "Synthetic compaction failure" }, 503);
+      state.compacting.push(body.threadId);
+      emit({ type: "rpc", method: "item/started", params: { threadId: body.threadId, turnId: "compact-turn", item: { id: "compact-item", type: "contextCompaction" } } });
+      return reply(res, { ok: true });
+    }
     if (p === "/api/codex/settings") {
       if (state.settingsFailure) return reply(res, { error: "Synthetic storage full" }, 500);
       state.model = body.model; state.effort = body.effort; return reply(res, body);
@@ -105,7 +112,10 @@ export async function startCodexUiServer() {
       if (state.apiDelay) await new Promise((r) => setTimeout(r, state.apiDelay));
       const url = body.baseUrl.replace(/\/+$/, "") + (p.endsWith("/models") ? "/models" : "/chat/completions");
       if (state.apiFailure) return reply(res, { ok: false, message: "返回的是网页，请使用服务商提供的 API 基础地址，通常包含 /v1", attempts: [{ ok: false, url, status: 404, code: "html", elapsedMs: 15 }] });
-      return reply(res, p.endsWith("/models") ? { ok: true, baseUrl: body.baseUrl, models: ["fixture-chat-model", "fixture-reasoning-model"] } :
+      return reply(res, p.endsWith("/models") ? { ok: true, baseUrl: body.baseUrl, models: ["fixture-chat-model", "fixture-reasoning-model"], modelDetails: [
+        { id: "fixture-chat-model", inputModalities: ["text", "image"], contextWindow: 64000, supportedReasoningEfforts: [], capabilitySources: { input: "models.dev" } },
+        { id: "fixture-reasoning-model", inputModalities: ["text"], contextWindow: 128000, supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }], capabilitySources: { effort: "provider" } },
+      ] } :
         { ok: true, baseUrl: body.baseUrl, wireApi: body.wireApi === "auto" ? "chat" : body.wireApi, model: body.model, elapsedMs: 42, attempts: [{ ok: true, url, status: 200, elapsedMs: 42 }] });
     }
     if (p === "/api/codex/connection") {

@@ -55,6 +55,7 @@ rm -rf "$A/assets/app"; mkdir -p "$A/assets/app/web" "$A/assets/app/scripts" "$A
 cp "$SRC/server.mjs" "$A/assets/app/"
 cp "$SRC/boot.mjs" "$A/assets/app/"      # 网关引导：应用从安装包里读出来经 -e 交给 node（安全 5，见 gateway/boot.mjs）
 mkdir -p "$A/assets/app/gw"; cp "$SRC/gw/"*.mjs "$A/assets/app/gw/"     # 网关的各功能模块
+mkdir -p "$A/assets/app/data"; cp "$SRC/data/"* "$A/assets/app/data/"
 mkdir -p "$A/assets/app/archive"; cp "$SRC/archive/"* "$A/assets/app/archive/"   # 建档规范与交档命令（脉络，见 gw/archive.mjs）
 mkdir -p "$A/assets/app/guard"; cp "$SRC/guard/"* "$A/assets/app/guard/"       # 敏感操作再确认的钩子（见 gw/claude.mjs guardHooks）
 for f in "$SRC/web/"*; do case "$f" in *.bak*) ;; *) cp -R "$f" "$A/assets/app/web/";; esac; done
@@ -111,7 +112,7 @@ cp "$A/native/execpath.cjs" "$A/assets/app/lib/"
 # 7-Zip（压缩包浏览、解压、压缩）：成品存在仓库里，由 scripts/build-7zz.sh 从上游源码编出；核过哈希再进 APK
 ( cd "$A/prebuilt" && [ "$(sha256sum libcc7zz.so | cut -c1-64)" = "$(cat libcc7zz.so.sha256)" ] ) || { echo "✗ android/prebuilt/libcc7zz.so 和记下的哈希对不上：重跑 sh scripts/build-7zz.sh"; exit 1; }
 cp "$A/prebuilt/libcc7zz.so" "$NL/"
-TAG=$(cat "$A/assets/app/server.mjs" "$A/assets/app/boot.mjs" "$A/assets/app/gw/"* "$A/assets/app/archive/"* "$A/assets/app/guard/"* "$A/assets/app/TOOLS.md" $(find "$A/assets/app/web" -type f | sort) "$A/assets/app/scripts/"* "$A/assets/app/bin/"* "$A/assets/app/pre/"* "$A/assets/app/lib/"* "$NL/"libcc*.so | md5sum | cut -c1-12)
+TAG=$(cat "$A/assets/app/server.mjs" "$A/assets/app/boot.mjs" "$A/assets/app/gw/"* "$A/assets/app/archive/"* "$A/assets/app/guard/"* "$A/assets/app/data/"* "$A/assets/app/TOOLS.md" $(find "$A/assets/app/web" -type f | sort) "$A/assets/app/scripts/"* "$A/assets/app/bin/"* "$A/assets/app/pre/"* "$A/assets/app/lib/"* "$NL/"libcc*.so | md5sum | cut -c1-12)
 echo "$TAG" > "$A/assets/app/TAG"
 echo "  tag $TAG"
 # 逐文件清单（sha256 + 相对路径）：启动时应用按它核对 files/app，被改过、多出来的就从安装包还原（防项目钩子 / MCP 之类偷偷改网关）

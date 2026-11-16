@@ -94,6 +94,7 @@ console.log("▸ assets");
 clean(app);
 for (const n of ["server.mjs", "boot.mjs"]) copy(path.join(src, n), path.join(app, n));
 for (const n of ["gw", "archive", "guard"]) copyChildren(path.join(src, n), path.join(app, n), (f) => n !== "gw" || f.endsWith(".mjs"));
+copyChildren(path.join(src, "data"), path.join(app, "data"));
 copyChildren(path.join(src, "web"), path.join(app, "web"), (n) => !n.includes(".bak"));
 for (const n of ["scripts", "bin", "pre"]) copyChildren(path.join(android, "assets", n), path.join(app, n));
 copy(path.join(root, "devkit", "pgp.mjs"), path.join(app, "bin", "pgp.mjs"));
@@ -128,7 +129,7 @@ const seven = path.join(android, "prebuilt", "libcc7zz.so");
 if (hash(fs.readFileSync(seven)) !== fs.readFileSync(seven + ".sha256", "utf8").trim()) throw new Error("7-Zip prebuilt checksum mismatch");
 copy(seven, path.join(native, "libcc7zz.so"));
 copy(path.join(android, "native", "execpath.cjs"), path.join(app, "lib", "execpath.cjs"));
-const tagFiles = ["server.mjs", "boot.mjs", ...["gw", "archive", "guard"].flatMap((d) => files(path.join(app, d)).map((n) => d + "/" + n)), "TOOLS.md",
+const tagFiles = ["server.mjs", "boot.mjs", ...["gw", "archive", "guard", "data"].flatMap((d) => files(path.join(app, d)).map((n) => d + "/" + n)), "TOOLS.md",
   ...["web", "scripts", "bin", "pre", "lib"].flatMap((d) => files(path.join(app, d)).sort().map((n) => d + "/" + n))];
 const md5 = crypto.createHash("md5");
 for (const n of tagFiles) md5.update(fs.readFileSync(path.join(app, n)));

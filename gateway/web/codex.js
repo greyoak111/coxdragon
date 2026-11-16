@@ -22,7 +22,7 @@
     if (!r.ok) { let m = "HTTP " + r.status; try { const j = await r.json(); m = j.error || j.message || m; } catch {} throw new Error(m); }
     return r.json();
   });
-  const copyText = A("copyText", (t) => { try { navigator.clipboard.writeText(t); return true; } catch { return false; } });
+  const copyText = A("copyText", async (text) => { try { await navigator.clipboard.writeText(text); return true; } catch { return false; } });
   const fmtSize = A("fmtSize", (n) => (n ? Math.round(n / 1048576) + " MB" : ""));
   const relTime = A("relTime", (ms) => (ms ? new Date(ms * 1000).toLocaleString() : ""));
   const t = window.I18N ? I18N.t : (s, v) => s.replace(/\{(\w+)\}/g, (m, k) => v && k in v ? v[k] : m);
@@ -64,6 +64,7 @@
     settingsTab: "general", settingsBusy: false, extensions: null, extensionsBusy: false, extensionsError: "", extensionsSeq: 0,
     skipLogin: LS.get("skipLogin", "") === "1", connectionBusy: false,
     automation: null, automationBusy: false, automationError: "",
+    contexts: new Map(), compacting: new Set(), compactBusy: false,
   };
   try { st.pins = JSON.parse(LS.get("pins", "[]")); if (!Array.isArray(st.pins)) st.pins = []; } catch {}
 
@@ -114,6 +115,7 @@
         <span id="cx-state"><i class="cx-dot idle"></i>未连接</span>
         <button class="cx-foot-cwd" data-act="choose-project" id="cx-cwd"></button><span class="cx-enter-hint">${esc(t("Enter 发送 · Shift Enter 换行"))}</span>
       </div>
+      <details class="cx-context" id="cx-context"><summary><i id="cx-context-ring"></i><span>${esc(t("上下文"))}</span><span id="cx-context-label"></span></summary><div class="cx-context-pop" id="cx-context-pop"></div></details>
     </div>
   </main>
   <aside class="cx-review" id="cx-review" aria-label="${esc(t("改动审阅"))}" hidden>
@@ -211,6 +213,8 @@
     const act = el.dataset.act;
     if (act === "mobile-tools" || act === "mobile-more") return openMobileMenu(act === "mobile-tools");
     if (act === "mobile-menu-close") return dom.mobileMenu.close();
+    if (act === "tool-copy") return copyTool(el);
+    if (act === "compact") return compact();
     if (el.closest("#cx-mobile-menu") && dom.mobileMenu.open) dom.mobileMenu.close();
     if (act === "sidebar") return toggleSidebar();
     if (act === "sidebar-close") return toggleSidebar(false);
@@ -271,7 +275,7 @@
     const limit = matchMedia("(max-width:760px)").matches ? Math.min(180, Math.max(80, innerHeight * .3)) : 180;
     dom.input.style.height = Math.min(limit, dom.input.scrollHeight) + "px";
     dom.workbench.classList.toggle("has-draft", !!dom.input.value.trim());
-    dom.send.disabled = !st.status?.installed || st.busy || st.switching || st.connectionBusy || !dom.input.value.trim();
+    dom.send.disabled = !st.status?.installed || st.busy || st.switching || st.connectionBusy || st.compacting.has(st.threadId) || st.compactBusy || !dom.input.value.trim();
   }
   function syncMobileLayout() {
     const narrow = matchMedia("(max-width:760px)").matches;
@@ -354,6 +358,8 @@
     if (s.account) st.login = null;
     st.running = new Map((s.runningTurns || []).map((r) => [r.threadId, r.turn]));
     st.approvals = new Map((s.approvals || []).map((a) => [String(a.id), { method: a.method, params: a.params }]));
+    if (s.contexts) st.contexts = new Map(Object.entries(s.contexts));
+    st.compacting = new Set(s.compacting || []);
   }
   function toggleReview(force) {
     st.review = force == null ? !st.review : force;
@@ -459,7 +465,7 @@
       else if (turn) setState(t("Codex 正在运行…"), "busy");
       else if (server) setState(t(connected(s) ? "就绪" : "尚未连接模型"), connected(s) ? "" : "idle");
       else setState(t("引擎未启动"), "idle");
-      dom.send.disabled = !installed || st.busy || st.switching || st.connectionBusy || !dom.input.value.trim();
+      dom.send.disabled = !installed || st.busy || st.switching || st.connectionBusy || st.compacting.has(st.threadId) || st.compactBusy || !dom.input.value.trim();
       dom.input.disabled = st.switching;
       dom.stop.classList.toggle("hidden", !turn);
       dom.send.classList.toggle("hidden", !!turn);
@@ -470,6 +476,43 @@
     paintApprovals();
     paintSetup();
     paintActivity();
+    paintContext();
+  }
+
+  const tokenNumber = value => value >= 1e6 ? (value / 1e6).toFixed(2).replace(/0+$/, "").replace(/\.$/, "") + "M" : value >= 1000 ? (value / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(value);
+  function selectedModel() { const models = st.status?.models || []; return models.find(m => m.id === st.model) || models.find(m => m.isDefault) || models[0]; }
+  function capabilityText(model) {
+    const labels = { text: "文本", image: "图片", audio: "音频", video: "视频", pdf: "PDF" };
+    return (model?.inputModalities || []).map(m => t(labels[m] || m)).join(" / ") || t("能力未知");
+  }
+  function paintContext() {
+    if (!dom) return;
+    const context = st.contexts.get(st.threadId), model = selectedModel();
+    const used = context?.last?.totalTokens, limit = context?.modelContextWindow || model?.contextWindow;
+    const known = Number.isFinite(used), ratio = known && limit ? Math.min(100, Math.round(used / limit * 100)) : null;
+    $("cx-context").dataset.level = ratio >= 90 ? "high" : ratio >= 75 ? "warn" : "normal";
+    $("cx-context-ring").style.setProperty("--usage", (ratio || 0) + "%");
+    $("cx-context-label").textContent = st.compacting.has(st.threadId) || st.compactBusy ? t("正在压缩…") : known ? tokenNumber(used) + (limit ? " / " + tokenNumber(limit) + " · " + ratio + "%" : " tokens") : limit ? "— / " + tokenNumber(limit) : t("等待统计");
+    const disabled = !st.threadId || st.running.has(st.threadId) || st.compacting.has(st.threadId) || st.compactBusy || st.switching;
+    $("cx-context-pop").innerHTML = `<b>${esc(t("上下文用量"))}</b><p>${esc(known ? t("最近请求占用") + "：" + used.toLocaleString() + " tokens" : t("发送后由引擎报告实际用量"))}</p><p>${esc(t("上下文上限"))}：${limit ? esc(limit.toLocaleString()) : esc(t("未知"))}${context?.modelContextWindow ? " · Codex" : model?.capabilitySources?.context ? " · " + esc(model.capabilitySources.context) : ""}</p><p>${esc(t("输入能力"))}：${esc(capabilityText(model))}</p><p>${esc(t("思考强度"))}：${esc(st.effort || model?.defaultReasoningEffort || t("默认"))}</p><p class="cx-context-note">${esc(t("压缩会保留任务摘要以继续对话，可能调用模型并产生费用。"))}</p><button data-act="compact"${disabled ? " disabled" : ""}>${esc(t("压缩上下文"))}</button><p class="cx-form-error" role="alert">${esc(st.compactError || "")}</p>`;
+  }
+  async function compact() {
+    const target = st.threadId;
+    if (!target || st.compactBusy || st.compacting.has(target) || st.running.has(target)) return;
+    st.compactBusy = true; st.compactError = ""; paint();
+    try { await post("/api/codex/compact", { threadId: target }); }
+    catch (error) { st.compactError = error.message; }
+    finally { st.compactBusy = false; paint(); }
+  }
+
+  function copyButton(part, label) { return `<button class="cx-tool-copy" data-act="tool-copy" data-part="${part}" aria-label="${esc(t(label))}" title="${esc(t(label))}">${esc(t(label))}</button>`; }
+  async function copyTool(button) {
+    const it = st.items.get(button.closest("[data-item]")?.dataset.item);
+    if (!it) return;
+    const x = it.data, part = button.dataset.part;
+    const text = part === "command" ? x.command || "" : part === "output" ? it.out : part === "diff" ? x.changes?.[+button.dataset.index]?.diff || "" : JSON.stringify(x, null, 2);
+    try { const ok = await copyText(text); toast(t(ok ? "已复制" : "复制失败"), !ok); }
+    catch { toast(t("复制失败"), true); }
   }
 
   function completeSetup() {
@@ -699,6 +742,7 @@
     if (!dom || !item || !item.id) return;
     ensureDom();
     const it = getEntry(item, turnId);
+    it.type = item.type;
     it.data = item;
     it.done = done ?? (item.status != null && item.status !== "inProgress");
     if (item.type === "agentMessage" && item.text != null) it.text = item.text;
@@ -736,8 +780,9 @@
         d.className = "cx-tool";
         const stt = x.status || "inProgress";
         const cls = stt === "completed" ? "ok" : stt === "failed" || stt === "declined" ? "err" : "run";
-        if (!d.firstChild) d.innerHTML = `<div class="cx-tool-head"><span class="cx-tool-kind">SHELL</span><code></code><span class="cx-tool-state"></span></div><pre class="cx-out"></pre>`;
+        if (!d.firstChild) d.innerHTML = `<details class="cx-tool-details"><summary class="cx-tool-head"><span class="cx-tool-kind">SHELL</span><code></code><span class="cx-tool-state"></span></summary><div class="cx-tool-content"><div class="cx-tool-actions">${copyButton("command", "复制命令")}${copyButton("output", "复制结果")}</div><pre class="cx-command"></pre><pre class="cx-out"></pre></div></details>`;
         d.querySelector("code").textContent = x.command || "";
+        d.querySelector(".cx-command").textContent = x.command || "";
         const sEl = d.querySelector(".cx-tool-state");
         sEl.className = "cx-tool-state " + cls;
         sEl.textContent = stt === "inProgress" ? "运行中" : stt === "completed" ? (x.exitCode != null ? "退出 " + x.exitCode : "完成") : stt === "declined" ? "已拒绝" : "失败";
@@ -749,18 +794,19 @@
       case "fileChange": {
         d.className = "cx-tool";
         const ch = Array.isArray(x.changes) ? x.changes : [];
-        if (!d.firstChild) d.innerHTML = `<div class="cx-tool-head"><span class="cx-tool-kind">PATCH</span><code></code><span class="cx-tool-state"></span></div><div class="cx-changes"></div>`;
+        if (!d.firstChild) d.innerHTML = `<details class="cx-tool-details"><summary class="cx-tool-head"><span class="cx-tool-kind">PATCH</span><code></code><span class="cx-tool-state"></span></summary><div class="cx-tool-actions">${copyButton("json", "复制结果")}</div><div class="cx-changes"></div></details>`;
         d.querySelector("code").textContent = ch.length ? ch.map((c) => c.path).join(", ") : "文件改动";
         const sEl = d.querySelector(".cx-tool-state");
         sEl.className = "cx-tool-state " + (x.status === "completed" ? "ok" : x.status === "failed" || x.status === "declined" ? "err" : "run");
         sEl.textContent = x.status === "completed" ? "完成" : x.status === "failed" ? "失败" : x.status === "declined" ? "已拒绝" : "进行中";
         const box = d.querySelector(".cx-changes");
-        box.innerHTML = ch.map((c) => `<details class="cx-change"><summary><b>${esc(c.kind || "")}</b> <code>${esc(c.path || "")}</code></summary><pre class="cx-out">${esc(c.diff || "")}</pre></details>`).join("");
+        const open = new Set([...box.querySelectorAll("details[open]")].map(e => e.dataset.path));
+        box.innerHTML = ch.map((c, i) => `<details class="cx-change" data-path="${esc(c.path || "")}"${open.has(c.path) ? " open" : ""}><summary><b>${esc(c.kind || "")}</b> <code>${esc(c.path || "")}</code></summary><div class="cx-tool-actions"><button class="cx-tool-copy" data-act="tool-copy" data-part="diff" data-index="${i}">${esc(t("复制改动"))}</button></div><pre class="cx-out">${esc(c.diff || "")}</pre></details>`).join("");
         break;
       }
       case "mcpToolCall": {
         d.className = "cx-tool";
-        if (!d.firstChild) d.innerHTML = `<div class="cx-tool-head"><span class="cx-tool-kind">MCP</span><code></code><span class="cx-tool-state"></span></div><details><pre class="cx-out"></pre></details>`;
+        if (!d.firstChild) d.innerHTML = `<details class="cx-tool-details"><summary class="cx-tool-head"><span class="cx-tool-kind">MCP</span><code></code><span class="cx-tool-state"></span></summary><div class="cx-tool-actions">${copyButton("json", "复制结果")}</div><pre class="cx-out"></pre></details>`;
         d.querySelector("code").textContent = `${x.server || "mcp"} / ${x.tool || ""}`;
         const sEl = d.querySelector(".cx-tool-state");
         sEl.className = "cx-tool-state " + (x.status === "completed" ? "ok" : x.status === "failed" ? "err" : "run");
@@ -774,24 +820,24 @@
         d.innerHTML = `<div class="cx-plan-h">计划</div><div>${md(x.text || it.text || "")}</div>`;
         break;
       }
-      case "webSearch": {
-        d.className = "cx-tool";
-        d.innerHTML = `<div class="cx-tool-head"><span class="cx-tool-kind">WEB</span><code>${esc(x.query || "")}</code></div>`;
-        break;
-      }
+      case "webSearch":
       case "imageView": {
         d.className = "cx-tool";
-        d.innerHTML = `<div class="cx-tool-head"><span class="cx-tool-kind">IMAGE</span><code>${esc(x.path || "")}</code></div>`;
+        if (!d.firstChild) d.innerHTML = `<details class="cx-tool-details"><summary class="cx-tool-head"><span class="cx-tool-kind"></span><code></code></summary><div class="cx-tool-actions">${copyButton("json", "复制结果")}</div><pre class="cx-out"></pre></details>`;
+        d.querySelector(".cx-tool-kind").textContent = x.type === "webSearch" ? "WEB" : "IMAGE";
+        d.querySelector("code").textContent = x.query || x.action?.query || x.path || "";
+        d.querySelector("pre").textContent = JSON.stringify(x, null, 2);
         break;
       }
       case "contextCompaction": {
-        d.className = "cx-think";
-        d.textContent = "上下文已压缩";
+        d.className = "cx-compaction";
+        d.dataset.done = String(!!it.done);
+        d.innerHTML = `<span>${esc(t(it.done ? "上下文已压缩" : "正在压缩上下文…"))}</span>`;
         break;
       }
       default: {
         d.className = "cx-tool";
-        if (!d.firstChild) d.innerHTML = `<div class="cx-tool-head"><span class="cx-tool-kind">${esc(x.type || "ITEM")}</span><code></code></div><pre class="cx-out"></pre>`;
+        if (!d.firstChild) d.innerHTML = `<details class="cx-tool-details"><summary class="cx-tool-head"><span class="cx-tool-kind">${esc(x.type || "ITEM")}</span><code></code></summary><div class="cx-tool-actions">${copyButton("json", "复制结果")}</div><pre class="cx-out"></pre></details>`;
         d.querySelector("code").textContent = x.id || "";
         d.querySelector("pre").textContent = JSON.stringify(x, null, 2).slice(0, 8000);
       }
@@ -883,7 +929,7 @@
       if (st.status) st.status.server = ev.state === "ready";
       if (ev.state === "exited" && st.status) st.status.lastError = "Codex 引擎退出了" + (ev.code != null ? `（code ${ev.code}）` : "");
       if (ev.state === "ready" && st.status) st.status.lastError = "";
-      if (ev.state === "exited" || ev.state === "stopped") { st.running.clear(); st.approvals.clear(); }
+      if (ev.state === "exited" || ev.state === "stopped") { st.running.clear(); st.approvals.clear(); st.compacting.clear(); }
       paint();
       if (ev.state === "ready") refreshSoon();
       return;
@@ -901,6 +947,12 @@
     if (ev.type === "approval-done") { st.approvals.delete(String(ev.id)); paintApprovals(); return; }
     if (ev.type !== "rpc") return;
     const m = ev.method, p = ev.params || {};
+    if (m === "thread/tokenUsage/updated" && p.threadId) {
+      st.contexts.set(p.threadId, p.tokenUsage); paintContext(); return;
+    }
+    if (m === "item/started" && p.item?.type === "contextCompaction") st.compacting.add(p.threadId);
+    if ((m === "item/completed" && p.item?.type === "contextCompaction") || m === "turn/completed") st.compacting.delete(p.threadId);
+    if (m === "item/started" || m === "item/completed" || m === "turn/completed") paint();
     if (m === "turn/started" && p.threadId && p.turn) st.running.set(p.threadId, p.turn);
     if (m === "turn/completed" && p.threadId) {
       if (p.turn?.id) { st.endedTurns.add(p.turn.id); if (st.endedTurns.size > 200) st.endedTurns.delete(st.endedTurns.values().next().value); }
@@ -1042,6 +1094,7 @@
     try {
       const r = await post("/api/codex/thread", { cwd: dir });
       clearMessages();
+      st.compactError = "";
       st.thread = r.thread; st.threadId = r.thread && r.thread.id || "";
       if (st.threadId) LS.set("thread", st.threadId);
       st.cwd = (r.thread && r.thread.cwd) || dir || st.cwd;
@@ -1062,6 +1115,8 @@
       const r = await post("/api/codex/open-thread", { threadId: id });
       if (seq !== st.viewSeq) return;
       st.thread = r.thread; st.threadId = id; LS.set("thread", id);
+      st.compactError = "";
+      if (r.thread?.context) st.contexts.set(id, r.thread.context);
       st.cwd = (r.thread && r.thread.cwd) || st.cwd;
       const running = (r.thread?.turns || []).find((turn) => turn.status === "inProgress" && !st.endedTurns.has(turn.id));
       if (running) st.running.set(id, running);
@@ -1075,7 +1130,7 @@
   function resetReview() { st.gitSeq++; st.diffSeq++; st.git = null; st.gitError = ""; st.diff = ""; st.diffFile = ""; st.diffBusy = false; paintReview(); }
 
   async function send() {
-    if (!dom || st.busy || st.switching || st.connectionBusy || st.running.has(st.threadId)) return;
+    if (!dom || st.busy || st.switching || st.connectionBusy || st.compactBusy || st.compacting.has(st.threadId) || st.running.has(st.threadId)) return;
     const text = dom.input.value.trim();
     if (!text) return;
     if (!st.status || !st.status.installed) return toast("先安装 Codex 引擎", true);
@@ -1214,6 +1269,7 @@
       ${row("连接方式", `<span>${esc(s.connection?.mode === "custom" ? t("自定义 API") : s.account?.email || t("尚未连接模型"))}</span><button data-act="connection">${esc(t("配置连接"))}</button>${s.account && s.connection?.mode !== "custom" ? `<button data-act="logout">${esc(t("退出登录"))}</button>` : ""}`)}
       <form id="cx-settings-form"><label>${esc(t("模型"))}<select id="cx-pref-model"${!models.length || st.settingsBusy ? " disabled" : ""}><option value="">${esc(t("默认模型"))}</option>${models.map((m) => `<option value="${esc(m.id)}"${m.id === st.model ? " selected" : ""}>${esc(m.displayName || m.id)}</option>`).join("")}</select></label>
       <label>${esc(t("思考强度"))}<select id="cx-pref-effort"><option value="">${esc(t("默认"))}</option>${(cur?.supportedReasoningEfforts || []).map((e) => `<option value="${esc(e.reasoningEffort)}"${e.reasoningEffort === st.effort ? " selected" : ""}>${esc(e.reasoningEffort)}</option>`).join("")}</select></label>
+      <p id="cx-model-capabilities">${esc(t("输入能力"))}：${esc(capabilityText(cur))} · ${esc(t("上下文上限"))}：${cur?.contextWindow ? esc(tokenNumber(cur.contextWindow)) : esc(t("未知"))}${Object.values(cur?.capabilitySources || {}).includes("models.dev") ? " · models.dev" : ""}</p>
       <p>${esc(t("模型和思考强度保存在本机，将用于下一次发送。"))}</p><button class="cx-pref-save" type="submit"${st.settingsBusy || !models.length ? " disabled" : ""}>${esc(t("保存"))}</button></form></section>
       <section><h3>${esc(t("权限与运行"))}</h3><p>${esc(t("非受信命令由 Codex 请求确认。任务以安卓应用身份执行，可访问本应用和已授权的共享目录；当前未启用额外的项目目录隔离。"))}</p>
       ${row("审批策略", "<code>untrusted</code>")}${row("执行沙箱", "<code>danger-full-access</code>")}
@@ -1226,6 +1282,7 @@
     $("cx-pref-model").addEventListener("change", (e) => {
       const selected = models.find((m) => m.id === e.target.value) || models.find((m) => m.isDefault) || models[0];
       $("cx-pref-effort").innerHTML = `<option value="">${esc(t("默认"))}</option>` + (selected?.supportedReasoningEfforts || []).map((x) => `<option value="${esc(x.reasoningEffort)}">${esc(x.reasoningEffort)}</option>`).join("");
+      $("cx-model-capabilities").textContent = t("输入能力") + "：" + capabilityText(selected) + " · " + t("上下文上限") + "：" + (selected?.contextWindow ? tokenNumber(selected.contextWindow) : t("未知"));
     });
     $("cx-pref-theme").addEventListener("change", (e) => { const prefix = (window.Theme?.pref || "").match(/^(qs|zy|gc|ss)-/)?.[0] || ""; window.Theme?.set(prefix + e.target.value); });
     $("cx-pref-lang").addEventListener("change", (e) => { saveDraft(); window.I18N?.setLang(e.target.value); });
@@ -1278,6 +1335,7 @@
         <div class="cx-api-model-heading"><label for="cx-api-model">${esc(t("模型名称"))}</label><button type="button" id="cx-api-fetch">${esc(t("获取模型"))}</button></div>
         <input id="cx-api-model" required maxlength="200" value="${esc(c.model || "")}" placeholder="${esc(t("选择获取到的模型，或手动输入"))}" list="cx-api-models" autocapitalize="off" spellcheck="false"><datalist id="cx-api-models"></datalist>
         <p id="cx-api-model-status" role="status" aria-live="polite">${esc(t("填写地址和密钥后自动获取模型，也可手动填写。"))}</p>
+        <p id="cx-api-capabilities"></p>
         <div class="cx-api-test-bar"><button type="button" id="cx-api-test">${esc(t("测试连接"))}</button><span>${esc(t("会发送短模型请求，可能产生少量费用。"))}</span></div>
         <div id="cx-api-result" class="cx-api-result" role="status" aria-live="polite" hidden></div>
         <details class="cx-api-notes"><summary>${esc(t("密钥与兼容性说明"))}</summary><p>${esc(t("密钥保存在应用私有目录，不会显示在状态信息中。更换地址时请重新填写密钥。"))}</p><p>${esc(t("Chat Completions 通过本地适配支持文本、图片与工具调用；其他能力优先使用 Responses。测试成功不代表所有工具能力均受支持。"))}</p></details>
@@ -1286,7 +1344,11 @@
       </fieldset></form></section>`;
     const form = $("cx-connection-form"), protocol = $("cx-api-protocol"), url = $("cx-api-url"), key = $("cx-api-key"), model = $("cx-api-model"), noKey = $("cx-api-no-key");
     protocol.value = c.mode === "custom" ? c.wireApi || "responses" : "auto";
-    let revision = 0, controller = null, timer = 0, busy = false, disposed = false;
+    let revision = 0, controller = null, timer = 0, busy = false, disposed = false, modelCatalog = [];
+    const paintCapabilities = () => {
+      const selected = modelCatalog.find(m => m.id === model.value);
+      $("cx-api-capabilities").textContent = selected ? `${t("输入能力")}：${capabilityText(selected)} · ${t("上下文上限")}：${selected.contextWindow ? tokenNumber(selected.contextWindow) : t("未知")} · ${t("思考强度")}：${selected.supportedReasoningEfforts?.map(e => e.reasoningEffort).join(" / ") || t(selected.reasoning ? "由服务商默认控制" : "未知")}${Object.values(selected.capabilitySources || {}).includes("models.dev") ? " · models.dev · " + t("目录能力仅供参考，以接口实际支持为准。") : ""}` : "";
+    };
     const value = () => ({ mode: "custom", baseUrl: url.value, wireApi: protocol.value, model: model.value, apiKey: key.value, noKey: noKey.checked });
     const normalized = () => { try { const u = new URL(url.value.trim()); u.pathname = u.pathname.replace(/\/(responses|chat\/completions|models)\/?$/, ""); return u.href.replace(/\/+$/, ""); } catch { return ""; } };
     const preview = () => {
@@ -1297,7 +1359,7 @@
     const reset = (catalog = false) => {
       revision++; controller?.abort(); controller = null; clearTimeout(timer); busy = false; buttons();
       $("cx-api-result").hidden = true; $("cx-connection-error").textContent = "";
-      if (catalog) { $("cx-api-models").innerHTML = ""; $("cx-api-model-status").textContent = t("填写地址和密钥后自动获取模型，也可手动填写。"); }
+      if (catalog) { modelCatalog = []; paintCapabilities(); $("cx-api-models").innerHTML = ""; $("cx-api-model-status").textContent = t("填写地址和密钥后自动获取模型，也可手动填写。"); }
       preview();
     };
     const cleanup = () => { disposed = true; revision++; controller?.abort(); clearTimeout(timer); dom.preferences.removeEventListener("close", cleanup); if (st.cancelConnectionForm === cleanup) st.cancelConnectionForm = null; };
@@ -1315,9 +1377,11 @@
         if (!current(id)) return;
         if (r.ok && r.baseUrl) { url.value = r.baseUrl; preview(); }
         if (kind === "models") {
+          modelCatalog = r.modelDetails || [];
           $("cx-api-models").innerHTML = (r.models || []).map((m) => `<option value="${esc(m)}"></option>`).join("");
           label.textContent = r.ok ? t("已获取 {n} 个模型，可输入名称筛选。", { n: r.models.length }) : t(r.message) + " · " + t("可继续手动填写模型名称。");
           if (r.ok && !model.value) model.value = r.models[0];
+          paintCapabilities();
         } else {
           result.dataset.state = r.ok ? "ok" : "error";
           if (r.ok) { protocol.value = r.wireApi; preview(); }
@@ -1343,7 +1407,7 @@
       else if (/\/responses\/?$/.test(url.value.trim())) protocol.value = "responses";
       preview();
     });
-    protocol.addEventListener("change", () => reset()); model.addEventListener("input", () => reset());
+    protocol.addEventListener("change", () => reset()); model.addEventListener("input", () => { reset(); paintCapabilities(); });
     $("cx-api-fetch").addEventListener("click", () => probe("models")); $("cx-api-test").addEventListener("click", () => probe("test"));
     $("cx-api-key-toggle").addEventListener("click", (e) => { key.type = key.type === "password" ? "text" : "password"; e.currentTarget.textContent = t(key.type === "password" ? "显示" : "隐藏"); e.currentTarget.setAttribute("aria-pressed", String(key.type === "text")); });
     preview();
