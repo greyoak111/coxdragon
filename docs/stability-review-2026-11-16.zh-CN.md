@@ -176,6 +176,8 @@ Codex 定时执行仍未接入，新增管理页明确说明现有任务使用 C
 - Linux 完整网关：1599 项，1591 通过、8 项按条件跳过，0 失败、0 取消；真实引擎、浏览器和 Java 检查通过。
   [完整流水线](https://github.com/leemwood/coxdragon/actions/runs/43857681921) 同时构建两种 APK。
   分支 CI 使用临时测试证书，本地交付 APK 使用正式证书，不能混为同一签名的安装包。
+- CI 测试作业没有 `android.jar`，按条件跳过 `WhatsNewPickTest` 与 `Stab2LHostTest`；
+  这两组已使用本机 Android 35 SDK 与本轮编译类补跑通过，APK 构建也完成全部 Android Java 编译。
 
 运行进程回归前需要提供固定版本二进制：Windows 默认 `.cache/codex-app-server-test.exe`，
 其他位置通过 `CODEX_TEST_BIN` 指定。CI 下载官方 Linux musl 产物并校验固定 SHA-256，
