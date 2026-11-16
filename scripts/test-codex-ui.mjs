@@ -276,6 +276,8 @@ try {
   await cdp.call("Emulation.setDeviceMetricsOverride", { width: 320, height: 568, deviceScaleFactor: 1, mobile: true });
   assert.equal(await cdp.eval("document.querySelector('#cx-context-pop').getBoundingClientRect().right<=innerWidth && document.querySelector('#cx-context-pop').getBoundingClientRect().left>=0 && document.documentElement.scrollWidth<=innerWidth"), true);
   await screenshot('mobile-context-320');
+  assert.equal(await cdp.eval('__ccBack()'), true);
+  assert.equal(await cdp.eval("document.querySelector('#cx-context').open"), false, "Android Back dismisses context popup");
   await cdp.call("Emulation.setDeviceMetricsOverride", { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
   await cdp.eval("document.querySelector('#cx-context').open=false;delete window.CCApp"); await fill('#cx-input','');
   ok("collapsed tools, full command/output/diff copying, reasoning spacing, per-thread token usage, compaction lifecycle/failure and 320px popup");

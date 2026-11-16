@@ -169,6 +169,10 @@
       mobileMenu: $("cx-mobile-menu"), activity: $("cx-activity"),
     };
     root.addEventListener("click", onClick);
+    document.addEventListener("click", (event) => {
+      const context = $("cx-context");
+      if (context.open && !event.composedPath().includes(context)) context.open = false;
+    });
     new MutationObserver(() => window.CCLayout?.apply()).observe(root, { subtree: true, attributes: true, attributeFilter: ["open", "hidden"] });
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden && dom.preferences.open && st.settingsTab === "general") loadNotifySettings();
@@ -1495,6 +1499,7 @@
     if (dom.mobileMenu.open) { dom.mobileMenu.close(); return true; }
     if (dom.preferences.open) { dom.preferences.close(); return true; }
     if (dom.dialog.open) { dom.dialog.close(); return true; }
+    if ($("cx-context").open) { $("cx-context").open = false; $("cx-context").querySelector("summary").focus(); return true; }
     if (st.sidebar) { toggleSidebar(false); return true; }
     if (st.review) { toggleReview(false); return true; }
     return false;

@@ -42,7 +42,7 @@ test("模型能力：API 声明覆盖目录，包括空强度列表和关闭思�
 
 test("模型目录：持久化公开能力，刷新离线失败不影响模型选择", async () => {
   const baseUrl = "https://catalog-fixture.test/v1";
-  rememberApiModels(baseUrl, [{ ...model, apiKey: "synthetic-private-key", contextWindow: 64000 }]);
+  rememberApiModels(baseUrl, [{ ...model, apiKey: "synthetic-private-key", contextWindow: 64000 }, { id: "boolean-reasoning", reasoning: true }]);
   const raw = fs.readFileSync(path.join(CFG.home, "coxdragon-model-catalog.json"), "utf8");
   assert.equal(raw.includes("synthetic-private-key"), false);
   assert.equal(customModels(baseUrl, model.id)[0].contextWindow, 64000);
@@ -50,6 +50,7 @@ test("模型目录：持久化公开能力，刷新离线失败不影响模型�
   assert.equal(customModels(baseUrl, model.id).some(m => m.id === "manual-model"), false);
   const reloaded = await import("../gw/codex-models.mjs?reload-test");
   assert.equal(reloaded.customModels(baseUrl, model.id)[0].contextWindow, 64000);
+  assert.equal(reloaded.customModels(baseUrl, model.id).find(m => m.id === "boolean-reasoning").reasoning, true);
   const unknownBefore = modelDetails("offline-unknown");
   await refreshModelCatalog({ force: true, fetchImpl: async (url, options) => {
     assert.equal(url, "https://models.dev/api.json");

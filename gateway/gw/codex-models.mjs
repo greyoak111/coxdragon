@@ -94,6 +94,7 @@ export function modelDetails(row, { baseUrl = "", engine = false, providers = ca
     capabilitySources: { input: apiInput ? source : reference.modalities?.input ? "models.dev" : null,
       output: apiOutput ? source : reference.modalities?.output ? "models.dev" : null,
       context: declaredWindow ? source : positive(reference.limit?.context) ? "models.dev" : null,
+      reasoning: typeof api.reasoning === "boolean" ? source : typeof reference.reasoning === "boolean" ? "models.dev" : null,
       effort: api.reasoning === false || apiEfforts ? source : reference.reasoning_options ? "models.dev" : null },
     metadataUpdatedAt: catalog.updatedAt,
   };
@@ -116,7 +117,7 @@ export function customModels(baseUrl, selected) {
     for (const [field, source] of [["inputModalities", "input"], ["outputModalities", "output"], ["contextWindow", "context"], ["supportedReasoningEfforts", "effort"]]) {
       if (row.capabilitySources?.[source] === "provider") api[field] = row[field];
     }
-    if (row.capabilitySources?.effort === "provider") api.reasoning = row.reasoning;
+    if (row.capabilitySources?.reasoning === "provider") api.reasoning = row.reasoning;
     return modelDetails(api, { baseUrl });
   });
   if (!models.some(m => m.id === selected)) models.unshift(modelDetails(selected, { baseUrl }));
