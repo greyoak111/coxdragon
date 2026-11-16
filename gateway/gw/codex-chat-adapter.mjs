@@ -48,7 +48,7 @@ export function toChatRequest(body) {
       messages.push({ role: item.role === "developer" ? "system" : item.role, content: content(item.content) });
     } else throw apiError("unsupported", "Chat Completions 暂不支持此记录类型：" + item.type + "，请改用 Responses 协议");
   }
-  const request = { model: body.model, messages, stream: true };
+  const request = { model: body.model, messages, stream: true, stream_options: { include_usage: true } };
   if (tools.length) { request.tools = tools; request.tool_choice = "auto"; }
   if (body.tool_choice) {
     const choice = body.tool_choice;
@@ -103,9 +103,13 @@ async function bridge(body, config, res, signal) {
   };
   function chunk(data) {
     if (data.error) throw apiError("provider", typeof data.error.message === "string" ? data.error.message : "第三方模型请求失败");
-    if (data.usage) usage = { input_tokens: data.usage.prompt_tokens || 0, output_tokens: data.usage.completion_tokens || 0,
-      total_tokens: data.usage.total_tokens || 0, input_tokens_details: { cached_tokens: data.usage.prompt_tokens_details?.cached_tokens || 0 },
-      output_tokens_details: { reasoning_tokens: data.usage.completion_tokens_details?.reasoning_tokens || 0 } };
+    if (data.usage) {
+      const u=data.usage, valid=n=>Number.isSafeInteger(n)&&n>=0;
+      if(valid(u.prompt_tokens)&&valid(u.completion_tokens))usage={ input_tokens:u.prompt_tokens,output_tokens:u.completion_tokens,
+        total_tokens:valid(u.total_tokens)?u.total_tokens:u.prompt_tokens+u.completion_tokens,
+        ...(valid(u.prompt_tokens_details?.cached_tokens)?{input_tokens_details:{cached_tokens:u.prompt_tokens_details.cached_tokens}}:{}),
+        ...(valid(u.completion_tokens_details?.reasoning_tokens)?{output_tokens_details:{reasoning_tokens:u.completion_tokens_details.reasoning_tokens}}:{}) };
+    }
     const choice = data.choices?.[0]; if (!choice) return;
     const delta = choice.delta || choice.message || {};
     const reasoning = delta.reasoning_content ?? delta.reasoning;

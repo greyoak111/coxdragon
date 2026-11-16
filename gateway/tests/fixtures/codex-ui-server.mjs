@@ -7,7 +7,7 @@ export async function startCodexUiServer() {
     installed: true, server: true, account: { email: "developer@example.test", planType: "Plus" }, install: { state: "done" },
     installFailures: 0, loginDelay: 0, cancelFailure: false, authorizeOnRefresh: false,
     model: "", effort: "", settingsFailure: false, skillEnabled: true, extensionFailure: false, connectionFailure: false,
-    apiDelay: 0, apiFailure: false, contexts: {}, compacting: [], compactFailure: false, metrics: {}, permissionMode: "ask", contextWindow: 0, permissionFailure: false,
+    apiDelay: 0, apiFailure: false, modelDelay:0, modelFailure:false, profiles:[], modelSettings:{}, contexts: {}, compacting: [], compactFailure: false, metrics: {}, permissionMode: "ask", contextWindow: 0, permissionFailure: false,
     schedules: [{ id: "legacy-task", name: "旧自动化", prompt: "整理项目", on: true, nextAt: Date.now() + 60000 }], scheduleRunning: ["legacy-task"], scheduleFailure: false,
     connection: { mode: "chatgpt", baseUrl: "", model: "", hasKey: false, noKey: false, configured: false, wireApi: "responses" },
     notify: { ok: true, done: true, ask: true, system: true, chDone: true, chAsk: true } };
@@ -23,14 +23,20 @@ export async function startCodexUiServer() {
     { id: "c", name: "调整首页布局", cwd: projects[1].path, updatedAt: now - 3600, turns: [] },
   ];
   state.threads = threads;
+  const accountModels=[{ id: "fixture-model", displayName: "Codex · Demo", isDefault: true, inputModalities: ["text", "image", "audio"], contextWindow: 128000, capabilitySources: { input: "codex", context: "models.dev" }, supportedReasoningEfforts: [{ reasoningEffort: "high" }] },
+    { id: "fixture-fast", displayName: "Codex · Fast", contextWindow:64000,supportedReasoningEfforts: [{ reasoningEffort: "low" }] }];
+  const selectedProvider=()=>state.connection.mode==="custom"?state.connection.providerId||"custom":"chatgpt";
+  const modelRows=pid=>{
+    const p=state.profiles.find(p=>p.id===pid),rows=pid==="chatgpt"?accountModels:p?.models||[{id:p?.model||state.connection.model,displayName:p?.model||state.connection.model,isDefault:true,supportedReasoningEfforts:[]}];
+    return rows.map(m=>{const settings=state.modelSettings[JSON.stringify([pid,m.id])]||{};return {...m,settings,contextWindow:settings.contextWindow||m.contextWindow,inputModalities:settings.inputModalities??m.inputModalities,supportedReasoningEfforts:settings.supportedReasoningEfforts?.map(reasoningEffort=>({reasoningEffort}))??m.supportedReasoningEfforts};});
+  };
   const snapshot = () => ({ installed: state.installed, server: state.server, version: "fixture", account: state.account,
     cwd: projects[0].path, activeThread: threads.find((th) => th.id === state.active) || null, approvals: state.pending,
     model: state.model, effort: state.effort, connection: { ...state.connection }, paths: { codexHome: "/synthetic/home/.codex" },
     contexts: state.contexts, compacting: state.compacting, metrics: state.metrics, contextWindow: state.contextWindow,
     permissions: { mode: state.permissionMode, sandbox: state.permissionMode === "read" ? "read-only" : "danger-full-access", approvalPolicy: ["ask","auto"].includes(state.permissionMode)?"untrusted":"never", approvalsReviewer: state.permissionMode==="auto"?"auto_review":"user" },
-    runningTurns: state.running, models: state.connection.mode === "custom" ? [{ id: state.connection.model, displayName: state.connection.model, isDefault: true, supportedReasoningEfforts: [] }] :
-      [{ id: "fixture-model", displayName: "Codex · Demo", isDefault: true, inputModalities: ["text", "image", "audio"], contextWindow: 128000, capabilitySources: { input: "codex", context: "models.dev" }, supportedReasoningEfforts: [{ reasoningEffort: "high" }] },
-      { id: "fixture-fast", displayName: "Codex · Fast", supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], install: state.install });
+    providers:[{id:"chatgpt",name:"ChatGPT",models:modelRows("chatgpt")},...state.profiles.map(p=>({...p,models:modelRows(p.id)}))],
+    runningTurns: state.running,models:modelRows(selectedProvider()), install: state.install });
   const send = (res, ev) => res.write(`data: ${JSON.stringify(ev)}\n\n`);
   const emit = (ev) => { for (const res of clients) if (!res.destroyed) send(res, ev); };
   const reply = (res, data, code = 200) => { res.writeHead(code, { "content-type": "application/json; charset=utf-8" }); res.end(JSON.stringify(data)); return true; };
@@ -105,9 +111,21 @@ export async function startCodexUiServer() {
       emit({ type: "rpc", method: "item/started", params: { threadId: body.threadId, turnId: "compact-turn", item: { id: "compact-item", type: "contextCompaction" } } });
       return reply(res, { ok: true });
     }
+    if (p === "/api/codex/models") {
+      const pid=body.providerId;if(state.modelDelay)await new Promise(r=>setTimeout(r,state.modelDelay));
+      return reply(res,{ok:!state.modelFailure,models:modelRows(pid),status:snapshot(),message:state.modelFailure?"Synthetic catalog unavailable":""});
+    }
     if (p === "/api/codex/settings") {
       if (state.settingsFailure) return reply(res, { error: "Synthetic storage full" }, 500);
-      state.model = body.model; state.effort = body.effort; if(body.contextWindow!==undefined)state.contextWindow=body.contextWindow;return reply(res, {...body,contextWindow:state.contextWindow});
+      const pid=body.providerId||selectedProvider(), profile=state.profiles.find(p=>p.id===pid);
+      if(pid!==selectedProvider())state.connection=pid==="chatgpt"?{...state.connection,mode:"chatgpt"}:{...profile,providerId:pid,mode:"custom",configured:true};
+      state.model = body.model; state.effort = body.effort; if(body.contextWindow!==undefined)state.contextWindow=body.contextWindow;
+      state.modelSettings[JSON.stringify([pid,body.model])]={...body.capabilities,contextWindow:body.contextWindow,effort:body.effort};
+      if(state.connection.mode==="custom"){
+        state.connection={...state.connection,model:body.model,effort:body.effort,contextWindow:state.contextWindow};
+        state.profiles=state.profiles.map(p=>p.id===pid?{...p,model:body.model,effort:body.effort,contextWindow:state.contextWindow}:p);
+      }
+      return reply(res,{model:state.model,effort:state.effort,contextWindow:state.contextWindow,status:snapshot()});
     }
     if (p === "/api/codex/permissions") {
       if(state.permissionFailure)return reply(res,{error:"Synthetic permission save failure"},503);
@@ -128,7 +146,8 @@ export async function startCodexUiServer() {
       if (state.connectionFailure) return reply(res, { error: "Synthetic connection storage full" }, 500);
       state.connection = { mode: body.mode, baseUrl: body.baseUrl || state.connection.baseUrl,
         model: body.model || state.connection.model, hasKey: body.noKey ? false : !!body.apiKey || state.connection.hasKey,
-        noKey: !!body.noKey, configured: body.mode === "custom", wireApi: body.wireApi || state.connection.wireApi || "responses" };
+        noKey: !!body.noKey, configured: body.mode === "custom", wireApi: body.wireApi || state.connection.wireApi || "responses",providerId:body.providerId||"custom",name:body.name||"" };
+      if(body.mode==="custom")state.profiles=[...state.profiles.filter(p=>p.id!==state.connection.providerId),{...state.connection,id:state.connection.providerId,name:state.connection.name||new URL(state.connection.baseUrl).hostname}];
       state.model = body.mode === "custom" ? body.model : ""; state.effort = ""; state.account = null; state.active = null;
       return reply(res, snapshot());
     }

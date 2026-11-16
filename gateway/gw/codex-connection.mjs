@@ -1,13 +1,20 @@
 import path from "node:path";
+import crypto from "node:crypto";
 import { CFG, log } from "./config.mjs";
 import { loadState, writeAtomic } from "./statefile.mjs";
 import { safeApiMessage } from "./codex-api-http.mjs";
-import { customModels } from "./codex-models.mjs";
+import { customModels, modelSettings } from "./codex-models.mjs";
 
 const FILE = path.join(CFG.home, "coxdragon-codex-connection.json");
 export const CUSTOM_PROVIDER = "coxdragon_custom";
 const KEY_ENV = "COXDRAGON_CUSTOM_API_KEY";
-const stored = loadState(FILE, { max: 32768, shape: (v) => v && typeof v === "object" && !Array.isArray(v) ? v : undefined }).data;
+const stored = loadState(FILE, { max: 512 << 10, shape: (v) => v && typeof v === "object" && !Array.isArray(v) ? v : undefined }).data;
+let profiles=Array.isArray(stored.profiles)?stored.profiles.filter(p=>p&&typeof p.id==="string"&&p.id!=="chatgpt"&&p.id.length<=80&&typeof p.baseUrl==="string"&&typeof p.model==="string").slice(0,20).map(p=>({
+  id:p.id,baseUrl:p.baseUrl,model:p.model,name:typeof p.name==="string"?p.name.slice(0,80):"",
+  apiKey:typeof p.apiKey==="string"?p.apiKey:"",noKey:p.noKey===true,wireApi:p.wireApi==="chat"?"chat":"responses",
+  effort:typeof p.effort==="string"?p.effort:"",contextWindow:Number.isSafeInteger(p.contextWindow)&&p.contextWindow>=1024&&p.contextWindow<=1e9?p.contextWindow:0
+})):[];
+if(!profiles.length&&stored.baseUrl&&stored.model)profiles=[{...stored,id:"custom"}];
 let connection = {
   mode: stored.mode === "custom" ? "custom" : "chatgpt",
   baseUrl: typeof stored.baseUrl === "string" ? stored.baseUrl : "",
@@ -16,7 +23,9 @@ let connection = {
   noKey: stored.noKey === true,
   wireApi: stored.wireApi === "chat" ? "chat" : "responses",
   effort: typeof stored.effort === "string" ? stored.effort : "",
-  contextWindow: Number.isSafeInteger(stored.contextWindow) && stored.contextWindow >= 1024 ? stored.contextWindow : 0,
+  contextWindow: Number.isSafeInteger(stored.contextWindow) && stored.contextWindow >= 1024 && stored.contextWindow<=1e9 ? stored.contextWindow : 0,
+  providerId: typeof stored.providerId === "string" ? stored.providerId : profiles[0]?.id || "custom",
+  name: typeof stored.name === "string" ? stored.name.slice(0,80) : "",
 };
 
 // Older automatic probes selected Responses for CodeFlow + DeepSeek even though
@@ -28,8 +37,10 @@ if (stored.compatibilityVersion !== 1 && connection.mode === "custom" && connect
     const url = new URL(connection.baseUrl);
     if (url.protocol === "https:" && url.hostname === "codeflow.sh" && !url.port && !url.username && !url.password && !url.search && !url.hash) {
       const next = { ...connection, wireApi: "chat", compatibilityVersion: 1 };
-      if (writeAtomic(FILE, JSON.stringify(next), { mode: 0o600 })) {
+      const nextProfiles=profiles.map(p=>p.id===connection.providerId?{...p,wireApi:"chat"}:p);
+      if (writeAtomic(FILE, JSON.stringify({...next,profiles:nextProfiles}), { mode: 0o600 })) {
         connection = next;
+        profiles=nextProfiles;
         log("[codex] 已迁移旧 CodeFlow DeepSeek 连接：Responses → Chat Completions（保留密钥与模型）");
       }
     }
@@ -49,32 +60,40 @@ export function normalizeApiUrl(value) {
 
 // Draft operations share save validation, without saving a key or restarting the engine.
 export function connectionDraft(body, { requireModel = true, allowAuto = false } = {}) {
-  const baseUrl = normalizeApiUrl(body.baseUrl);
-  const model = typeof body.model === "string" ? body.model.trim() : "";
+  const profile=body.providerId?profiles.find(p=>p.id===body.providerId):null;
+  if(body.providerId&&!profile)throw invalid("提供商配置不存在，请刷新后重试");
+  const baseUrl = normalizeApiUrl(body.baseUrl ?? profile?.baseUrl);
+  const model = typeof body.model === "string" ? body.model.trim() : profile?.model || "";
   if ((requireModel && !model) || model.length > 200 || /[\x00-\x1f\x7f]/.test(model)) throw invalid("请输入有效的模型名称");
-  const wireApi = body.wireApi || "responses";
+  const wireApi = body.wireApi || profile?.wireApi || "responses";
   if (!["responses", "chat", ...(allowAuto ? ["auto"] : [])].includes(wireApi)) throw invalid("请选择 Responses 或 Chat Completions 协议，自动识别需先测试连接");
-  const noKey = body.noKey === true;
+  const noKey = body.noKey === undefined ? profile?.noKey === true : body.noKey === true;
   let apiKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   if (apiKey.length > 16384 || /[\x00-\x1f\x7f]/.test(apiKey)) throw invalid("API Key 格式无效");
   if (noKey) apiKey = "";
   else if (!apiKey) {
-    if (baseUrl !== connection.baseUrl || !connection.apiKey) throw invalid("请输入 API Key，或选择接口无需密钥");
-    apiKey = connection.apiKey;
+    const previous=profile||connection;
+    if (baseUrl !== previous.baseUrl || !previous.apiKey) throw invalid("请输入 API Key，或选择接口无需密钥");
+    apiKey = previous.apiKey;
   }
-  const effort = typeof body.effort === "string" ? body.effort : baseUrl === connection.baseUrl && model === connection.model ? connection.effort : "";
+  const savedSelection=modelSettings(baseUrl,model);
+  const effort = typeof body.effort === "string" ? body.effort : savedSelection.effort ?? (baseUrl === connection.baseUrl && model === connection.model ? connection.effort : profile?.model===model?profile.effort||"":"");
   if (effort && !customModels(baseUrl, model).find(m => m.id === model)?.supportedReasoningEfforts.some(e => e.reasoningEffort === effort)) throw invalid("这个模型不支持所选思考强度");
-  const contextWindow = body.contextWindow === undefined ? baseUrl === connection.baseUrl && model === connection.model ? connection.contextWindow : 0 : body.contextWindow;
+  const contextWindow = body.contextWindow === undefined ? savedSelection.contextWindow ?? (baseUrl === connection.baseUrl && model === connection.model ? connection.contextWindow : profile?.model===model?profile.contextWindow||0:0) : body.contextWindow;
   if (!Number.isSafeInteger(contextWindow) || contextWindow < 0 || (contextWindow > 0 && contextWindow < 1024) || contextWindow > 1e9) throw invalid("上下文大小应为 1024 到 1000000000 的整数，留空使用默认值");
-  return { mode: "custom", baseUrl, model, apiKey, noKey, wireApi, effort, contextWindow };
+  return { mode: "custom", baseUrl, model, apiKey, noKey, wireApi, effort, contextWindow,
+    providerId:profile?.id || (baseUrl===connection.baseUrl?connection.providerId:profiles.find(p=>p.baseUrl===baseUrl)?.id) || crypto.randomUUID(),
+    name:typeof body.name==="string"?body.name.trim().slice(0,80):profile?.name || (baseUrl===connection.baseUrl?connection.name:"") };
 }
 
 export function connectionStatus() {
   let configured = false;
   try { configured = connection.mode === "custom" && normalizeApiUrl(connection.baseUrl) === connection.baseUrl && !!connection.model && (connection.noKey || !!connection.apiKey); } catch {}
   return { mode: connection.mode, baseUrl: connection.baseUrl, model: connection.model,
-    hasKey: !!connection.apiKey, noKey: connection.noKey, configured, wireApi: connection.wireApi, effort: connection.effort, contextWindow: connection.contextWindow };
+    hasKey: !!connection.apiKey, noKey: connection.noKey, configured, wireApi: connection.wireApi, effort: connection.effort, contextWindow: connection.contextWindow,providerId:connection.providerId,name:connection.name };
 }
+
+export function connectionProfiles(){return profiles.map(p=>{let name=p.name;try{name||=new URL(p.baseUrl).hostname;}catch{name||="Custom API";}return {id:p.id,mode:"custom",name,baseUrl:p.baseUrl,model:p.model,wireApi:p.wireApi,noKey:p.noKey,hasKey:!!p.apiKey,effort:p.effort||"",contextWindow:p.contextWindow||0,models:customModels(p.baseUrl,p.model)};});}
 
 export function connectionErrorMessage(error) {
   return safeApiMessage(error, connection.apiKey).replace(/sk-[A-Za-z0-9_-]{16,}/g, "[redacted]");
@@ -83,8 +102,10 @@ export function connectionErrorMessage(error) {
 export function updateConnection(body) {
   if (!["chatgpt", "custom"].includes(body.mode)) throw invalid("请选择连接方式");
   const next = { ...(body.mode === "custom" ? connectionDraft(body) : { ...connection, mode: body.mode }), compatibilityVersion: 1 };
-  if (!writeAtomic(FILE, JSON.stringify(next), { mode: 0o600 })) throw new Error("连接设置没有保存，请检查存储空间后重试");
-  connection = next;
+  const nextProfiles=next.mode==="custom"?[...profiles.filter(p=>p.id!==next.providerId),{...next,id:next.providerId}]:profiles;
+  if(nextProfiles.length>20)throw invalid("最多保存 20 个提供商");
+  if (!writeAtomic(FILE, JSON.stringify({...next,profiles:nextProfiles}), { mode: 0o600 })) throw new Error("连接设置没有保存，请检查存储空间后重试");
+  connection = next;profiles=nextProfiles;
   return connectionStatus();
 }
 

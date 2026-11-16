@@ -64,7 +64,7 @@ try {
   await until(() => cdp.eval("!!(window.__cc && window.CODEX && __cc.state.settings && __cc.srv.connected)"), "app boot");
   await until(() => cdp.eval("CODEX.state.thread?.id === 'a' && !CODEX.state.switching && document.querySelectorAll('.cx-thread-row').length === 3"), "Codex task restored");
   const click = async (sel) => {
-    await cdp.eval(`(() => { const e=document.querySelector(${q(sel)}); if(e?.closest('#cx-onboarding,#cx-preferences,#cx-mobile-menu')) e.scrollIntoView({block:'nearest'}); })()`);
+    await cdp.eval(`(() => { const e=document.querySelector(${q(sel)}); if(e?.closest('#cx-onboarding,#cx-preferences,#cx-mobile-menu,#cx-controls')) e.scrollIntoView({block:'nearest'}); })()`);
     await until(() => cdp.eval(`(() => { const e=document.querySelector(${q(sel)}); if(!e || e.disabled || !e.getClientRects().length) return false; const r=e.getBoundingClientRect(); const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2); return !!(hit && e.contains(hit)); })()`), "clickable " + sel);
     const p = await cdp.eval(`(() => { const r=document.querySelector(${q(sel)}).getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2}; })()`);
     await cdp.call("Input.dispatchMouseEvent", { type: "mousePressed", ...p, button: "left", clickCount: 1 }); await cdp.call("Input.dispatchMouseEvent", { type: "mouseReleased", ...p, button: "left", clickCount: 1 });
@@ -207,7 +207,14 @@ try {
   await until(() => cdp.eval("!document.querySelector('#cx-controls').open && document.activeElement.classList.contains('cx-add')"), "references Back restores focus");
   await click('[data-act=composer-model]');
   assert.equal(await cdp.eval("!!document.querySelector('#cx-compose-provider') && !!document.querySelector('#cx-compose-context') && !!document.querySelector('#cx-compose-effort')"),true);
-  await fill('#cx-compose-context','48000');await click('#cx-compose-model-form [type=submit]');
+  await until(()=>cdp.eval("!document.querySelector('#cx-compose-refresh').disabled && document.querySelectorAll('#cx-compose-model-list option').length===2"),"model catalog auto populated");
+  await fill('#cx-compose-context','48000');
+  fixture.codex.modelDelay=250;await click('#cx-compose-refresh');await fill('#cx-compose-context','52000');
+  await until(()=>cdp.eval("!document.querySelector('#cx-compose-refresh').disabled"),"delayed model refresh");
+  assert.equal(await cdp.eval("document.querySelector('#cx-compose-context').value"),"52000","late metadata never overwrites draft context");
+  await fill('#cx-compose-model','fixture-fast');await fill('#cx-compose-context','32000');await change('#cx-compose-effort','low');
+  await fill('#cx-compose-model','fixture-model');assert.equal(await cdp.eval("document.querySelector('#cx-compose-context').value"),"52000","model-specific draft restored");
+  fixture.codex.modelDelay=0;await fill('#cx-compose-context','48000');await screenshot('model-settings-populated');await click('#cx-compose-model-form [type=submit]');
   await until(()=>cdp.eval("!document.querySelector('#cx-controls').open && CODEX.state.status.contextWindow===48000"),"context override saved from composer");
   await click('[data-act=composer-permission]');fixture.codex.permissionFailure=true;
   await click('[data-act=permission-mode][data-mode=full]');await until(()=>cdp.eval("document.querySelector('#cx-controls-body').textContent.includes('Synthetic permission save failure')"),"permission save failure");
@@ -277,12 +284,13 @@ try {
   emitItem("item/completed", { id: "copy-mcp", type: "mcpToolCall", status: "completed", server: "fixture", tool: "read", arguments: { x: 1 }, result: { content: "full result" } });
   emitItem("item/completed", { id: "spacing-reason", type: "reasoning", summary: ["A compact summary."] });
   emitItem("item/completed", { id: "spacing-answer", type: "agentMessage", text: "A nearby answer." });
-  const responseMetric={threadId:"b",turnId:mobileTurn,provider:"fixture.test",model:"Codex Demo",effort:"high",firstOutputAt:1000,completedAt:3000,outputTokens:100,total:{inputTokens:800,outputTokens:100,cachedInputTokens:600}};
+  const responseMetric={threadId:"b",turnId:mobileTurn,provider:"fixture.test",providerId:"chatgpt",modelId:"fixture-model",model:"Codex Demo",effort:"high",firstOutputAt:1000,completedAt:3000,outputTokens:100,total:{inputTokens:800,outputTokens:100,cachedInputTokens:600}};
   fixture.codex.metrics[mobileTurn]=responseMetric;
   fixture.emit({type:"rpc",method:"thread/tokenUsage/updated",metric:responseMetric,params:{threadId:"b",turnId:mobileTurn,tokenUsage:{last:{totalTokens:900},total:responseMetric.total,modelContextWindow:64000}}});
-  await until(()=>cdp.eval("document.querySelector('[data-item=spacing-answer] .cx-response-meta')?.textContent.includes('75.0%')"),"output footer metrics");
-  assert.equal(await cdp.eval("document.querySelector('[data-item=spacing-answer] .cx-response-meta').textContent.includes('fixture.test · Codex Demo · high · 50.0 tok/s')"),true);
-  assert.equal(await cdp.eval("document.querySelectorAll('.cx-response-meta').length"),1,"one footer per turn");
+  await until(()=>cdp.eval("document.querySelector('#cx-composer-meta')?.textContent.includes('75.0%')"),"composer metrics below input");
+  assert.equal(await cdp.eval("document.querySelector('#cx-composer-meta').textContent.includes('50.0 tok/s')"),true);
+  assert.equal(await cdp.eval("document.querySelectorAll('.cx-response-meta').length"),0,"no metrics in assistant messages");
+  assert.equal(await cdp.eval("document.querySelector('#cx-composer-meta').getBoundingClientRect().top>=document.querySelector('.cx-composer').getBoundingClientRect().bottom"),true,"metrics physically below composer");
   await until(() => cdp.eval("!!document.querySelector('[data-item=spacing-answer] .cx-body p')"), "answer rendered for spacing measurement");
   assert.equal(await cdp.eval("document.querySelector('[data-item=copy-patch]>details').open || document.querySelector('[data-item=copy-mcp]>details').open"), false);
   const gap = await cdp.eval("document.querySelector('[data-item=spacing-answer]').getBoundingClientRect().top-document.querySelector('[data-item=spacing-reason]').getBoundingClientRect().bottom");
@@ -290,6 +298,7 @@ try {
   await cdp.eval("document.querySelector('[data-item=copy-patch] summary').scrollIntoView({block:'center'})");
   await click('[data-item=copy-patch] summary'); await click('[data-item=copy-patch] .cx-change summary'); await click('[data-item=copy-patch] [data-part=diff]');
   await until(() => cdp.eval("__copiedTools.at(-1) === '-old\\n+new\\n'"), "full diff copied");
+  fixture.codex.contextWindow=0;fixture.emit({type:"status",status:fixture.snapshot()});
   const usage = { last: { totalTokens: 32000 }, total: { totalTokens: 90000 }, modelContextWindow: 64000 };
   fixture.codex.contexts.b = usage;
   fixture.emit({ type: "rpc", method: "thread/tokenUsage/updated", params: { threadId: "b", tokenUsage: usage } });
@@ -546,6 +555,28 @@ try {
   await cdp.call("Page.reload", {}); await until(() => cdp.eval("!!(window.__cc && window.CODEX && __cc.srv.connected)"), "custom provider reload");
 
   await until(() => cdp.eval("CODEX.state.status?.connection.mode === 'custom' && document.querySelector('#cx-onboarding').hidden && !CODEX.state.switching"), "custom connection persists without account");
+  await click('[data-act=composer-model]');
+  await until(()=>cdp.eval("!document.querySelector('#cx-compose-refresh').disabled"),"custom model metadata fetched");
+  await fill('#cx-compose-model','unknown-vision');await fill('#cx-compose-context','96000');
+  await click('.cx-model-advanced summary');await change('#cx-compose-input-mode','manual');
+  await cdp.eval("document.querySelector('#cx-compose-modalities input[value=text]').checked=true;document.querySelector('#cx-compose-modalities input[value=image]').checked=true");
+  await change('#cx-compose-effort-mode','manual');await fill('#cx-compose-effort-values','low, deep');await change('#cx-compose-effort','deep');
+  await screenshot('model-manual-capabilities');await click('#cx-compose-model-form [type=submit]');
+  await until(()=>cdp.eval("!document.querySelector('#cx-controls').open && CODEX.state.model==='unknown-vision' && CODEX.state.effort==='deep'"),"manual capabilities saved for unknown provider model");
+  assert.deepEqual(fixture.codex.requests.filter(r=>r.path==='/api/codex/settings').at(-1).body.capabilities,{inputModalities:['text','image'],supportedReasoningEfforts:['low','deep']});
+  await click('[data-act=composer-model]');
+  assert.equal(await cdp.eval("document.querySelector('#cx-compose-context').value"),'96000');assert.equal(await cdp.eval("document.querySelector('#cx-compose-effort').value"),'deep');
+  await cdp.eval("document.querySelector('#cx-controls').close()");
+  const originalProfile={...fixture.codex.connection};
+  fixture.codex.profiles.push({id:'saved-two',name:'Second API',baseUrl:'https://second.example.test/v1',model:'second-model',noKey:true,wireApi:'responses',models:[{id:'second-model',displayName:'Second Model',contextWindow:64000,supportedReasoningEfforts:[]}]});
+  fixture.emit({type:'status',status:fixture.snapshot()});await sleep(60);await click('[data-act=composer-model]');await change('#cx-compose-provider','saved-two');
+  await until(()=>cdp.eval("!document.querySelector('#cx-compose-refresh').disabled"),"second saved provider refreshed");
+  await click('#cx-compose-model-form [type=submit]');
+  await until(()=>cdp.eval("!document.querySelector('#cx-controls').open && CODEX.state.status.connection.providerId==='saved-two'"),"saved provider and model switched together");
+  assert.equal(fixture.codex.requests.filter(r=>r.path==='/api/codex/settings').at(-1).body.providerId,'saved-two');
+  fixture.codex.connection=originalProfile;fixture.codex.model=originalProfile.model;fixture.codex.effort=originalProfile.effort;fixture.codex.contextWindow=originalProfile.contextWindow;fixture.emit({type:'status',status:fixture.snapshot()});
+  await until(()=>cdp.eval("CODEX.state.status.connection.providerId==='custom'"),"original custom profile restored");
+  ok('unknown model manual capabilities, persisted settings and saved provider IDs in composer');
   const previousConnection = { ...fixture.codex.connection };
   fixture.codex.connection = { ...previousConnection, baseUrl: "https://codeflow.sh/v1", wireApi: "responses", model: "deepseek-ai/DeepSeek-V4.1-Flash" };
   fixture.emit({ type: "status", status: fixture.snapshot() });
@@ -628,6 +659,8 @@ try {
   console.log(JSON.stringify({ synthetic: true, viewports: ["1440x960", "820x1180", "390x844", "320x568"], languages: ["zh", "en"], errors: 0, externalRequests: 0, realModelCalls: 0 }));
 } catch (err) {
   if(cdp)try{console.error(JSON.stringify(await cdp.eval("({controls:document.querySelector('#cx-controls-body')?.innerText,loading:CODEX.state.referenceLoading,error:CODEX.state.referenceError,sequence:CODEX.state.referenceSeq})")));}catch{}
+  console.error(JSON.stringify({errors,requests:fixture?.codex.requests.slice(-8)}));
+  if(cdp)console.error(JSON.stringify(await cdp.eval("[...document.querySelectorAll('#cx-compose-model-form input,#cx-compose-model-form select')].map(e=>({id:e.id,value:e.value,valid:e.checkValidity(),message:e.validationMessage}))")));
   console.error(err.stack); if (cdp) { try { console.error(JSON.stringify(await cdp.eval("({thread:window.CODEX?.state.threadId,layout:[...document.querySelectorAll('.cx-side,.cx-pin,#pages,#drawer')].map(e=>{const r=e.getBoundingClientRect();return {id:e.id,cls:e.className,rect:[r.x,r.y,r.width,r.height],inert:e.inert,visibility:getComputedStyle(e).visibility,hit:document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)?.outerHTML.slice(0,220)}})})"))); } catch {} } process.exitCode = 1;
 } finally {
   if (cdp) { try { await cdp.call("Browser.close"); } catch {} cdp.ws.close(); }

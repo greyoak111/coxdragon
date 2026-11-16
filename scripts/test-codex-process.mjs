@@ -14,6 +14,7 @@ const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "coxdragon-process-test-
 Object.assign(process.env, { CCAPP_TEST: "1", CCAPP_HOME: temporary, CCAPP_WORKSPACE: temporary, CCAPP_LOG: path.join(temporary, "gateway.log") });
 const { updateConnection, prepareConnectionLaunch } = await import("../gateway/gw/codex-connection.mjs");
 const { rememberApiModels } = await import("../gateway/gw/codex-models.mjs");
+const { readThreadUsage } = await import("../gateway/gw/codex-context.mjs");
 const marker = path.join(temporary, "executed.txt");
 const quote = text => "'" + text.replaceAll("'", "'\\''") + "'";
 const command = process.platform === "win32" ? `Add-Content -LiteralPath '${marker.replaceAll("'", "''")}' -Value 'executed'` : `printf '%s\\n' executed >> ${quote(marker)}`;
@@ -40,6 +41,7 @@ const server = http.createServer(async (req, res) => {
       // Fail the response AFTER the preceding request's tool has executed.
       if (!(mode === "responses-interrupted" && requests.length > 1)) send({ type: "response.completed", response: { id, object: "response", status: "completed", output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } });
     } else {
+      assert.equal(body.stream_options?.include_usage,true,"流式 Chat 请求要求服务商返回 usage");
       assert(body.tools.some(tool => tool.function.name === "exec_command"));
       assert.equal(body.reasoning_effort, "high", "Chat 适配器保留所选思考强度");
       send({ choices: [{ delta: { reasoning_content: "Synthetic reasoning summary." }, finish_reason: null }] });
@@ -52,7 +54,10 @@ const server = http.createServer(async (req, res) => {
         if (mode === "chat-unknown-tool") calls.push({ ...tool, index: 1, id: "call_invalid", function: { name: "nonexistent_tool", arguments: "{}" } });
         send({ choices: [{ delta: { tool_calls: calls }, finish_reason: mode === "chat-truncated" ? null : "tool_calls" }] });
       }
-      if (mode !== "chat-truncated") res.write("data: [DONE]\n\n");
+      if (mode !== "chat-truncated") {
+        send({choices:[],usage:{prompt_tokens:800,completion_tokens:100,total_tokens:900,prompt_tokens_details:{cached_tokens:600}}});
+        res.write("data: [DONE]\n\n");
+      }
     }
     res.end();
   } catch (error) { res.destroy(error); }
@@ -128,6 +133,11 @@ try {
   assert(usage?.params.tokenUsage.last.totalTokens > 0, "实际引擎报告最近请求 token 数");
   assert(usage.params.tokenUsage.modelContextWindow > 0 && usage.params.tokenUsage.modelContextWindow <= 64000, "使用所选模型上限而非引擎默认值");
   assert.equal(requests[0].reasoning?.effort, "high", "所选思考强度发送到真实 Responses 请求");
+  const persisted=await first.driver.request("thread/read",{threadId:first.thread.id,includeTurns:false});
+  const restored=await readThreadUsage(persisted.thread.path,path.join(temporary,".codex","sessions"),first.thread.id);
+  assert(restored?.last.totalTokens>0,"真实引擎 jsonl 能恢复上下文");
+  assert.equal(restored.last.totalTokens,usage.params.tokenUsage.last.totalTokens);
+  results.push("restored actual engine transcript usage without a frontend cache");
   await first.driver.request("thread/compact/start", { threadId: first.thread.id });
   const compactEnd = Date.now() + 20000;
   while (Date.now() < compactEnd && !first.driver.events.some(event => event.method === "item/completed" && event.params.item.type === "contextCompaction")) await new Promise(resolve => setTimeout(resolve, 50));
@@ -180,7 +190,12 @@ try {
     assert.equal(completed.status, valid ? "completed" : "failed", scenario + ": status");
     assert.equal(requests.length, valid || interrupted ? 2 : 1, scenario + ": no automatic stream replay");
     assert.equal(executionCount(), valid || interrupted ? 1 : 0, scenario + ": command count");
-    if (valid) assert(driver.events.some(event => event.method === "item/reasoning/summaryTextDelta" && event.params.delta.includes("Synthetic reasoning summary.")));
+    if (valid) {
+      assert(driver.events.some(event => event.method === "item/reasoning/summaryTextDelta" && event.params.delta.includes("Synthetic reasoning summary.")));
+      const reported=driver.events.filter(event=>event.method==="thread/tokenUsage/updated").at(-1)?.params.tokenUsage;
+      assert.equal(reported.last.inputTokens,800);assert.equal(reported.last.outputTokens,100);assert.equal(reported.last.cachedInputTokens,600);
+      results.push("real Chat adapter usage and cache hits reach native tokenUsage events");
+    }
     results.push({ scenario, status: completed.status, providerRequests: requests.length, executedCommands: executionCount() });
   }
   console.log(JSON.stringify({ pinnedAppServer: "0.166.0", realProcess: true, realModelCalls: 0, results }, null, 2));

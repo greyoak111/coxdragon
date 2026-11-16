@@ -26,9 +26,10 @@ import { NEXT, readBody, sendJson } from "./http.mjs";
 import { SETTINGS } from "./settings-store.mjs";
 import { runFlag } from "./activity.mjs";
 import { loadState, writeAtomic as saveState } from "./statefile.mjs";
-import { connectionStatus, prepareConnectionLaunch, updateConnection, updateCustomSelection, connectionErrorMessage, CUSTOM_PROVIDER } from "./codex-connection.mjs";
+import { connectionStatus, connectionProfiles, prepareConnectionLaunch, updateConnection, updateCustomSelection, connectionErrorMessage, CUSTOM_PROVIDER } from "./codex-connection.mjs";
 import { discoverApiModels, testApiConnection } from "./codex-api.mjs";
-import { customModels, modelDetails } from "./codex-models.mjs";
+import { customModels, modelDetails, modelSettings, saveModelSettings, configuredModel, validateModelSettings } from "./codex-models.mjs";
+import { readThreadUsage, normalizeTokenUsage } from "./codex-context.mjs";
 
 // ── 钉住的 Codex 版本 ─────────────────────────────────────────────────
 // 升级只改这里，并把新的 tar / 二进制 sha256 一起换掉。和 cccodroid 的 devkit 无关。
@@ -406,6 +407,7 @@ const S = {
   titles: new Map(),
   diagnostics: [],
 };
+if(connectionStatus().mode==="custom")S.models=customModels(connectionStatus().baseUrl,connectionStatus().model);
 
 // Deliberately omit prompts, replies, tool arguments and account credentials.
 // Native diagnostic export reads this bounded snapshot even if the UI reconnects.
@@ -466,6 +468,7 @@ function slimModel(m) {
     inputModalities: m.inputModalities || [],
     outputModalities: m.outputModalities || [], contextWindow: m.contextWindow || null,
     reasoning: m.reasoning ?? null, capabilitySources: m.capabilitySources || {},
+    settings:m.settings||{},
     serviceTiers: m.serviceTiers || [],
     defaultServiceTier: m.defaultServiceTier ?? null,
     multiAgentVersion: m.multiAgentVersion ?? null,
@@ -499,8 +502,7 @@ function status() {
     activeTurn: S.activeTurn ? { id: S.activeTurn.id, status: S.activeTurn.status } : null,
     runningTurns: [...S.runningTurns].map(([threadId, turn]) => ({ threadId, turn: { id: turn.id, status: turn.status } })),
     contexts: Object.fromEntries(S.contexts), compacting: [...S.compacting], metrics: Object.fromEntries(S.metrics), contextWindow: contextOverride(),
-    providers: [{ id: "chatgpt", name: "ChatGPT", models: connectionStatus().mode === "chatgpt" ? S.models.map(slimModel) : [] },
-      { id: "custom", name: providerName(), models: connectionStatus().model ? customModels(connectionStatus().baseUrl, connectionStatus().model) : [] }],
+    providers: [{ id: "chatgpt",mode:"chatgpt", name: "ChatGPT", models: connectionStatus().mode === "chatgpt" ? S.models.map(slimModel) : [] },...connectionProfiles().map(p=>({...p,models:p.models.map(slimModel)}))],
     approvals: [...S.approvals.values()].map((p) => ({ ...p, id: String(p.id) })),
     cwd: S.cwd,
     model: S.model || "",
@@ -523,16 +525,34 @@ async function refreshAccount() {
 }
 async function refreshModels() {
   const rpc = S.rpc, generation = S.generation;
-  if (!rpc) return [];
   const connection = connectionStatus();
   if (connection.mode === "custom") {
     S.model = connection.model; S.effort = connection.effort || "";
     S.models = customModels(connection.baseUrl, connection.model);
     return S.models;
   }
-  try { const r = await rpc.request("model/list", {}); assertRpc(rpc, generation); S.models = Array.isArray(r && r.data) ? r.data.map(m => ({ ...m, ...modelDetails(m, { engine: true }) })) : []; }
+  if (!rpc) return [];
+  try {
+    const models=[],seen=new Set();let cursor;
+    do{const r=await rpc.request("model/list",{...(cursor?{cursor}:{}),limit:100});assertRpc(rpc,generation);models.push(...(Array.isArray(r?.data)?r.data:[]));cursor=r?.nextCursor;if(!cursor||seen.has(cursor))break;seen.add(cursor);}while(models.length<2000);
+    S.models=models.map(m=>configuredModel("chatgpt",{...m,...modelDetails(m,{engine:true})}));
+  }
   catch (e) { log("[codex] model/list 失败：" + errMsg(e)); }
   return S.models;
+}
+
+async function loadModels(providerId,{signal}={}) {
+  if(providerId==="chatgpt"){
+    if(connectionStatus().mode!=="chatgpt")return {ok:false,models:[],message:"请先切换到 ChatGPT，再获取账号模型"};
+    await ensureRpc();await refreshModels();
+    return {ok:S.models.length>0,models:S.models.map(slimModel),status:status(),message:S.models.length?"":"未获取到账号模型，请检查登录状态"};
+  }
+  const provider=connectionProfiles().find(p=>p.id===providerId);
+  if(!provider)throw Object.assign(new Error("请先配置提供商"),{statusCode:400});
+  const result=await discoverApiModels({providerId},{signal});
+  if(connectionStatus().mode==="custom"&&connectionStatus().providerId===providerId)await refreshModels();
+  broadcast({type:"status",status:status()});
+  return {...result,models:customModels(provider.baseUrl,provider.model).map(slimModel),status:status()};
 }
 
 let contextSaveTimer;
@@ -544,11 +564,11 @@ function saveContexts() {
 function rememberUsage(threadId, usage, turnId) {
   if (typeof threadId !== "string" || !usage || !usage.last) return;
   const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
-  const breakdown = value => Object.fromEntries(["totalTokens", "inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens"].map(key => [key, count(value?.[key])]));
+  const breakdown = value => normalizeTokenUsage(value);
   if (count(usage.last.totalTokens) == null) return;
   S.contexts.delete(threadId);
   S.contexts.set(threadId, { last: breakdown(usage.last), total: breakdown(usage.total),
-    modelContextWindow: count(usage.modelContextWindow) || null, model: S.model, updatedAt: Date.now() });
+    modelContextWindow: count(usage.modelContextWindow) || null, model: S.model||S.activeThread?.model||"",providerId:connectionStatus().mode==="custom"?connectionStatus().providerId:"chatgpt", source:"codex",stale:false,updatedAt: Date.now() });
   const metric = S.metrics.get(turnId);
   if (metric) {
     const totalOutput = count(usage.total?.outputTokens), lastOutput = count(usage.last?.outputTokens);
@@ -575,7 +595,7 @@ function handleNotify(m) {
       if (m.params?.item?.type === "contextCompaction") S.compacting.add(m.params.threadId);
       break;
     case "item/completed":
-      if (m.params?.item?.type === "contextCompaction") S.compacting.delete(m.params.threadId);
+      if (m.params?.item?.type === "contextCompaction") {S.compacting.delete(m.params.threadId);const context=S.contexts.get(m.params.threadId);if(context)context.stale=true;}
       break;
     case "turn/started": {
       const p = m.params || {};
@@ -584,7 +604,7 @@ function handleNotify(m) {
       if (p.turn?.id && !S.metrics.has(p.turn.id)) {
         const c = connectionStatus(); let provider = "ChatGPT"; try { if (c.mode === "custom") provider = new URL(c.baseUrl).hostname; } catch {}
         const selected = S.models.find(m => m.id === S.model) || S.models.find(m => m.isDefault);
-        S.metrics.set(p.turn.id, { threadId: p.threadId, turnId: p.turn.id, provider, model: selected?.displayName || S.model || "", effort: S.effort || selected?.defaultReasoningEffort || "", startedAt: Date.now(), firstOutputAt: null, baseOutput: S.contexts.get(p.threadId)?.total?.outputTokens ?? null, outputTokens: null });
+        S.metrics.set(p.turn.id, { threadId: p.threadId, turnId: p.turn.id, provider, providerId:c.mode==="custom"?c.providerId:"chatgpt",modelId:S.model||selected?.id||"",model: selected?.displayName || S.model || "", effort: S.effort || selected?.defaultReasoningEffort || "", startedAt: Date.now(), firstOutputAt: null, baseOutput: S.contexts.get(p.threadId)?.total?.outputTokens ?? null, outputTokens: null });
         if (S.metrics.size > 300) S.metrics.delete(S.metrics.keys().next().value);
       }
       if (p.threadId === S.activeThread?.id) S.activeTurn = p.turn || null;
@@ -627,7 +647,7 @@ function handleNotify(m) {
   }
   if (["turn/started", "turn/completed", "error"].includes(m.method)) recordTaskEvent(m.method, m.params);
   if (["turn/started", "turn/completed", "serverRequest/resolved"].includes(m.method) || (["item/started", "item/completed"].includes(m.method) && m.params?.item?.type === "contextCompaction")) activityChanged(done);
-  broadcast({ type: "rpc", method: m.method, params: m.params, metric: S.metrics.get(m.params?.turnId || m.params?.turn?.id) });
+  broadcast({ type: "rpc", method: m.method, params: m.params, metric: S.metrics.get(m.params?.turnId || m.params?.turn?.id),...(m.method==="thread/tokenUsage/updated"?{context:S.contexts.get(m.params?.threadId)}:{}) });
 }
 
 const APPROVAL_METHODS = new Set([
@@ -788,6 +808,10 @@ async function resumeThread(threadId, { select = true } = {}) {
     }, 60000);
     check();
     if (r && r.thread) {
+      const restored=await readThreadUsage(r.thread.path,path.join(CODEX_HOME,"sessions"),r.thread.id);check();
+      if(restored&&(!S.contexts.has(r.thread.id)||restored.updatedAt>S.contexts.get(r.thread.id).updatedAt)){
+        S.contexts.set(r.thread.id,restored);saveContexts();
+      }
       S.loadedThreads.add(r.thread.id);
       if(r.thread.cwd)S.threadCwds.set(r.thread.id,r.thread.cwd);
       if (select) S.activeThread = r.thread;
@@ -911,6 +935,46 @@ function approve(id, decision, answers) {
 }
 
 function updateSettings(body) {
+  const c=connectionStatus(),currentId=c.mode==="custom"?c.providerId:"chatgpt",targetId=body.providerId||currentId;
+  const target=targetId==="chatgpt"?null:connectionProfiles().find(p=>p.id===targetId);
+  if(targetId!=="chatgpt"&&!target)throw new Error("提供商配置不存在，请刷新后重试");
+  const switching=targetId!==currentId,scope=target?.baseUrl||"chatgpt";
+  const id=(typeof body.model==="string"?body.model:switching?target?.model||prefs.model||"":S.model)||(target?.model||"");
+  if(id.length>200||/[\x00-\x1f\x7f]/.test(id))throw new Error("模型名称无效");
+  const previous={...modelSettings(scope,id)};
+  if(body.capabilities!==undefined)validateModelSettings(body.capabilities);
+  // Validate selections against proposed user declarations, and restore them if
+  // the connection/prefs write fails. Public catalog entries never receive keys.
+  const same=!switching&&id===S.model;
+  const selection={...body,model:id,effort:body.effort??previous.effort??(same?S.effort:""),contextWindow:body.contextWindow??previous.contextWindow??(same?contextOverride():0)};
+  const config={...previous,...(body.capabilities||{}),contextWindow:selection.contextWindow,effort:selection.effort};
+  validateModelSettings(config);
+  if(codexActivity().busy||S.starting)throw Object.assign(new Error("请等待任务结束后再切换模型"),{statusCode:409});
+  saveModelSettings(scope,id,config);
+  const before=S.models;
+  try {
+    const models=target?customModels(scope,id):S.models.map(m=>configuredModel(scope,m));
+    const selected=models.find(m=>m.id===id||m.model===id);
+    if(selection.effort&&(!selected||!selected.supportedReasoningEfforts?.some(e=>e.reasoningEffort===selection.effort)))throw new Error("这个模型不支持所选思考强度");
+    if(switching){
+      // Validate and save the entire selection in one API operation; the UI never
+      // switches a provider first and then tries to repair a failed model save.
+      if(target)setConnection({mode:"custom",providerId:targetId,model:id,effort:selection.effort,contextWindow:selection.contextWindow});
+      else {
+        const next={...prefs,model:id,effort:selection.effort,contextWindow:selection.contextWindow};
+        if(!saveState(PREF_FILE,JSON.stringify(next),{mode:0o600}))throw new Error("设置没有保存");
+        try{setConnection({mode:"chatgpt"});}catch(error){saveState(PREF_FILE,JSON.stringify(prefs),{mode:0o600});throw error;}
+        Object.assign(prefs,next);S.model=id;S.effort=selection.effort;broadcast({type:"status",status:status()});
+      }
+      return {model:id,effort:selection.effort,contextWindow:selection.contextWindow,status:status()};
+    }
+    S.models=models;
+    const result=applySettings(selection);
+    return body.providerId?{...result,status:status()}:result;
+  }
+  catch(error){saveModelSettings(scope,id,previous,{replace:true});S.models=before;throw error;}
+}
+function applySettings(body) {
   let model = typeof body.model === "string" ? body.model : S.model;
   const effort = typeof body.effort === "string" ? body.effort : S.effort;
   if (model.length > 200 || effort.length > 40) throw new Error("设置值太长");
@@ -1071,6 +1135,13 @@ export async function routeCodex(req, res, u, p) {
         return json(res, 200, updateSettings(body));
       }
       if (p === "/api/codex/connection") return json(res, 200, setConnection(body));
+      if (p === "/api/codex/models") {
+        if(S.connectionProbe)return json(res,429,{error:"模型获取正在进行，请稍后重试"});
+        const controller=new AbortController();S.connectionProbe=controller;
+        const cancel=()=>{if(!res.writableEnded)controller.abort();};res.on("close",cancel);
+        try{return json(res,200,await loadModels(body.providerId|| (connectionStatus().mode==="custom"?connectionStatus().providerId:"chatgpt"),{signal:controller.signal}));}
+        finally{res.off("close",cancel);if(S.connectionProbe===controller)S.connectionProbe=null;}
+      }
       if (p === "/api/codex/connection/models" || p === "/api/codex/connection/test") {
         if (S.connectionProbe) return json(res, 429, { error: "连接检测正在进行，请稍后重试" });
         const controller = new AbortController(); S.connectionProbe = controller;
@@ -1090,4 +1161,4 @@ export async function routeCodex(req, res, u, p) {
 }
 
 // 只供隔离测试注入协议替身，正式网关不暴露内部状态。
-export const _codexForTest = LIVE ? null : { S, status, handleNotify, handleRequest, startThread, startTurn, resumeThread, interruptTurn, compactThread, stopServer, approve, refreshModels, updateSettings, updatePermissions, referenceInput, setConnection, extensions, setSkill, downloadTo };
+export const _codexForTest = LIVE ? null : { S, status, handleNotify, handleRequest, startThread, startTurn, resumeThread, interruptTurn, compactThread, stopServer, approve, refreshModels, loadModels, updateSettings, updatePermissions, referenceInput, setConnection, extensions, setSkill, downloadTo };

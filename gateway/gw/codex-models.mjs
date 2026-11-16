@@ -9,6 +9,7 @@ import { readApiJson } from "./codex-api-http.mjs";
 const SNAPSHOT = new URL("../data/models-dev.json.gz", import.meta.url);
 const CACHE = path.join(CFG.home, "coxdragon-models-dev.json.gz");
 const PROVIDERS = path.join(CFG.home, "coxdragon-model-catalog.json");
+const SETTINGS = path.join(CFG.home, "coxdragon-model-settings.json");
 const object = value => value && typeof value === "object" && !Array.isArray(value);
 const positive = value => Number.isSafeInteger(value) && value > 0 && value <= 1e9 ? value : null;
 const strings = value => Array.isArray(value) ? [...new Set(value.filter(s => typeof s === "string" && /^[a-z][a-z0-9_-]{0,39}$/i.test(s)))].slice(0, 20) : null;
@@ -17,6 +18,7 @@ let catalog;
 try { if (fs.statSync(CACHE).size < (2 << 20)) catalog = JSON.parse(zlib.gunzipSync(fs.readFileSync(CACHE), { maxOutputLength: 16 << 20 })); } catch {}
 if (!object(catalog?.providers)) catalog = JSON.parse(zlib.gunzipSync(fs.readFileSync(SNAPSHOT)));
 const saved = loadState(PROVIDERS, { max: 4 << 20, shape: v => object(v) ? v : undefined }).data;
+const configured = loadState(SETTINGS, { max: 1 << 20, shape: v => object(v) ? v : undefined }).data;
 let refreshing = null, lastAttempt = 0;
 
 export function reduceModelCatalog(data) {
@@ -78,12 +80,13 @@ export function modelDetails(row, { baseUrl = "", engine = false, providers = ca
   const id = typeof row === "string" ? row : row.id;
   const api = typeof row === "string" ? {} : row;
   const match = lookup(id, baseUrl, providers), reference = match?.model || {};
-  const apiInput = modalities(api.inputModalities ?? api.modalities?.input);
-  const apiOutput = modalities(api.outputModalities ?? api.modalities?.output);
+  const apiInput = modalities(api.inputModalities ?? api.input_modalities ?? api.modalities?.input ?? api.input ?? api.architecture?.input_modalities);
+  const apiOutput = modalities(api.outputModalities ?? api.output_modalities ?? api.modalities?.output ?? api.output ?? api.architecture?.output_modalities);
   const optionValues = value => Array.isArray(value) && value.some(o => o?.type === "effort") ? strings(value.filter(o => o?.type === "effort").flatMap(o => Array.isArray(o.values) ? o.values : [])) : null;
-  const apiEfforts = Array.isArray(api.supportedReasoningEfforts) ? strings(api.supportedReasoningEfforts.map(e => typeof e === "string" ? e : e?.reasoningEffort)) : optionValues(api.reasoning_options);
+  const rawEfforts = api.supportedReasoningEfforts ?? api.supported_reasoning_efforts ?? api.reasoning_efforts;
+  const apiEfforts = Array.isArray(rawEfforts) ? strings(rawEfforts.map(e => typeof e === "string" ? e : e?.reasoningEffort)) : optionValues(api.reasoning_options);
   const efforts = api.reasoning === false ? [] : apiEfforts ?? optionValues(reference.reasoning_options) ?? [];
-  const declaredWindow = positive(api.contextWindow ?? api.context_length ?? api.context_window ?? api.limit?.context);
+  const declaredWindow = positive(api.contextWindow ?? api.context_length ?? api.context_window ?? api.max_input_tokens ?? api.top_provider?.context_length ?? api.limit?.context);
   const source = engine ? "codex" : "provider";
   return { id, model: typeof api.model === "string" ? api.model : id, displayName: [api.displayName, api.name, reference.name, id].find(v => typeof v === "string" && v.length > 0)?.slice(0, 200) || id,
     inputModalities: apiInput ?? modalities(reference.modalities?.input) ?? [],
@@ -120,6 +123,48 @@ export function customModels(baseUrl, selected) {
     if (row.capabilitySources?.reasoning === "provider") api.reasoning = row.reasoning;
     return modelDetails(api, { baseUrl });
   });
+  for(const key of Object.keys(configured)){
+    try{const [scope,id]=JSON.parse(key);if(scope===baseUrl&&typeof id==="string"&&id&&id.length<=200&&!models.some(m=>m.id===id))models.push(modelDetails(id,{baseUrl}));}catch{}
+  }
   if (!models.some(m => m.id === selected)) models.unshift(modelDetails(selected, { baseUrl }));
-  return models.map(m => ({ ...m, isDefault: m.id === selected }));
+  return models.map(m => ({ ...configuredModel(baseUrl,m), isDefault: m.id === selected }));
+}
+
+const settingKey=(scope,id)=>JSON.stringify([scope,id]);
+export function modelSettings(scope,id) { try{return validateModelSettings(configured[settingKey(scope,id)]||{});}catch{return {};} }
+export function validateModelSettings(value) {
+  if(!object(value))throw new Error("模型设置无效");
+  const next={};
+  if(Object.hasOwn(value,"contextWindow")){
+    if(value.contextWindow!==0&&(!positive(value.contextWindow)||value.contextWindow<1024))throw new Error("上下文大小应为 1024 到 1000000000 的整数，留空使用默认值");
+    next.contextWindow=value.contextWindow;
+  }
+  if(Object.hasOwn(value,"effort")){
+    if(typeof value.effort!=="string"||value.effort.length>40||value.effort&&!/^[a-z][a-z0-9_-]*$/i.test(value.effort))throw new Error("思考强度格式无效");
+    next.effort=value.effort;
+  }
+  for(const field of ["inputModalities","supportedReasoningEfforts"]){
+    if(!Object.hasOwn(value,field))continue;
+    if(value[field]===null){next[field]=null;continue;}
+    const result=field==="inputModalities"?modalities(value[field]):strings(value[field]);
+    if(!result||result.length!==value[field].length)throw new Error("模型能力设置无效");
+    next[field]=result;
+  }
+  return next;
+}
+export function saveModelSettings(scope,id,value,{replace=false}={}) {
+  const next={...configured,[settingKey(scope,id)]:{...(replace?{}:modelSettings(scope,id)),...validateModelSettings(value)}};
+  if(Object.keys(next).length>500||Buffer.byteLength(JSON.stringify(next))>1<<20)throw new Error("模型设置数量过多");
+  if(!writeAtomic(SETTINGS,JSON.stringify(next),{mode:0o600}))throw new Error("模型设置没有保存");
+  Object.assign(configured,next);return next[settingKey(scope,id)];
+}
+export function configuredModel(scope,model) {
+  const declaredCapabilities=model.declaredCapabilities || {contextWindow:model.contextWindow,inputModalities:model.inputModalities,
+    supportedReasoningEfforts:model.supportedReasoningEfforts,capabilitySources:model.capabilitySources};
+  const settings=modelSettings(scope,model.id),sources={...declaredCapabilities.capabilitySources};
+  const result={...model,...declaredCapabilities,declaredCapabilities,settings,capabilitySources:sources};
+  if(settings.contextWindow){result.contextWindow=settings.contextWindow;sources.context="user";}
+  if(settings.inputModalities!=null){result.inputModalities=settings.inputModalities;sources.input="user";}
+  if(settings.supportedReasoningEfforts!=null){result.supportedReasoningEfforts=settings.supportedReasoningEfforts.map(reasoningEffort=>({reasoningEffort,description:reasoningEffort}));sources.effort="user";}
+  return result;
 }

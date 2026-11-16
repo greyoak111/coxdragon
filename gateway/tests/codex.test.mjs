@@ -7,7 +7,7 @@ import { Readable } from "node:stream";
 import { CFG, PREFIX } from "../gw/config.mjs";
 import { activityBusy, runFlag } from "../gw/activity.mjs";
 import { _codexForTest as cx, codexActivity, onCodexActivity } from "../gw/codex.mjs";
-import { connectionStatus, connectionLaunch } from "../gw/codex-connection.mjs";
+import { connectionStatus, connectionLaunch, connectionProfiles } from "../gw/codex-connection.mjs";
 import { rememberApiModels } from "../gw/codex-models.mjs";
 
 // The legacy status module imports Android usage accounting. This test only reads
@@ -24,6 +24,29 @@ function reset() {
   cx.S.models = []; cx.S.model = ""; cx.S.effort = ""; cx.S.permissionMode = "ask"; cx.S.metrics.clear();
 }
 after(() => { cx.stopServer(); runFlag(false); });
+
+test("Codex：模型设置支持手动 ID、多提供商切换与按模型记忆，失败不改变连接",()=>{
+  reset();
+  try{
+    cx.setConnection({mode:"custom",baseUrl:"https://profile-one.test/v1",name:"One",model:"first",apiKey:"synthetic-private-key"});const first=connectionStatus().providerId;
+    cx.updateSettings({model:"manual-id",contextWindow:96000,effort:"deep",capabilities:{inputModalities:["text","image"],supportedReasoningEfforts:["deep"]}});
+    assert.equal(connectionStatus().model,"manual-id");assert(connectionLaunch().args.includes('model_reasoning_effort="deep"'));
+    cx.updateSettings({model:"other-id",effort:"",contextWindow:32000});
+    cx.updateSettings({model:"manual-id"});assert.equal(connectionStatus().effort,"deep");assert.equal(connectionStatus().contextWindow,96000);
+    cx.setConnection({mode:"custom",baseUrl:"https://profile-two.test/v1",model:"second",noKey:true});const second=connectionStatus().providerId;
+    assert.notEqual(first,second);assert.equal(JSON.stringify(connectionProfiles()).includes("synthetic-private-key"),false);
+    assert.throws(()=>cx.updateSettings({providerId:first,model:"manual-id",effort:"invalid"}),/思考强度/);assert.equal(connectionStatus().providerId,second);
+    const result=cx.updateSettings({providerId:first,model:"manual-id"});assert.equal(result.status.connection.providerId,first);assert.equal(connectionStatus().contextWindow,96000);assert.equal(connectionStatus().effort,"deep");
+    assert.equal(cx.S.models.find(m=>m.id==="manual-id").capabilitySources.input,"user");
+  }finally{cx.stopServer();cx.setConnection({mode:"chatgpt"});}
+});
+
+test("Codex：账号模型列表分页，打开设置可在冷模型列表中主动获取",async()=>{
+  reset();const calls=[];
+  cx.S.rpc.request=async(method,params)=>{calls.push({method,params});return params.cursor?{data:[{id:"page-two",inputModalities:["text","image"]}],nextCursor:null}:{data:[{id:"page-one"}],nextCursor:"next"};};
+  const result=await cx.loadModels("chatgpt");assert.equal(result.ok,true);assert.deepEqual(result.models.map(m=>m.id),["page-one","page-two"]);
+  assert.equal(calls[1].params.cursor,"next");assert.deepEqual(result.models[1].inputModalities,["text","image"]);
+});
 
 test("Codex：四种权限传给引擎，运行中禁止改变权限", async () => {
   reset(); const calls=[];

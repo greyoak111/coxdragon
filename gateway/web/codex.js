@@ -116,11 +116,11 @@
           <button class="cx-stop hidden" data-act="stop" id="cx-stop" title="${esc(t("停止"))}" aria-label="${esc(t("停止"))}"><span></span></button>
         </div>
       </div>
+      <div class="cx-composer-status"><details class="cx-context" id="cx-context"><summary><i id="cx-context-ring"></i><span>${esc(t("上下文"))}</span><span id="cx-context-label"></span></summary><div class="cx-context-pop" id="cx-context-pop"></div></details><div class="cx-composer-meta" id="cx-composer-meta" tabindex="0"></div></div>
       <div class="cx-foot">
         <span id="cx-state"><i class="cx-dot idle"></i>未连接</span>
         <button class="cx-foot-cwd" data-act="choose-project" id="cx-cwd"></button><span class="cx-enter-hint">${esc(t("Enter 发送 · Shift Enter 换行"))}</span>
       </div>
-      <details class="cx-context" id="cx-context"><summary><i id="cx-context-ring"></i><span>${esc(t("上下文"))}</span><span id="cx-context-label"></span></summary><div class="cx-context-pop" id="cx-context-pop"></div></details>
     </div>
   </main>
   <aside class="cx-review" id="cx-review" aria-label="${esc(t("改动审阅"))}" hidden>
@@ -478,13 +478,16 @@
       const models = (s.models || []).filter((m) => !m.hidden);
       const cur = models.find((m) => m.id === st.model) || models.find((m) => m.isDefault) || models[0];
       dom.workbench.querySelector(".cx-mobile-model span").textContent = cur?.displayName || st.model || "Codex";
+      const control=dom.workbench.querySelector(".cx-compose-model");
+      control.querySelector("span").textContent=cur?.displayName||st.model||t("模型");
+      control.title=[cur?.id||st.model,st.effort||cur?.defaultReasoningEffort||t("默认")].filter(Boolean).join(" · ");
       const efforts = cur && cur.supportedReasoningEfforts ? cur.supportedReasoningEfforts : [];
       dom.title.textContent = name;
       dom.project.textContent = leaf(currentCwd()); dom.project.title = currentCwd();
       dom.models.innerHTML = (models.length ? `<label class="cx-chip"><select id="cx-model" aria-label="${esc(t("模型"))}"><option value="">${esc(t("默认模型"))}</option>${models.map((m) => `<option value="${esc(m.id)}"${m.id === st.model ? " selected" : ""}>${esc(m.displayName || m.id)}</option>`).join("")}</select></label>` : `<span class="cx-chip">Codex</span>`)
         + (efforts.length ? `<label class="cx-chip"><select id="cx-effort" aria-label="${esc(t("思考强度"))}"><option value="">${esc(t("默认"))}</option>${efforts.map((x) => `<option value="${esc(x.reasoningEffort)}"${x.reasoningEffort === st.effort ? " selected" : ""}>${esc(x.reasoningEffort)}</option>`).join("")}</select></label>` : "");
       const msel = $("cx-model"), esel = $("cx-effort");
-      if (msel) { msel.disabled = st.settingsBusy; msel.addEventListener("change", () => saveSettings(msel.value, "")); }
+      if (msel) { msel.disabled = st.settingsBusy; msel.addEventListener("change", () => saveSettings(msel.value, undefined)); }
       if (esel) { esel.disabled = st.settingsBusy; esel.addEventListener("change", () => saveSettings(st.model, esel.value)); }
     }
 
@@ -518,7 +521,9 @@
   }
 
   const tokenNumber = value => value >= 1e6 ? (value / 1e6).toFixed(2).replace(/0+$/, "").replace(/\.$/, "") + "M" : value >= 1000 ? (value / 1000).toFixed(1).replace(/\.0$/, "") + "k" : String(value);
-  function selectedModel() { const models = st.status?.models || []; return models.find(m => m.id === st.model) || models.find(m => m.isDefault) || models[0]; }
+  function currentProviderId(){return st.status?.connection?.mode==="custom"?st.status.connection.providerId||"custom":"chatgpt";}
+  function providerModels(id=currentProviderId()){return st.status?.providers?.find(p=>p.id===id)?.models || (id===currentProviderId()?st.status?.models:[]) || [];}
+  function selectedModel() { const models = providerModels(); return models.find(m => m.id === st.model) || models.find(m => m.isDefault) || models[0]; }
   function capabilityText(model) {
     const labels = { text: "文本", image: "图片", audio: "音频", video: "视频", pdf: "PDF" };
     return (model?.inputModalities || []).map(m => t(labels[m] || m)).join(" / ") || t("能力未知");
@@ -526,13 +531,16 @@
   function paintContext() {
     if (!dom) return;
     const context = st.contexts.get(st.threadId), model = selectedModel();
-    const used = context?.last?.totalTokens, limit = context?.modelContextWindow || st.status?.contextWindow || model?.contextWindow;
-    const known = Number.isFinite(used), ratio = known && limit ? Math.min(100, Math.round(used / limit * 100)) : null;
+    const used = context?.last?.totalTokens;
+    const sameModel=!context?.model||context.model===(st.model||model?.id||st.thread?.model),sameProvider=context?.providerId?context.providerId===currentProviderId():context?.modelProvider?context.modelProvider==="openai"&&currentProviderId()==="chatgpt":true;
+    const limit = st.status?.contextWindow || (sameModel&&sameProvider?context?.modelContextWindow:null) || model?.contextWindow;
+    const known = Number.isFinite(used)&&!context?.stale, ratio = known&&sameModel&&sameProvider&&limit ? Math.round(used / limit * 100) : null;
     $("cx-context").dataset.level = ratio >= 90 ? "high" : ratio >= 75 ? "warn" : "normal";
-    $("cx-context-ring").style.setProperty("--usage", (ratio || 0) + "%");
-    $("cx-context-label").textContent = st.compacting.has(st.threadId) || st.compactBusy ? t("正在压缩…") : known ? tokenNumber(used) + (limit ? " / " + tokenNumber(limit) + " · " + ratio + "%" : " tokens") : limit ? "— / " + tokenNumber(limit) : t("等待统计");
+    $("cx-context-ring").style.setProperty("--usage", Math.min(100,ratio || 0) + "%");
+    $("cx-context-label").textContent = st.compacting.has(st.threadId) || st.compactBusy ? t("正在压缩…") : known ? tokenNumber(used) + (ratio!==null ? " / " + tokenNumber(limit) + " · " + ratio + "%" : " tokens · "+t("上次请求")) : context?.stale?t("压缩后待更新"):limit ? "— / " + tokenNumber(limit) : t("等待统计");
     const disabled = !st.threadId || st.running.has(st.threadId) || st.compacting.has(st.threadId) || st.compactBusy || st.switching;
-    $("cx-context-pop").innerHTML = `<b>${esc(t("上下文用量"))}</b><p>${esc(known ? t("最近请求占用") + "：" + used.toLocaleString() + " tokens" : t("发送后由引擎报告实际用量"))}</p><p>${esc(t("上下文上限"))}：${limit ? esc(limit.toLocaleString()) : esc(t("未知"))}${context?.modelContextWindow ? " · Codex" : model?.capabilitySources?.context ? " · " + esc(model.capabilitySources.context) : ""}</p><p>${esc(t("输入能力"))}：${esc(capabilityText(model))}</p><p>${esc(t("思考强度"))}：${esc(st.effort || model?.defaultReasoningEffort || t("默认"))}</p><p class="cx-context-note">${esc(t("压缩会保留任务摘要以继续对话，可能调用模型并产生费用。"))}</p><button data-act="compact"${disabled ? " disabled" : ""}>${esc(t("压缩上下文"))}</button><p class="cx-form-error" role="alert">${esc(st.compactError || "")}</p>`;
+    const limitSource=st.status?.contextWindow?t("手动设置"):sameModel&&sameProvider&&context?.modelContextWindow?"Codex":model?.capabilitySources?.context||"";
+    $("cx-context-pop").innerHTML = `<b>${esc(t("上下文用量"))}</b><p>${esc(known ? t("最近请求占用") + "：" + used.toLocaleString() + " tokens" : t("发送后由引擎报告实际用量"))}</p>${!sameModel||!sameProvider?`<p>${esc(t("占用来自上次请求；切换模型后将在下一次请求更新。"))}</p>`:""}<p>${esc(t("上下文上限"))}：${limit ? esc(limit.toLocaleString()) : esc(t("未知"))}${limitSource?" · "+esc(limitSource):""}</p><p>${esc(t("统计来源"))}：${esc(context?.source==="history"?t("引擎会话记录"):"Codex")}</p><p>${esc(t("输入能力"))}：${esc(capabilityText(model))}</p><p>${esc(t("思考强度"))}：${esc(st.effort || model?.defaultReasoningEffort || t("默认"))}</p><p class="cx-context-note">${esc(t("压缩会保留任务摘要以继续对话，可能调用模型并产生费用。"))}</p><button data-act="compact"${disabled ? " disabled" : ""}>${esc(t("压缩上下文"))}</button><p class="cx-form-error" role="alert">${esc(st.compactError || "")}</p>`;
   }
   async function compact() {
     const target = st.threadId;
@@ -991,9 +999,10 @@
     const m = ev.method, p = ev.params || {};
     if(ev.metric?.turnId)st.metrics.set(ev.metric.turnId,ev.metric);
     if (m === "thread/tokenUsage/updated" && p.threadId) {
-      st.contexts.set(p.threadId, p.tokenUsage); paintContext(); paintMetrics(); return;
+      st.contexts.set(p.threadId, ev.context||{...p.tokenUsage,source:"codex",model:ev.metric?.modelId||st.model,providerId:currentProviderId()}); paintContext(); paintMetrics(); return;
     }
     if (m === "item/started" && p.item?.type === "contextCompaction") st.compacting.add(p.threadId);
+    if (m === "item/completed" && p.item?.type === "contextCompaction") {const context=st.contexts.get(p.threadId);if(context)context.stale=true;}
     if ((m === "item/completed" && p.item?.type === "contextCompaction") || m === "turn/completed") st.compacting.delete(p.threadId);
     if (m === "item/started" || m === "item/completed" || m === "turn/completed") paint();
     if (m === "turn/started" && p.threadId && p.turn) st.running.set(p.threadId, p.turn);
@@ -1280,11 +1289,12 @@
     catch (e) { toast(e.message, true); }
   }
 
-  async function saveSettings(model, effort, contextWindow) {
+  async function saveSettings(model, effort, contextWindow, options = {}) {
     if (st.settingsBusy) return;
     st.settingsBusy = true; paint();
     try {
-      const saved = await post("/api/codex/settings", { model, effort, ...(contextWindow === undefined ? {} : { contextWindow }) });
+      const saved = await post("/api/codex/settings", { model, ...(effort === undefined ? {} : { effort }), ...(contextWindow === undefined ? {} : { contextWindow }), ...options });
+      if (saved.status) syncStatus(saved.status);
       st.model = saved.model; st.effort = saved.effort;
       if (st.status) Object.assign(st.status, saved);
       LS.set("model", st.model); LS.set("effort", st.effort);
@@ -1295,7 +1305,7 @@
   }
 
   function openControls(tab) {
-    ensureDom(); st.controlTab = tab;
+    ensureDom(); st.cancelModelControls?.(); st.controlTab = tab;
     $("cx-controls").dataset.tab=tab;
     $("cx-controls-title").textContent = t(tab === "model" ? "模型设置" : tab === "permission" ? "权限控制" : "添加引用");
     if (tab === "model") paintModelControls();
@@ -1304,40 +1314,79 @@
     if (!$("cx-controls").open) $("cx-controls").showModal();
   }
   function paintModelControls() {
-    const box = $("cx-controls-body"), s = st.status || {}, custom = s.connection?.mode === "custom";
-    const providers = s.providers?.length ? s.providers : [{ id:"chatgpt", name:"ChatGPT", models: custom ? [] : s.models || [] }, { id:"custom", name:s.connection?.baseUrl || "Custom API", models: custom ? s.models || [] : [] }];
-    box.innerHTML = `<form id="cx-compose-model-form"><label>${esc(t("提供商"))}<select id="cx-compose-provider">${providers.map(p=>`<option value="${esc(p.id)}"${p.id === (custom ? "custom" : "chatgpt") ? " selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label><button type="button" data-act="composer-configure">${esc(t("配置提供商"))}</button><label>${esc(t("模型"))}<select id="cx-compose-model"></select></label><p id="cx-compose-capabilities"></p><label>${esc(t("上下文大小"))}<input id="cx-compose-context" inputmode="numeric" type="number" min="1024" max="1000000000" step="1" placeholder="${esc(t("自动"))}" value="${s.contextWindow || ""}"></label><p class="cx-field-note">${esc(t("留空跟随模型；修改上限会在空闲时重建引擎。"))}</p><label>${esc(t("思考强度"))}<select id="cx-compose-effort"></select></label><button type="submit" class="cx-primary">${esc(t("保存"))}</button><p class="cx-form-error" id="cx-compose-model-error" role="alert"></p></form>`;
-    const provider = $("cx-compose-provider"), model = $("cx-compose-model"), effort = $("cx-compose-effort");
-    const paintEfforts = () => {
-      const models = providers.find(p=>p.id===provider.value)?.models || [], selected = models.find(m=>m.id===model.value) || models.find(m=>m.isDefault);
-      effort.innerHTML = `<option value="">${esc(t("默认"))}</option>` + (selected?.supportedReasoningEfforts || []).map(e=>`<option value="${esc(e.reasoningEffort)}"${e.reasoningEffort===st.effort && model.value===st.model ? " selected" : ""}>${esc(e.reasoningEffort)}</option>`).join("");
-      $("cx-compose-capabilities").textContent = capabilityText(selected) + " · " + t("上下文上限") + " " + (selected?.contextWindow ? tokenNumber(selected.contextWindow) : t("未知")) + (Object.values(selected?.capabilitySources || {}).includes("models.dev") ? " · models.dev · " + t("目录能力仅供参考，以接口实际支持为准。") : "");
-      $("cx-compose-context").placeholder = selected?.contextWindow ? String(selected.contextWindow) : t("自动");
+    const box=$("cx-controls-body"), dialog=$("cx-controls"), initial=st.status||{};
+    const providers=initial.providers?.length?initial.providers:[{id:currentProviderId(),name:initial.connection?.baseUrl||"ChatGPT",models:initial.models||[]}];
+    const catalogs=new Map(providers.map(p=>[p.id,p.models||[]])), drafts=new Map();
+    box.innerHTML=`<form id="cx-compose-model-form"><label>${esc(t("提供商"))}<select id="cx-compose-provider">${providers.map(p=>`<option value="${esc(p.id)}"${p.id===currentProviderId()?" selected":""}>${esc(p.name)}</option>`).join("")}</select></label>
+      <button type="button" id="cx-compose-configure">${esc(t("管理提供商"))}</button>
+      <div class="cx-model-heading"><label for="cx-compose-model">${esc(t("模型"))}</label><button type="button" id="cx-compose-refresh">${esc(t("刷新模型"))}</button></div>
+      <input id="cx-compose-model" list="cx-compose-model-list" required maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(t("搜索或输入模型 ID"))}"><datalist id="cx-compose-model-list"></datalist>
+      <p id="cx-compose-catalog-status" class="cx-field-note" role="status" aria-live="polite"></p><p id="cx-compose-capabilities"></p>
+      <label>${esc(t("上下文大小"))}<input id="cx-compose-context" inputmode="numeric" type="number" min="1024" max="1000000000" step="1" placeholder="${esc(t("自动"))}"></label><p id="cx-compose-context-source" class="cx-field-note"></p>
+      <label>${esc(t("思考强度"))}<select id="cx-compose-effort"></select></label>
+      <details class="cx-model-advanced"><summary>${esc(t("模型能力配置"))}</summary><p class="cx-field-note">${esc(t("接口未声明能力时，可按服务商文档手动配置。保存的设置仅用于这个提供商和模型。"))}</p>
+        <label>${esc(t("输入能力"))}<select id="cx-compose-input-mode"><option value="auto">${esc(t("自动获取"))}</option><option value="manual">${esc(t("手动指定"))}</option></select></label>
+        <div id="cx-compose-modalities" class="cx-modality-options">${[["text","文本"],["image","图片"],["audio","音频"],["video","视频"],["pdf","PDF"]].map(([id,name])=>`<label><input type="checkbox" value="${id}"><span>${esc(t(name))}</span></label>`).join("")}</div>
+        <label>${esc(t("可用思考强度"))}<select id="cx-compose-effort-mode"><option value="auto">${esc(t("自动获取"))}</option><option value="manual">${esc(t("手动指定"))}</option></select></label>
+        <input id="cx-compose-effort-values" maxlength="800" placeholder="low, medium, high" aria-label="${esc(t("自定义思考强度列表"))}"><p class="cx-field-note">${esc(t("用逗号分隔；留空表示不发送思考强度。配置不会改变服务商的实际能力。"))}</p>
+      </details><button type="submit" class="cx-primary">${esc(t("保存并使用"))}</button><p class="cx-form-error" id="cx-compose-model-error" role="alert"></p></form>`;
+    const form=$("cx-compose-model-form"), provider=$("cx-compose-provider"), model=$("cx-compose-model"), effort=$("cx-compose-effort"), context=$("cx-compose-context"), inputMode=$("cx-compose-input-mode"), effortMode=$("cx-compose-effort-mode"), effortValues=$("cx-compose-effort-values");
+    let activeKey="", revision=0, controller=null, disposed=false;
+    const current=()=>catalogs.get(provider.value)?.find(m=>m.id===model.value.trim());
+    const key=()=>JSON.stringify([provider.value,model.value.trim()]);
+    const values=()=>[...new Set(effortValues.value.split(/[,，\s]+/).filter(Boolean))];
+    const capture=()=>({context:context.value,effort:effort.value,inputMode:inputMode.value,inputs:[...$("cx-compose-modalities").querySelectorAll("input:checked")].map(e=>e.value),effortMode:effortMode.value,efforts:effortValues.value});
+    const updateCapabilities=()=>{
+      const m=current(), sources=m?.capabilitySources||{};
+      $("cx-compose-capabilities").textContent=capabilityText(m)+" · "+t("上下文上限")+" "+(m?.contextWindow?tokenNumber(m.contextWindow):t("未知"))+" · "+t("来源")+" "+([...new Set(Object.values(sources).filter(Boolean))].join(" / ")||t("未声明"));
+      context.placeholder=m?.contextWindow?String(m.contextWindow):t("自动");
+      $("cx-compose-context-source").textContent=context.value?t("使用手动上限；修改后在空闲时重建引擎。"):t("自动跟随模型声明；实际占用由 Codex 报告。");
+      $("cx-compose-modalities").hidden=inputMode.value!=="manual";effortValues.hidden=effortMode.value!=="manual";
+      const selected=effort.value, options=effortMode.value==="manual"?values():(m?.supportedReasoningEfforts||[]).map(e=>e.reasoningEffort);
+      if(selected&&!options.includes(selected))options.push(selected);
+      effort.innerHTML=`<option value="">${esc(t("默认"))}</option>`+options.map(e=>`<option value="${esc(e)}">${esc(e)}</option>`).join("");effort.value=selected;
     };
-    const paintModels = () => {
-      const models = (providers.find(p=>p.id===provider.value)?.models || []).filter(m=>!m.hidden);
-      model.innerHTML = models.length ? models.map(m=>`<option value="${esc(m.id)}"${m.id===st.model ? " selected" : ""}>${esc(m.displayName||m.id)}</option>`).join("") : `<option value="">${esc(t("请先配置提供商"))}</option>`;
-      model.disabled = !models.length; paintEfforts();
+    const hydrate=()=>{
+      if(activeKey)drafts.set(activeKey,capture());activeKey=key();
+      const m=current(), config=m?.settings||{}, active=provider.value===currentProviderId()&&model.value===(st.model||selectedModel()?.id);
+      const d=drafts.get(activeKey)||{context:config.contextWindow||(active?initial.contextWindow:0)||"",effort:config.effort??(active?st.effort:""),inputMode:config.inputModalities!=null?"manual":"auto",inputs:config.inputModalities||m?.inputModalities||[],effortMode:config.supportedReasoningEfforts!=null?"manual":"auto",efforts:(config.supportedReasoningEfforts||[]).join(", ")};
+      context.value=d.context;inputMode.value=d.inputMode;effortMode.value=d.effortMode;effortValues.value=d.efforts;
+      $("cx-compose-modalities").querySelectorAll("input").forEach(e=>e.checked=d.inputs.includes(e.value));
+      effort.innerHTML=`<option value="${esc(d.effort)}">${esc(d.effort)}</option>`;effort.value=d.effort;updateCapabilities();
     };
-    paintModels(); provider.addEventListener("change",()=>{ $("cx-compose-context").value="";paintModels(); });
-    model.addEventListener("change",()=>{ $("cx-compose-context").value="";paintEfforts(); });
-    box.querySelector('[data-act="composer-configure"]').onclick=()=>{ $("cx-controls").close();openSettings("connection"); };
-    $("cx-compose-model-form").onsubmit = async event => {
-      event.preventDefault(); const error=$("cx-compose-model-error");error.textContent="";
-      const nextProvider=provider.value;
-      if(nextProvider !== (custom ? "custom":"chatgpt")) {
-        try {
-          if(nextProvider === "custom") {
-            if(!s.connection?.model) { $("cx-controls").close();return openSettings("connection"); }
-            await saveConnectionConfig({ mode:"custom", baseUrl:s.connection.baseUrl, model:model.value||s.connection.model, wireApi:s.connection.wireApi, noKey:s.connection.noKey });
-          } else await saveConnectionConfig({ mode:"chatgpt" });
-        } catch(e){error.textContent=t(e.message);return;}
-      }
-      if(!model.value) { $("cx-controls").close();return openSettings("connection"); }
-      const windowSize=$("cx-compose-context").value ? Number($("cx-compose-context").value) : 0;
-      box.querySelector('[type=submit]').disabled=true;
-      if(await saveSettings(model.value,effort.value,windowSize)) $("cx-controls").close();
-      else {box.querySelector('[type=submit]').disabled=false;error.textContent=t("保存失败，请检查设置后重试。");}
+    const paintCatalog=()=>{$("cx-compose-model-list").innerHTML=(catalogs.get(provider.value)||[]).filter(m=>!m.hidden).map(m=>`<option value="${esc(m.id)}">${esc(m.displayName||m.id)}</option>`).join("");};
+    const chooseProvider=()=>{
+      if(activeKey)drafts.set(activeKey,capture());activeKey="";
+      const p=providers.find(p=>p.id===provider.value), list=catalogs.get(provider.value)||[];
+      model.value=provider.value===currentProviderId()?st.model||list.find(m=>m.isDefault)?.id||list[0]?.id||"":p?.model||list.find(m=>m.isDefault)?.id||list[0]?.id||"";
+      model.required=provider.value!=="chatgpt"||provider.value===currentProviderId();paintCatalog();hydrate();
+    };
+    const cleanup=event=>{if(event?.type==="close"&&dialog.open)return;disposed=true;revision++;controller?.abort();dialog.removeEventListener("close",cleanup);if(st.cancelModelControls===cleanup)st.cancelModelControls=null;};
+    st.cancelModelControls=cleanup;dialog.addEventListener("close",cleanup);
+    async function refresh(){
+      controller?.abort();const seq=++revision,pid=provider.value;controller=new AbortController();
+      $("cx-compose-refresh").disabled=true;$("cx-compose-catalog-status").textContent=t("正在获取模型…");
+      try{
+        const result=await api("/api/codex/models",{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify({providerId:pid}),signal:controller.signal});
+        if(disposed||seq!==revision||provider.value!==pid||!form.isConnected)return;
+        catalogs.set(pid,result.models||[]);paintCatalog();
+        if(!model.value&&result.models?.length){model.value=result.models.find(m=>m.isDefault)?.id||result.models[0].id;hydrate();}else updateCapabilities();
+        $("cx-compose-catalog-status").textContent=result.ok?t("已获取 {n} 个模型，可搜索或输入 ID。",{n:result.models.length}):t(result.message||"获取失败，仍可使用已保存的配置。");
+        if(result.status)syncStatus(result.status);
+      }catch(error){if(!disposed&&seq===revision&&error.name!=="AbortError")$("cx-compose-catalog-status").textContent=t(error.message);}
+      finally{if(!disposed&&seq===revision)$("cx-compose-refresh").disabled=false;}
+    }
+    chooseProvider();refresh();
+    provider.addEventListener("change",()=>{chooseProvider();refresh();});model.addEventListener("input",hydrate);
+    inputMode.onchange=updateCapabilities;effortMode.onchange=()=>{effort.value="";updateCapabilities();};effortValues.oninput=updateCapabilities;context.oninput=updateCapabilities;
+    $("cx-compose-refresh").onclick=refresh;$("cx-compose-configure").onclick=()=>{dialog.close();st.connectionEditId=provider.value==="chatgpt"?null:provider.value;openSettings("connection");};
+    form.onsubmit=async event=>{
+      event.preventDefault();const error=$("cx-compose-model-error"), submit=form.querySelector('[type=submit]');error.textContent="";submit.disabled=true;
+      const selectedEffort=effort.value, capability={inputModalities:inputMode.value==="manual"?[...$("cx-compose-modalities").querySelectorAll("input:checked")].map(e=>e.value):null,supportedReasoningEfforts:effortMode.value==="manual"?values():null};
+      const saved=await saveSettings(model.value.trim(),selectedEffort,context.value?Number(context.value):0,{providerId:provider.value,capabilities:capability});
+      if(disposed)return;
+      if(saved){const switchToChat=provider.value==="chatgpt"&&provider.value!==initial.connection?.providerId&&initial.connection?.mode==="custom";dialog.close();if(switchToChat)openControls("model");}
+      else{submit.disabled=false;error.textContent=t("保存失败，请检查设置后重试。");}
     };
   }
   function paintPermissions() {
@@ -1403,22 +1452,18 @@
   }
   function paintMetrics() {
     if(!dom)return;
-    for(const [turnId,metric] of st.metrics) {
-      if(metric.threadId!==st.threadId)continue;
-      const messages=[...st.items.values()].filter(item=>item.turnId===turnId&&item.type==="agentMessage");
-      if(!messages.length)continue;
-      const target=messages.at(-1).el;
-      for(const item of messages.slice(0,-1))item.el.querySelector(".cx-response-meta")?.remove();
-      let footer=target.querySelector(".cx-response-meta");
-      if(!footer){footer=document.createElement("div");footer.className="cx-response-meta";footer.tabIndex=0;target.appendChild(footer);}
-      const totals=st.contexts.get(st.threadId)?.total||metric.total;
-      const elapsed=metric.completedAt&&metric.firstOutputAt?(metric.completedAt-metric.firstOutputAt)/1000:null;
-      const speed=elapsed>0&&Number.isFinite(metric.outputTokens)?(metric.outputTokens/elapsed).toFixed(1)+" tok/s":"— tok/s";
-      const input=totals?.inputTokens, output=totals?.outputTokens, cached=totals?.cachedInputTokens;
-      const cache=Number.isFinite(input)&&input>0&&Number.isFinite(cached)?Math.min(100,cached/input*100).toFixed(1)+"%":"—";
-      const value=[metric.provider,metric.model,metric.effort||t("默认"),speed,t("输入")+" "+(Number.isFinite(input)?tokenNumber(input):"—"),t("输出")+" "+(Number.isFinite(output)?tokenNumber(output):"—"),t("缓存命中率")+" "+cache].filter(Boolean).join(" · ");
-      footer.textContent=value;footer.title=value+" · "+t("会话累计用量；速度从首个输出事件至完成估算。");
-    }
+    const metrics=[...st.metrics.values()].filter(m=>m.threadId===st.threadId);
+    const running=st.running.get(st.threadId),metric=metrics.find(m=>m.turnId===running?.id)||metrics.at(-1);
+    const model=selectedModel(),c=st.status?.connection,provider=st.status?.providers?.find(p=>p.id===currentProviderId());
+    let name=provider?.name||"ChatGPT";try{if(c?.mode==="custom")name=c.name||new URL(c.baseUrl).hostname;}catch{}
+    const totals=st.contexts.get(st.threadId)?.total||metric?.total;
+    const elapsed=metric?.firstOutputAt?((metric.completedAt||Date.now())-metric.firstOutputAt)/1000:null;
+    const matching=metric?.providerId===currentProviderId()&&metric?.modelId===(st.model||model?.id)&&metric.effort===(st.effort||model?.defaultReasoningEffort||"");
+    const speed=matching&&elapsed>0&&Number.isFinite(metric?.outputTokens)?(metric.outputTokens/elapsed).toFixed(1)+" tok/s":"— tok/s";
+    const input=totals?.inputTokens, output=totals?.outputTokens, cached=totals?.cachedInputTokens;
+    const cache=Number.isFinite(input)&&input>0&&Number.isFinite(cached)?Math.min(100,cached/input*100).toFixed(1)+"%":"—";
+    const value=[name,model?.displayName||st.model||st.thread?.model||t("未选择模型"),st.effort||model?.defaultReasoningEffort||t("默认"),speed,t("输入")+" "+(Number.isFinite(input)?tokenNumber(input):"—"),t("输出")+" "+(Number.isFinite(output)?tokenNumber(output):"—"),t("缓存命中率")+" "+cache].join(" · ");
+    $("cx-composer-meta").textContent=value;$("cx-composer-meta").title=value+" · "+t("会话累计用量；速度从首个输出事件至完成估算。");
   }
 
   function openSettings(tab = "general") {
@@ -1497,11 +1542,15 @@
   }
 
   function paintConnection() {
-    const body = $("cx-preferences-body"), c = st.status?.connection || {};
+    const body = $("cx-preferences-body"), saved = (st.status?.providers||[]).filter(p=>p.id!=="chatgpt"), active=st.status?.connection||{};
+    const editId=st.connectionEditId===undefined||st.connectionEditId===null?active.providerId||saved[0]?.id:st.connectionEditId;
+    const c=editId==="new"?{}:editId===active.providerId?{...saved.find(p=>p.id===editId),...active}:saved.find(p=>p.id===editId)||active;
     body.innerHTML = `<section class="cx-connection-account"><div><h3>ChatGPT</h3><p>${esc(t("独立客户端 · 非 OpenAI 官方应用"))}</p></div>
       <button data-act="connection-chatgpt"${st.connectionBusy ? " disabled" : ""}>${esc(t("使用 ChatGPT 登录"))}</button></section>
       <section class="cx-api-section"><h3>${esc(t("自定义第三方 API"))}</h3><p>${esc(t("填写服务商的 API 地址与密钥，获取模型后测试连接。"))}</p>
       <form id="cx-connection-form" autocomplete="off"><fieldset${st.connectionBusy ? " disabled" : ""}>
+        <label>${esc(t("已保存的提供商"))}<select id="cx-api-profile">${saved.map(p=>`<option value="${esc(p.id)}"${p.id===editId?" selected":""}>${esc(p.name)}</option>`).join("")}<option value="new"${editId==="new"||!saved.length?" selected":""}>${esc(t("添加提供商"))}</option></select></label>
+        <label>${esc(t("提供商名称"))}<input id="cx-api-name" maxlength="80" value="${esc(c.name||"")}" placeholder="${esc(t("留空使用服务商域名"))}"></label>
         <label>${esc(t("API 基础地址"))}<input id="cx-api-url" type="url" required maxlength="2048" value="${esc(c.baseUrl || "")}" placeholder="https://example.com/v1" autocapitalize="off" spellcheck="false" aria-describedby="cx-api-url-help"></label>
         <p id="cx-api-url-help">${esc(t("请使用 API 地址而非网站首页；也可粘贴完整的 /responses 或 /chat/completions 地址。"))}</p>
         <label>${esc(t("API 协议"))}<select id="cx-api-protocol"><option value="auto">${esc(t("自动识别（测试连接后确定）"))}</option><option value="responses">OpenAI Responses</option><option value="chat">OpenAI Chat Completions</option></select></label>
@@ -1519,13 +1568,13 @@
         <button type="submit" class="cx-pref-save">${esc(t("保存并使用 API"))}</button>
       </fieldset></form></section>`;
     const form = $("cx-connection-form"), protocol = $("cx-api-protocol"), url = $("cx-api-url"), key = $("cx-api-key"), model = $("cx-api-model"), noKey = $("cx-api-no-key");
-    protocol.value = c.mode === "custom" ? c.wireApi || "responses" : "auto";
-    let revision = 0, controller = null, timer = 0, busy = false, disposed = false, modelCatalog = [];
+    protocol.value = c.baseUrl ? c.wireApi || "auto" : "auto";
+    let revision = 0, controller = null, timer = 0, busy = false, disposed = false, modelCatalog = c.models||[];
     const paintCapabilities = () => {
       const selected = modelCatalog.find(m => m.id === model.value);
       $("cx-api-capabilities").textContent = selected ? `${t("输入能力")}：${capabilityText(selected)} · ${t("上下文上限")}：${selected.contextWindow ? tokenNumber(selected.contextWindow) : t("未知")} · ${t("思考强度")}：${selected.supportedReasoningEfforts?.map(e => e.reasoningEffort).join(" / ") || t(selected.reasoning ? "由服务商默认控制" : "未知")}${Object.values(selected.capabilitySources || {}).includes("models.dev") ? " · models.dev · " + t("目录能力仅供参考，以接口实际支持为准。") : ""}` : "";
     };
-    const value = () => ({ mode: "custom", baseUrl: url.value, wireApi: protocol.value, model: model.value, apiKey: key.value, noKey: noKey.checked });
+    const value = () => ({ mode: "custom", ...(editId&&editId!=="new"&&saved.some(p=>p.id===editId)?{providerId:editId}:{}), name:$("cx-api-name").value, baseUrl: url.value, wireApi: protocol.value, model: model.value, apiKey: key.value, noKey: noKey.checked });
     const normalized = () => { try { const u = new URL(url.value.trim()); u.pathname = u.pathname.replace(/\/(responses|chat\/completions|models)\/?$/, ""); return u.href.replace(/\/+$/, ""); } catch { return ""; } };
     const preview = () => {
       $("cx-api-preview").textContent = normalized() ? normalized() + (protocol.value === "chat" ? "/chat/completions" : protocol.value === "auto" ? "/responses · /chat/completions" : "/responses") : "https://example.com/v1";
@@ -1538,8 +1587,9 @@
       if (catalog) { modelCatalog = []; paintCapabilities(); $("cx-api-models").innerHTML = ""; $("cx-api-model-status").textContent = t("填写地址和密钥后自动获取模型，也可手动填写。"); }
       preview();
     };
-    const cleanup = () => { disposed = true; revision++; controller?.abort(); clearTimeout(timer); dom.preferences.removeEventListener("close", cleanup); if (st.cancelConnectionForm === cleanup) st.cancelConnectionForm = null; };
+    const cleanup = (event) => { if(event?.type==="close"&&dom.preferences.open)return;disposed = true; revision++; controller?.abort(); clearTimeout(timer); dom.preferences.removeEventListener("close", cleanup); if (st.cancelConnectionForm === cleanup) st.cancelConnectionForm = null; };
     st.cancelConnectionForm = cleanup; dom.preferences.addEventListener("close", cleanup);
+    $("cx-api-profile").onchange=event=>{const id=event.target.value;cleanup();st.connectionEditId=id;paintConnection();};
     const current = (id) => !disposed && form.isConnected && revision === id;
     async function probe(kind) {
       clearTimeout(timer); if (disposed || busy) return;
@@ -1586,14 +1636,16 @@
     protocol.addEventListener("change", () => reset()); model.addEventListener("input", () => { reset(); paintCapabilities(); });
     $("cx-api-fetch").addEventListener("click", () => probe("models")); $("cx-api-test").addEventListener("click", () => probe("test"));
     $("cx-api-key-toggle").addEventListener("click", (e) => { key.type = key.type === "password" ? "text" : "password"; e.currentTarget.textContent = t(key.type === "password" ? "显示" : "隐藏"); e.currentTarget.setAttribute("aria-pressed", String(key.type === "text")); });
-    preview();
+    preview();paintCapabilities();
+    $("cx-api-models").innerHTML=modelCatalog.map(m=>`<option value="${esc(m.id)}"></option>`).join("");
+    if(c.baseUrl&&(c.hasKey||c.noKey))timer=setTimeout(()=>probe("models"),300);
     form.addEventListener("submit", async (e) => {
       e.preventDefault(); const form = e.currentTarget;
       if (busy) return;
       if (protocol.value === "auto") { $("cx-connection-error").textContent = t("请先测试连接以识别协议，或手动选择协议。"); return; }
       clearTimeout(timer);
       form.querySelector("fieldset").disabled = true; $("cx-connection-error").textContent = "";
-      try { await saveConnectionConfig(value()); toast(t("连接设置已保存，发送任务时将使用此 API。")); }
+      try { await saveConnectionConfig(value()); st.connectionEditId=null;toast(t("连接设置已保存，发送任务时将使用此 API。")); }
       catch (err) { if (form.isConnected) $("cx-connection-error").textContent = t(err.message); }
       finally { if (form.isConnected) form.querySelector("fieldset").disabled = false; }
     });

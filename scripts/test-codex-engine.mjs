@@ -16,7 +16,7 @@ const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(C
 Object.assign(env, { CCAPP_TEST: "1", CCAPP_HOME: home, HOME: home, CCAPP_WORKSPACE: workspace, CCAPP_RUNTIME: runtime,
   CCAPP_LOG: path.join(temporary, "gateway.log"), CCAPP_NO_BRIDGE: "1", CCAPP_PREFIX: prefix });
 const child = spawn(process.execPath, ["--test", "--test-concurrency=1",
-  "gateway/tests/codex.test.mjs", "gateway/tests/codex-api.test.mjs", "gateway/tests/codex-models.test.mjs", "gateway/tests/a0610-j2-runflag.test.mjs"], { env, stdio: "inherit", cwd: root });
+  "gateway/tests/codex.test.mjs", "gateway/tests/codex-api.test.mjs", "gateway/tests/codex-models.test.mjs", "gateway/tests/codex-context.test.mjs", "gateway/tests/a0610-j2-runflag.test.mjs"], { env, stdio: "inherit", cwd: root });
 for (const signal of ["SIGINT", "SIGTERM"]) process.on(signal, () => { try { child.kill(signal); } catch {} });
 child.on("error", (e) => { console.error(e.message); process.exitCode = 1; });
 child.on("close", (code) => {

@@ -23,6 +23,7 @@ export async function discoverApiModels(body, { signal, timeoutMs = 10000 } = {}
       if (!models.length) throw apiError("empty_models", "接口模型列表为空，可手动填写模型名称");
       await refreshModelCatalog({ signal });
       const modelDetails = rememberApiModels(baseUrl, models.map(id => rows.find(row => row?.id === id) || id));
+      if(baseUrl!==config.baseUrl)rememberApiModels(config.baseUrl,models.map(id=>rows.find(row=>row?.id===id)||id));
       attempts.push({ ok: true, url, status: 200, elapsedMs: Date.now() - started });
       return { ok: true, baseUrl, models, modelDetails, attempts };
     } catch (e) {

@@ -3,12 +3,27 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { CFG } from "../gw/config.mjs";
-import { modelDetails, reduceModelCatalog, refreshModelCatalog, rememberApiModels, customModels } from "../gw/codex-models.mjs";
+import { modelDetails, reduceModelCatalog, refreshModelCatalog, rememberApiModels, customModels,saveModelSettings,configuredModel,modelSettings } from "../gw/codex-models.mjs";
 
 const model = { id: "fixture-vision", name: "Fixture Vision", reasoning: true,
   reasoning_options: [{ type: "effort", values: ["low", "high", "max"] }],
   modalities: { input: ["text", "image", "audio"], output: ["text"] }, limit: { context: 128000 } };
 const providers = { fixture: { api: "https://fixture.test/v1", models: { "fixture-vision": model } } };
+
+test("模型能力：常用 API 别名和手动覆盖按提供商、模型持久化，可恢复自动声明",async()=>{
+  const scope="https://manual-capabilities.test/v1",id="manual-model";
+  const metadata=modelDetails({id,input_modalities:["text","image"],output_modalities:["text"],top_provider:{context_length:96000},reasoning_efforts:["low","high"]});
+  assert.equal(metadata.contextWindow,96000);assert.deepEqual(metadata.inputModalities,["text","image"]);
+  saveModelSettings(scope,id,{contextWindow:48000,effort:"high",inputModalities:["text"],supportedReasoningEfforts:["high"]});
+  const first=configuredModel(scope,metadata);assert.equal(first.contextWindow,48000);assert.equal(first.capabilitySources.context,"user");
+  assert.equal(modelSettings("different-provider",id).contextWindow,undefined);assert.equal(modelSettings(scope,"different-model").effort,undefined);
+  const reloaded=await import("../gw/codex-models.mjs?settings-reload");assert.equal(reloaded.modelSettings(scope,id).effort,"high");
+  saveModelSettings(scope,id,{contextWindow:0,inputModalities:null,supportedReasoningEfforts:null});
+  const reset=configuredModel(scope,first);assert.equal(reset.contextWindow,96000);assert.deepEqual(reset.inputModalities,["text","image"]);assert.equal(reset.capabilitySources.context,"provider");
+  assert.deepEqual(reset.supportedReasoningEfforts.map(e=>e.reasoningEffort),["low","high"]);
+  assert.throws(()=>saveModelSettings(scope,id,{contextWindow:42}),/上下文/);
+  assert.throws(()=>saveModelSettings(scope,id,{inputModalities:["unknown"]}),/模型能力/);
+});
 
 test("模型能力：精确 ID 和命名空间匹配；未知模型不按名称猜测", () => {
   const detail = modelDetails("fixture-vision", { providers });
