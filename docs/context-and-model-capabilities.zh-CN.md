@@ -16,6 +16,6 @@ models.dev 的 MIT 许可随快照和 APK 一起提供。离线快照位于 `gat
 
 验证命令：
 
-- `node scripts/test-codex-engine.mjs`：50 项通过，含元数据覆盖、未知/歧义、缓存重载、离线失败、线程隔离、压缩锁与模型切换。
+- `node scripts/test-codex-engine.mjs`：51 项通过，含元数据覆盖、未知/歧义、缓存重载、离线失败、线程隔离、压缩锁、后台标记与模型切换。
 - `node scripts/test-codex-process.mjs`：真实 0.166.0 引擎接本机合成服务，确认 token 事件、手动压缩生命周期、上下文覆盖与 Responses/Chat 的思考强度传递；不调用真实模型。
 - `node scripts/test-codex-ui.mjs --screenshots`：真实浏览器检查折叠、复制、6px 间距、压缩成功/失败、背景聊天隔离、320px 弹层及中英文工作流。

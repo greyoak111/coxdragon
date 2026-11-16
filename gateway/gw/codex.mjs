@@ -588,7 +588,7 @@ function handleNotify(m) {
       break;
   }
   if (["turn/started", "turn/completed", "error"].includes(m.method)) recordTaskEvent(m.method, m.params);
-  if (["turn/started", "turn/completed", "serverRequest/resolved"].includes(m.method)) activityChanged(done);
+  if (["turn/started", "turn/completed", "serverRequest/resolved"].includes(m.method) || (["item/started", "item/completed"].includes(m.method) && m.params?.item?.type === "contextCompaction")) activityChanged(done);
   broadcast({ type: "rpc", method: m.method, params: m.params });
 }
 

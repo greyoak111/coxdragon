@@ -71,6 +71,13 @@ test("Codex：压缩失败或引擎停止释放锁，旧失败不能清掉新引
   assert.equal(cx.S.compacting.has("b"), true);
 });
 
+test("Codex：压缩回执先返回时仍保留后台服务，完成事件独立清除运行标记", async () => {
+  reset(); cx.S.rpc.request = async () => ({});
+  await cx.compactThread("b"); assert.equal(activityBusy(), true);
+  cx.handleNotify({ method: "item/completed", params: { threadId: "b", item: { id: "compact", type: "contextCompaction" } } });
+  assert.equal(activityBusy(), false); assert.equal(codexActivity().busy, false);
+});
+
 test("Codex：第三方模型强度保存和刷新一致，换模型重建空闲引擎并更新上下文覆盖", async () => {
   reset(); const baseUrl = "https://model-fixture.test/v1";
   rememberApiModels(baseUrl, [{ id: "first", contextWindow: 64000, supportedReasoningEfforts: ["low", "high"] }, { id: "second", contextWindow: 128000, supportedReasoningEfforts: ["max"] }]);
