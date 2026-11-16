@@ -245,5 +245,24 @@ test("Chat 适配：启动引擎时注入的是回环令牌，关闭后接口不
     assert.notEqual(launch.env.COXDRAGON_CUSTOM_API_KEY, key); assert.equal(launch.args.join(" ").includes("https://provider.test"), false);
     assert(launch.args.some((s) => s.includes('base_url="http://127.0.0.1:')));
     assert(launch.args.includes('web_search="disabled"'));
+    assert(launch.args.includes('model_providers.coxdragon_custom.stream_max_retries=0'));
   } finally { launch.close(); }
+});
+
+test("Chat 适配：后续工具参数损坏时整批拒绝，不能先发布合法工具", async () => {
+  for (const broken of ["invalid-json", "unknown-tool", "missing-custom-input"]) {
+    const api = await server((req, res) => sse(res, [{ choices: [{ delta: { tool_calls: [
+      { index: 0, id: "valid", function: { name: "write", arguments: "{}" } },
+      { index: 1, id: "broken", function: { name: broken === "unknown-tool" ? "undeclared" : "apply_patch", arguments: broken === "invalid-json" ? "bad" : "{}" } },
+    ] }, finish_reason: "tool_calls" }] }]));
+    const adapter = await startChatAdapter(draft(api.url, { wireApi: "chat" }));
+    try {
+      const response = await fetch(adapter.url + "/responses", { method: "POST", headers: { authorization: "Bearer " + adapter.token },
+        body: JSON.stringify({ model: "fixture", input: "test", tools: [{ type: "function", name: "write" }, { type: "custom", name: "apply_patch" }] }) });
+      const events = []; for await (const event of apiEvents(response)) events.push(event);
+      assert.equal(events.at(-1).code, "invalid_tool");
+      assert.equal(events.some((e) => e.item?.type === "function_call" || e.item?.type === "custom_tool_call"), false);
+      assert.equal(events.some((e) => e.type === "response.completed"), false);
+    } finally { adapter.close(); await api.close(); }
+  }
 });

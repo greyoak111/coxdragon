@@ -1,11 +1,16 @@
 // 起进程前的确认卡（gw/run.mjs askCard）没人答时超时收尾（#171）
 import "../gw/config.mjs";
-import { test, after } from "node:test";
+import { test, after, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { CARD, askCard } from "../gw/run.mjs";
 import { INTERRUPTED, setInterrupted } from "../gw/queue.mjs";
 
 const keep = CARD.timeout;
+// Production unrefs this deadline because the HTTP server keeps the gateway
+// alive. The isolated test has no server; retain a handle until each test ends.
+let keepAlive;
+beforeEach(() => { keepAlive = setInterval(() => {}, 1000); });
+afterEach(() => { clearInterval(keepAlive); });
 after(() => { CARD.timeout = keep; setInterrupted([]); });
 const fakeRun = (id, sessionId = null) => ({ id, sessionId, text: "推荐一款手机可用的 Harness", startedAt: Date.now() - 1000, perms: null });
 const ask = (run, evs) => askCard(run, (e) => evs.push(e), { key: "uc", tool: "UserConfig", input: {}, guard: { cat: "userconf", what: "~/.claude" }, what: "测试卡", yes: "✓", no: "✗" });

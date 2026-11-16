@@ -219,6 +219,9 @@
     if (st && st.ok === false && st.message) return updFailed(st.message);
     if (!st || !st.ok || !st.items) return;          // 旧版 / 开发端：确实没有这项
     lastUpd = st;
+    const sources = $("upd-sources");
+    sources.hidden = !st.sources;
+    sources.textContent = st.sources ? `${t("应用更新")}：${st.sources.app} · ${t("工具包")}：${st.sources.devkit} · ${t("组件")}：${st.sources.components}` : "";
     $("upd-field").classList.remove("hidden");
     $("upd-auto").checked = !!st.auto;
     $("upd-channel").value = st.channel === "pinned" ? "pinned" : st.channel || "stable";

@@ -30,6 +30,14 @@ fs.mkdirSync(home, { recursive: true });
 fs.mkdirSync(workspace, { recursive: true });
 fs.mkdirSync(path.join(prefix, "bin"), { recursive: true });
 fs.symlinkSync(curl, path.join(prefix, "bin", "curl"));
+// Production child environments intentionally use only PREFIX + Android system
+// tools. Linux fixtures need these shell helpers inside the isolated PREFIX too;
+// inheriting the host PATH would hide missing-tool tests and Android regressions.
+for (const name of ["sleep", "gzip", "mkdir", "cat", "ls"]) {
+  const tool = spawnSync("sh", ["-c", 'command -v "$1"', "fixture", name], { encoding: "utf8" }).stdout.trim();
+  if (!tool) throw new Error("测试需要系统命令：" + name);
+  fs.symlinkSync(tool, path.join(prefix, "bin", name));
+}
 installRegistryFlock(prefix, home, tmp); // 只写本轮假 PREFIX；锁协议测试不依赖开发机 util-linux / toybox。
 
 // 在 cccodroid 里跑时环境里有二十几个 CCAPP_* 指着真数据：一个不留全删，再只设测试要的（审查 L18）。

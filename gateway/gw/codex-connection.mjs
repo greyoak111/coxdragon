@@ -94,10 +94,10 @@ export function connectionLaunch(adapter) {
     [`model_providers.${CUSTOM_PROVIDER}.base_url`]: adapter?.url || connection.baseUrl,
     [`model_providers.${CUSTOM_PROVIDER}.wire_api`]: "responses",
     [`model_providers.${CUSTOM_PROVIDER}.requires_openai_auth`]: false,
-    // Bound silent upstream reconnects so an incompatible provider reaches an
-    // actionable failure instead of leaving a turn spinning for many minutes.
+    // A disconnected stream may already have executed tools. Require an explicit
+    // new turn instead of silently replaying calls from an incomplete response.
     [`model_providers.${CUSTOM_PROVIDER}.request_max_retries`]: 1,
-    [`model_providers.${CUSTOM_PROVIDER}.stream_max_retries`]: 1,
+    [`model_providers.${CUSTOM_PROVIDER}.stream_max_retries`]: 0,
     [`model_providers.${CUSTOM_PROVIDER}.stream_idle_timeout_ms`]: 90000,
   };
   // Hosted web search is a Responses-only tool. Do not advertise it to a Chat API.

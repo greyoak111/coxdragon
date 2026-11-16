@@ -8,6 +8,7 @@ export async function startCodexUiServer() {
     installFailures: 0, loginDelay: 0, cancelFailure: false, authorizeOnRefresh: false,
     model: "", effort: "", settingsFailure: false, skillEnabled: true, extensionFailure: false, connectionFailure: false,
     apiDelay: 0, apiFailure: false,
+    schedules: [{ id: "legacy-task", name: "旧自动化", prompt: "整理项目", on: true, nextAt: Date.now() + 60000 }], scheduleRunning: ["legacy-task"], scheduleFailure: false,
     connection: { mode: "chatgpt", baseUrl: "", model: "", hasKey: false, noKey: false, configured: false, wireApi: "responses" },
     notify: { ok: true, done: true, ask: true, system: true, chDone: true, chAsk: true } };
   const projects = [{ id: "p1", name: "coxdragon", path: "/synthetic/coxdragon" }, { id: "p2", name: "website", path: "/synthetic/website" }];
@@ -36,16 +37,28 @@ export async function startCodexUiServer() {
     if (p === "/test-blank") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<!doctype html><title>Test isolation</title>"); return true; }
     if (p === "/api/notices") return reply(res, { items: [{ id: "legacy", title: "Legacy Claude notice", body: "Must not interrupt the Codex workspace" }] });
     if (p === "/api/state") return reply(res, { runs: [], run: null, queue: [], maxParallel: 3, interrupted: [] });
-    if (p === "/api/app/upd_status") return reply(res, { ok: true, auto: true, channel: "stable", flavor: "28", flavorPref: "auto", items: [
+    if (p === "/api/app/upd_status") return reply(res, { ok: true, auto: true, channel: "stable", flavor: "28", flavorPref: "auto", sources: { app: "leemwood/coxdragon", devkit: "greyoak111/coxdragon", components: "greyoak111/coxdragon-components" }, items: [
       { id: "app", name: "coxdragon", current: "fixture", state: "uptodate" },
       { id: "devkit", name: "Devkit", current: "fixture", state: "uptodate" },
       { id: "claude", name: "Claude Code", current: "fixture", state: "uptodate" },
     ] });
     if (p === "/api/env-facts") return reply(res, { supported: false, fail: [] });
-    if (!(p.startsWith("/api/codex/") || p.startsWith("/api/git/") || p.startsWith("/api/app/notify_") || p === "/api/projects" || p === "/api/files")) return false;
+    if (!(p.startsWith("/api/codex/") || p.startsWith("/api/git/") || p.startsWith("/api/app/notify_") || p.startsWith("/api/sched") || p === "/api/projects" || p === "/api/files")) return false;
     let body = {};
-    if (req.method === "POST") { let s = ""; for await (const chunk of req) s += chunk; body = JSON.parse(s || "{}"); }
+    if (["POST", "PATCH"].includes(req.method)) { let s = ""; for await (const chunk of req) s += chunk; body = JSON.parse(s || "{}"); }
     state.requests.push({ path: p, method: req.method, body, query: Object.fromEntries(url.searchParams) });
+    if (p === "/api/sched") return reply(res, { tasks: state.schedules, running: state.scheduleRunning });
+    if (p.startsWith("/api/sched/")) {
+      if (state.scheduleFailure) return reply(res, { error: "Synthetic schedule save failure" }, 500);
+      const task = state.schedules.find(task => task.id === p.split("/")[3]);
+      if (!task) return reply(res, { error: "Missing task" }, 404);
+      if (req.method === "DELETE") {
+        if (state.scheduleRunning.includes(task.id)) return reply(res, { error: "Task is running; stop it first" }, 409);
+        state.schedules = state.schedules.filter(item => item !== task);
+      } else if (p.endsWith("/stop")) { task.on = false; state.scheduleRunning = state.scheduleRunning.filter(id => id !== task.id); }
+      else task.on = body.on;
+      return reply(res, { ok: true, task });
+    }
     if (p === "/api/codex/events") {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" }); clients.add(res);
       res.on("close", () => clients.delete(res)); send(res, { type: "status", status: snapshot() }); return true;

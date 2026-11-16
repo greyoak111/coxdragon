@@ -9,6 +9,8 @@ javac -nowarn -d "$OUT" "$ROOT/android/tests/stub/android/util/Base64.java" "$RO
 java -cp "$OUT" cox.dragon.Ed25519Vectors
 javac -nowarn -d "$OUT" "$ROOT/android/java/cox/dragon/PrivRules.java" "$ROOT/android/tests/cox/dragon/PrivRulesTest.java"
 java -cp "$OUT" cox.dragon.PrivRulesTest
+javac -nowarn -d "$OUT" "$ROOT/android/java/cox/dragon/UpdateSources.java" "$ROOT/android/tests/cox/dragon/UpdateSourcesTest.java"
+java -cp "$OUT" cox.dragon.UpdateSourcesTest
 javac -nowarn -d "$OUT" "$ROOT/android/java/cox/dragon/KeyAttest.java" "$ROOT/android/tests/cox/dragon/KeyAttestTest.java"
 java -cp "$OUT" cox.dragon.KeyAttestTest
 # 更新说明挑版本：WhatsNew 引了安卓类，编译要 android.jar（平板 ~/.bldtools，或 ANDROID_JAR）；pick 本身不碰安卓接口

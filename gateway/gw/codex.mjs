@@ -379,6 +379,7 @@ const S = {
   child: null, rpc: null, starting: null, generation: 0, closeAdapter: null, connectionProbe: null,
   account: null, models: [],
   activeThread: null, activeTurn: null, runningTurns: new Map(), startingTurns: new Set(), endedTurns: new Set(),
+  loadedThreads: new Set(), operations: new Set(),
   cwd: CFG.workspace,
   approvals: new Map(), sse: new Set(),
   lastError: "", stderr: "", startedAt: 0,
@@ -407,8 +408,8 @@ const activityListeners = new Set();
 export const onCodexActivity = (fn) => { activityListeners.add(fn); return () => activityListeners.delete(fn); };
 export function codexActivity() {
   return {
-    busy: !!(S.runningTurns.size || S.startingTurns.size || S.approvals.size),
-    running: S.runningTurns.size, starting: S.startingTurns.size,
+    busy: !!(S.starting || S.operations.size || S.runningTurns.size || S.startingTurns.size || S.approvals.size),
+    running: S.runningTurns.size, starting: S.startingTurns.size + S.operations.size + (S.starting ? 1 : 0),
     approvals: [...S.approvals.values()].map((p) => ({
       id: "codex:" + p.id, engine: "codex", sessionId: p.params?.threadId || "",
       runId: "codex:" + (p.params?.turnId || ""),
@@ -490,20 +491,22 @@ function status() {
 }
 
 async function refreshAccount() {
-  if (!S.rpc) return null;
-  try { S.account = await S.rpc.request("account/read", { refreshToken: false }); }
-  catch (e) { S.account = null; log("[codex] account/read 失败：" + errMsg(e)); }
+  const rpc = S.rpc, generation = S.generation;
+  if (!rpc) return null;
+  try { const account = await rpc.request("account/read", { refreshToken: false }); assertRpc(rpc, generation); S.account = account; }
+  catch (e) { if (S.rpc === rpc && S.generation === generation) { S.account = null; log("[codex] account/read 失败：" + errMsg(e)); } }
   return S.account;
 }
 async function refreshModels() {
-  if (!S.rpc) return [];
+  const rpc = S.rpc, generation = S.generation;
+  if (!rpc) return [];
   const connection = connectionStatus();
   if (connection.mode === "custom") {
     S.model = connection.model; S.effort = "";
     S.models = [{ id: connection.model, model: connection.model, displayName: connection.model, isDefault: true, supportedReasoningEfforts: [] }];
     return S.models;
   }
-  try { const r = await S.rpc.request("model/list", {}); S.models = Array.isArray(r && r.data) ? r.data : []; }
+  try { const r = await rpc.request("model/list", {}); assertRpc(rpc, generation); S.models = Array.isArray(r && r.data) ? r.data : []; }
   catch (e) { log("[codex] model/list 失败：" + errMsg(e)); }
   return S.models;
 }
@@ -533,7 +536,7 @@ function handleNotify(m) {
         aborted: p.turn.status === "interrupted" };
       break;
     }
-    case "thread/started": if (m.params && m.params.thread) S.activeThread = m.params.thread; break;
+    case "thread/started": if (m.params?.thread) S.loadedThreads.add(m.params.thread.id); break;
     case "thread/status/changed": if (m.params && S.activeThread && m.params.threadId === S.activeThread.id) S.activeThread.status = m.params.status; break;
     case "account/login/completed":
       if (m.params && m.params.success) refreshAccount().then(() => refreshModels()).catch(() => {});
@@ -573,10 +576,28 @@ function handleRequest(m) {
   log(`[codex] 等待确认：${m.method} id=${m.id}`);
 }
 
-async function startRpc() {
+function assertGeneration(generation) {
+  if (generation !== S.generation) throw new Error("Codex 引擎已停止，请重新发送");
+}
+function assertRpc(rpc, generation) {
+  assertGeneration(generation);
+  if (S.rpc !== rpc) throw new Error("Codex 引擎已停止，请重新发送");
+}
+async function rpcOperation(action) {
+  const generation = S.generation, token = {};
+  S.operations.add(token); activityChanged();
+  try {
+    const rpc = await ensureRpc(); assertRpc(rpc, generation);
+    return await action(rpc, () => assertRpc(rpc, generation));
+  } finally { S.operations.delete(token); activityChanged(); }
+}
+
+async function startRpc(generation) {
   await verifyBin();
+  assertGeneration(generation);
   mkdir(CODEX_HOME); mkdir(CACHE); mkdir(path.join(CACHE, "tmp"));
   const px = await ensureProxy();
+  assertGeneration(generation);
   const ca = ensureCa();
   const env = { ...process.env };
   delete env.LD_PRELOAD; delete env.LD_LIBRARY_PATH; delete env.NODE_OPTIONS; delete env.NODE_PATH;
@@ -595,7 +616,9 @@ async function startRpc() {
   // 「静态程序兼容」的监督器（跟进子进程），让被拦的调用拿到 ENOSYS 自己退回老接口。
   // 只有实际启动进程时才加载兼容监督器，Codex 的协议状态不依赖 Claude 运行时。
   const er = SETTINGS.staticCompat !== false ? (await import("./claude.mjs")).enosysRun() : "";
+  assertGeneration(generation);
   const connection = await prepareConnectionLaunch();
+  if (generation !== S.generation) { connection.close?.(); assertGeneration(generation); }
   S.closeAdapter = connection.close;
   delete env.COXDRAGON_CUSTOM_API_KEY;
   if (connectionStatus().mode === "custom") { delete env.OPENAI_API_KEY; delete env.CODEX_API_KEY; delete env.OPENAI_BASE_URL; }
@@ -613,6 +636,7 @@ async function startRpc() {
       S.closeAdapter?.(); S.closeAdapter = null;
       S.child = null; S.rpc = null; S.activeTurn = null;
       S.generation++;
+      S.starting = null; S.loadedThreads.clear(); S.operations.clear();
       S.runningTurns.clear(); S.startingTurns.clear(); S.approvals.clear();
       activityChanged();
       broadcast({ type: "server", state: "exited", code, signal, stderr: rpc.stderr.slice(-4000) });
@@ -626,11 +650,14 @@ async function startRpc() {
       capabilities: { experimentalApi: true },
     }, 30000);
   } catch (e) {
-    stopServer();
+    if (S.rpc === rpc && S.generation === generation) stopServer();
     throw new Error("Codex 引擎初始化失败：" + errMsg(e));
   }
+  assertRpc(rpc, generation);
   await refreshAccount();
+  assertRpc(rpc, generation);
   await refreshModels();
+  assertRpc(rpc, generation);
   broadcast({ type: "server", state: "ready" });
   return rpc;
 }
@@ -638,14 +665,18 @@ async function startRpc() {
 function ensureRpc() {
   if (S.starting) return S.starting;
   if (S.rpc) return Promise.resolve(S.rpc);
-  S.starting = startRpc().finally(() => { S.starting = null; });
-  return S.starting;
+  const starting = startRpc(S.generation).finally(() => {
+    if (S.starting === starting) { S.starting = null; activityChanged(); }
+  });
+  S.starting = starting; activityChanged();
+  return starting;
 }
 
 function stopServer() {
   const c = S.child;
   S.closeAdapter?.(); S.closeAdapter = null;
   S.generation++;
+  S.starting = null; S.loadedThreads.clear(); S.operations.clear();
   S.child = null; S.rpc = null; S.activeTurn = null;
   S.runningTurns.clear(); S.startingTurns.clear(); S.approvals.clear();
   activityChanged();
@@ -657,40 +688,46 @@ process.on("exit", () => { S.closeAdapter?.(); if (S.child) { try { S.child.kill
 
 // ── 高级动作 ─────────────────────────────────────────────────────────
 async function startThread(cwd) {
-  const rpc = await ensureRpc();
-  const dir = safeCwd(cwd) || safeCwd(CFG.workspace) || CFG.workspace;
-  const params = {
-    cwd: dir,
-    modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
-    sandbox: "danger-full-access",
-    approvalPolicy: "untrusted",
-  };
-  if (S.model) params.model = S.model;
-  const r = await rpc.request("thread/start", params, 60000);
-  if (r && r.thread) { S.activeThread = r.thread; rememberTitle(r.thread); S.activeTurn = null; S.cwd = dir; broadcast({ type: "thread", thread: slimThread(r.thread) }); }
-  return r;
+  const dir = safeCwd(cwd == null || cwd === "" ? CFG.workspace : cwd);
+  if (!dir) throw Object.assign(new Error("项目目录不存在或无法访问，请重新选择目录"), { statusCode: 400 });
+  return rpcOperation(async (rpc, check) => {
+    const params = {
+      cwd: dir,
+      modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
+      sandbox: "danger-full-access",
+      approvalPolicy: "untrusted",
+    };
+    if (S.model) params.model = S.model;
+    const r = await rpc.request("thread/start", params, 60000);
+    check();
+    if (r && r.thread) { S.loadedThreads.add(r.thread.id); S.activeThread = r.thread; rememberTitle(r.thread); S.activeTurn = null; S.cwd = dir; broadcast({ type: "thread", thread: slimThread(r.thread) }); }
+    return r;
+  });
 }
-async function resumeThread(threadId) {
-  const rpc = await ensureRpc();
-  const r = await rpc.request("thread/resume", {
-    threadId: String(threadId),
-    modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
-    ...(S.model ? { model: S.model } : {}),
-    sandbox: "danger-full-access",
-    approvalPolicy: "untrusted",
-  }, 60000);
-  if (r && r.thread) {
-    S.activeThread = r.thread;
-    rememberTitle(r.thread);
-    // 恢复会话只改变当前视图，不能把正在后台执行的轮次当成结束。
-    const running = (r.thread.turns || []).find((t) => t.status === "inProgress" && !S.endedTurns.has(t.id));
-    if (running) S.runningTurns.set(r.thread.id, running);
-    S.activeTurn = S.runningTurns.get(r.thread.id) || null;
-    S.cwd = r.thread.cwd || S.cwd;
-    activityChanged();
-    broadcast({ type: "thread", thread: slimThread(r.thread) });
-  }
-  return r;
+async function resumeThread(threadId, { select = true } = {}) {
+  if (typeof threadId !== "string" || !threadId.trim()) throw Object.assign(new Error("请选择要恢复的任务"), { statusCode: 400 });
+  return rpcOperation(async (rpc, check) => {
+    const r = await rpc.request("thread/resume", {
+      threadId: String(threadId),
+      modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
+      ...(S.model ? { model: S.model } : {}),
+      sandbox: "danger-full-access",
+      approvalPolicy: "untrusted",
+    }, 60000);
+    check();
+    if (r && r.thread) {
+      S.loadedThreads.add(r.thread.id);
+      if (select) S.activeThread = r.thread;
+      rememberTitle(r.thread);
+      // 恢复会话只改变当前视图，不能把正在后台执行的轮次当成结束。
+      const running = (r.thread.turns || []).find((t) => t.status === "inProgress" && !S.endedTurns.has(t.id));
+      if (running) S.runningTurns.set(r.thread.id, running);
+      if (select) { S.activeTurn = S.runningTurns.get(r.thread.id) || null; S.cwd = r.thread.cwd || S.cwd; }
+      activityChanged();
+      broadcast({ type: "thread", thread: slimThread(r.thread) });
+    }
+    return r;
+  });
 }
 async function startTurn(text, threadId) {
   const s = String(text || "");
@@ -704,8 +741,9 @@ async function startTurn(text, threadId) {
   try {
     const rpc = await ensureRpc();
     if (generation !== S.generation || S.rpc !== rpc) throw new Error("Codex 引擎已停止，请重新发送");
-    if (initial && !S.activeThread) await resumeThread(initial);
+    if (initial && !S.loadedThreads.has(initial)) await resumeThread(initial, { select: false });
     if (!initial && !S.activeThread) await startThread(S.cwd);
+    assertRpc(rpc, generation);
     const target = initial || S.activeThread.id;
     const params = { threadId: target, input: [{ type: "text", text: s }] };
     if (S.model) params.model = S.model;

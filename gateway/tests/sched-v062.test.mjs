@@ -114,6 +114,36 @@ test("失败重试被后来的成功运行取消，不再重复跑一次", async
   } finally { S.DB.allowLogin = false; }
 });
 
+test("Codex 设置停止旧自动化：暂停并移除其队列，不影响其他任务", async () => {
+  S.DB.allowLogin = true;
+  const t = mk({ freq: { kind: "daily", time: "09:30" }, retry: 1 });
+  let first;
+  const unrelated = { id: "unrelated-schedule", sched: { taskId: "other", key: "other" }, held: true };
+  try {
+    first = await S.fire(t, { reason: "manual" });
+    assert.ok(QUEUE.includes(first));
+    QUEUE.push(unrelated);
+    const response = await post(`/api/sched/${t.id}/stop`, {});
+    assert.equal(response.status, 200);
+    assert.equal(t.on, false);
+    assert.equal(QUEUE.includes(first), false);
+    assert.equal(QUEUE.includes(unrelated), true);
+    assert.equal(S.hasRetry(t.id), false);
+    assert.equal(S.running().some(item => item.taskId === t.id), false);
+  } finally { drop(t, first); QUEUE.splice(QUEUE.indexOf(unrelated), 1); S.DB.allowLogin = false; }
+});
+
+test("用户中止的自动化不安排失败重试", async () => {
+  S.DB.allowLogin = true;
+  const t = mk({ retry: 1 });
+  let item;
+  try {
+    item = await S.fire(t, { reason: "manual" });
+    for (const hook of END_HOOKS) hook({ sched: item.sched, sessionId: null, denied: [], aborted: true }, { failed: true });
+    assert.equal(S.hasRetry(t.id), false);
+  } finally { drop(t, item); S.DB.allowLogin = false; }
+});
+
 test("「跳过下一次」遇到错过的计划：消费标记，不让再下一次也被跳", () => {
   const t = mk({ freq: { kind: "daily", time: "09:30" }, nextAt: Date.now() - 20 * 60000, missed: "run", skipNext: true });
   S.tick();

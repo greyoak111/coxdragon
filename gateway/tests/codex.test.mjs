@@ -17,7 +17,9 @@ function reset() {
   cx.stopServer(); runFlag(false);
   cx.S.rpc = { stderr: "", respond() {}, respondError() {} };
   cx.S.child = null; cx.S.starting = null; cx.S.activeThread = { id: "a" }; cx.S.activeTurn = null;
-  for (const key of ["runningTurns", "startingTurns", "endedTurns", "approvals", "sse"]) cx.S[key].clear();
+  for (const key of ["runningTurns", "startingTurns", "endedTurns", "approvals", "sse", "loadedThreads", "operations"]) cx.S[key].clear();
+  // The protocol fixture represents an engine with these two threads loaded.
+  cx.S.loadedThreads.add("a"); cx.S.loadedThreads.add("b");
   cx.S.models = []; cx.S.model = ""; cx.S.effort = "";
 }
 after(() => { cx.stopServer(); runFlag(false); });
@@ -144,6 +146,7 @@ test("Codex：停止后的延迟回执不能复活旧任务或清掉新任务的
   cx.S.rpc.request = () => new Promise((resolve) => { oldFinish = resolve; });
   const oldTurn = cx.startTurn("old", "b");
   await new Promise((r) => setImmediate(r)); cx.stopServer();
+  cx.S.loadedThreads.add("b");
   cx.S.rpc = { stderr: "", request: () => new Promise((resolve) => { newFinish = resolve; }) };
   const newTurn = cx.startTurn("new", "b"); await new Promise((r) => setImmediate(r));
   oldFinish({ turn: { id: "old", status: "inProgress" } });
@@ -151,6 +154,52 @@ test("Codex：停止后的延迟回执不能复活旧任务或清掉新任务的
   assert.equal(cx.S.runningTurns.size, 0); assert.equal(cx.S.startingTurns.has("b"), true); assert.equal(activityBusy(), true);
   newFinish({ turn: { id: "new", status: "inProgress" } }); await newTurn;
   assert.equal(cx.S.runningTurns.get("b").id, "new");
+});
+
+test("Codex：显式失效目录拒绝创建任务，不切换到默认工作区", async () => {
+  reset(); let called = false;
+  cx.S.rpc.request = async () => { called = true; };
+  for (const cwd of [path.join(CFG.workspace, "missing-project"), "relative-project", " \t"]) {
+    await assert.rejects(cx.startThread(cwd), (e) => e.statusCode === 400);
+  }
+  assert.equal(called, false);
+  assert.equal(cx.S.activeThread.id, "a");
+});
+
+test("Codex：新代引擎先恢复目标线程，后台发送不改变当前视图", async () => {
+  reset(); cx.stopServer();
+  const calls = [];
+  cx.S.rpc = { stderr: "", request: async (method, params) => {
+    calls.push({ method, params });
+    if (method === "thread/resume") cx.handleNotify({ method: "thread/started", params: { thread: { id: params.threadId, cwd: CFG.workspace } } });
+    return method === "thread/resume" ? { thread: { id: params.threadId, cwd: CFG.workspace, turns: [] } }
+      : { turn: { id: "restarted-turn", status: "inProgress" } };
+  } };
+  await cx.startTurn("continue after restart", "b");
+  assert.deepEqual(calls.map((c) => c.method), ["thread/resume", "turn/start"]);
+  assert.equal(cx.S.activeThread.id, "a");
+  assert.equal(cx.S.loadedThreads.has("b"), true);
+  cx.handleNotify({ method: "turn/completed", params: { threadId: "b", turn: { id: "restarted-turn", status: "completed" } } });
+  await cx.startTurn("next", "b");
+  assert.equal(calls.filter((c) => c.method === "thread/resume").length, 1);
+});
+
+test("Codex：创建和恢复在途时阻止切连接，停止后的旧回执不复活线程", async () => {
+  for (const kind of ["start", "resume"]) {
+    reset(); let finish;
+    cx.S.rpc.request = () => new Promise((resolve) => { finish = resolve; });
+    const pending = kind === "start" ? cx.startThread(CFG.workspace) : cx.resumeThread("b");
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(codexActivity().busy, true);
+    assert.equal(activityBusy(), true);
+    assert.throws(() => cx.setConnection({ mode: "chatgpt" }), (e) => e.statusCode === 409);
+    cx.stopServer();
+    finish({ thread: { id: "late-thread", cwd: CFG.workspace, turns: [] } });
+    await assert.rejects(pending, /已停止/);
+    assert.equal(cx.S.activeThread.id, "a");
+    assert.equal(cx.S.loadedThreads.size, 0);
+    assert.equal(codexActivity().busy, false);
+  }
 });
 
 test("Codex：待回执、运行和审批期间保留后台标记，旧引擎空闲不能清掉它", async () => {

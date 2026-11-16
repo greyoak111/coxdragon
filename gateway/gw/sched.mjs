@@ -11,7 +11,7 @@ import { CFG, LIVE, log, tz } from "./config.mjs";
 import { isObj, loadState, saveState, writeAtomic } from "./statefile.mjs";
 import { guarded } from "./crashguard.mjs";
 import { dec, NEXT, readBody, sendJson } from "./http.mjs";
-import { END_HOOKS, QUEUE, RECOVER_HOOKS, START_GUARDS, enqueue } from "./queue.mjs";
+import { END_HOOKS, QUEUE, RECOVER_HOOKS, START_GUARDS, enqueue, abortRun, publishState } from "./queue.mjs";
 import { capList } from "./settings-store.mjs";
 import { RUNS, TRASH_HOOKS, maxParallel } from "./runs.mjs";
 import { publish } from "./bus.mjs";
@@ -291,15 +291,17 @@ function runningNow() {
   return out;
 }
 const WAITING = new Set();   // 到点了、正排队等别的对话跑完的任务 id：计时别把它当成「没排上 / 时间已过」（审查 B17）
+const STOP_VERSION = new WeakMap(); // Cancel in-flight admission even if the task is re-enabled before its wait ends.
 async function fire(t, { reason = "due", attempt = 0, trial = false } = {}) {
-  if (trial) return fireNow(t, { reason, attempt, trial });
+  const stopVersion = STOP_VERSION.get(t);
+  if (trial) return fireNow(t, { reason, attempt, trial, stopVersion });
   // 同一个任务已经有一个到点等待者时不再叠一个：排期间隔 ≤30 分钟时，每个新计划时刻都会进 fireNow 的忙等，
   // 阻塞结束后同一任务会被连续执行多次（审查 11-05）
   if (WAITING.has(t.id)) { log(`⏭ 定时任务「${t.name}」已在排队，跳过这次重复入队`); return null; }
   WAITING.add(t.id);
-  try { return await fireNow(t, { reason, attempt, trial }); } finally { WAITING.delete(t.id); }
+  try { return await fireNow(t, { reason, attempt, trial, stopVersion }); } finally { WAITING.delete(t.id); }
 }
-async function fireNow(t, { reason, attempt, trial }) {
+async function fireNow(t, { reason, attempt, trial, stopVersion }) {
   const skip = (msg) => { log(`⏭ 定时任务「${t.name}」跳过：${msg}`); if (!trial) addRun({ taskId: t.id, at: Date.now(), st: "skip", msg }); };
   // 指定的接口删了：不悄悄换成全局默认那家跑（全局可能是订阅账户，任务内容不该换家发出去）。
   // 放在最前：回落到订阅后下面「订阅账户默认关闭」会先挡住，可报的原因不对，打开了订阅也就挡不住了
@@ -339,6 +341,7 @@ async function fireNow(t, { reason, attempt, trial }) {
       // 排队：每 30 秒看一次，最多等 30 分钟
       const deadline = Date.now() + 30 * 60000;
       while (RUNS.size >= maxParallel()) {
+        if (STOP_VERSION.get(t) !== stopVersion) return skip(tz("任务已停止"));
         if (Date.now() > deadline) return skip(tz("有对话在跑，排队 30 分钟仍没轮到"));
         if (byId(t.id) !== t || (reason === "due" && !t.on)) return skip(tz("排队时任务被关掉或删了"));
         await new Promise((r) => setTimeout(r, 30000));
@@ -346,6 +349,7 @@ async function fireNow(t, { reason, attempt, trial }) {
     }
   }
   // 排队那 30 秒里被删 / 被关、而别的对话又正好在醒来前结束：循环条件直接为假，循环里那道检查没走到（审查 B16）。入队前再看一眼
+  if (STOP_VERSION.get(t) !== stopVersion) return skip(tz("任务已停止"));
   if (!trial && (byId(t.id) !== t || (reason === "due" && !t.on))) return skip(tz("排队时任务被关掉或删了"));
   const p = t.projectId ? projectById(t.projectId) : null;
   // 项目删了：不悄悄退回工作区跑（「可以改项目目录里的文件」到了工作区就是能改工作区，#178-7）
@@ -503,7 +507,7 @@ END_HOOKS.push((run, f) => {
   const want = t.notify === "none" ? false : t.notify === "fail" ? st !== "ok" : t.notify === "found" ? (st !== "ok" || found) : true;
   if (want) note(t, st === "ok" ? tz("定时任务完成：{n}", { n: t.name }) : tz("定时任务没成：{n}", { n: t.name }), msg, drop ? null : sid, st === "ok");
   // 超了花费上限不重试：重试就是再花一遍（#98 03-010）
-  if (st === "err" && !over && ctx.attempt < (+t.retry || 0)) {
+  if (st === "err" && !run.aborted && !over && ctx.attempt < (+t.retry || 0)) {
     clearTimeout(RETRY.get(t.id));
     RETRY.set(t.id, setTimeout(guarded("sched 重试", () => { RETRY.delete(t.id); if (byId(t.id) === t) fire(t, { reason: "retry", attempt: ctx.attempt + 1 }).catch((e) => log("定时任务重试出错：" + e.message)); }), 2 * 60000));
   }
@@ -683,6 +687,17 @@ export async function routeSched(req, res, u, p) {
   const t = byId(dec(m[1]));
   if (!t) return sendJson(res, 404, { error: tz("任务不存在") });
   const sub = m[2] || "";
+  if (sub === "/stop" && req.method === "POST") {
+    const before = { ...t };
+    t.on = false; refreshNext(t);
+    if (!save()) { Object.assign(t, before); refreshNext(t); return sendJson(res, 500, { ok: false, error: "write_failed", message: tz("没保存上：存储满了或没有权限") }); }
+    cancelRetry(t.id);
+    STOP_VERSION.set(t, (STOP_VERSION.get(t) || 0) + 1);
+    for (let i = QUEUE.length - 1; i >= 0; i--) if (QUEUE[i].sched?.taskId === t.id) QUEUE.splice(i, 1);
+    for (const run of RUNS.values()) if (run.sched?.taskId === t.id) abortRun(run);
+    publishState();
+    return sendJson(res, 200, { ok: true, task: summary(t) });
+  }
   if (!sub && req.method === "GET") {
     const mine = RUNLOG.filter((r) => r.taskId === t.id);
     // runsTotal：界面只拿到最近 100 次，据此说「只列出最近 100 次」（#178-3）

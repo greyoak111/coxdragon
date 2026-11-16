@@ -39,12 +39,8 @@ import org.json.JSONObject;
  */
 final class Updater {
     static final String TAG = "coxdragon-upd";
-    static final String REPO = "greyoak111/coxdragon";
-    /** 备用源：cccodroid.net 镜像了最近几个版本的 APK 和一份同形状的发布列表（dl/releases.json）。
-     *  只在 GitHub 连不上 / 下载不顺时用；下来的 APK 照样核 sha256 和签名。工具包太大，没有镜像 */
-    static final String MIRROR = "https://coxdragon.invalid";
-    /** 同一份 APK 与发布列表的直连线路（不经 Cloudflare；国内有的网络只通其中一条） */
-    static final String DL = "https://coxdragon.invalid";
+    static final String APP_REPO = UpdateSources.APP;
+    static final String DEVKIT_REPO = UpdateSources.DEVKIT;
     /** 工具包与本 APK 的接口版本：lock.json 里的 compat（缺省 1）对不上就不装，防止新工具包配旧外壳 */
     static final int DEVKIT_COMPAT = 1;
     static final String CH = "updates";
@@ -226,6 +222,7 @@ final class Updater {
         return new JSONObject().put("ok", true).put("auto", auto()).put("channel", channel()).put("pin", pinVer())
             .put("flavor", flavor()).put("flavorPref", flavorPref()).put("only36", only36()).put("wantFlavor", wantFlavor())
             .put("lastCheck", prefs().getLong("lastCheck", 0)).put("checking", checking).put("error", lastError).put("items", a)
+            .put("sources", new JSONObject().put("app", APP_REPO).put("devkit", DEVKIT_REPO).put("components", UpdateSources.COMPONENTS))
             .put("verify", lastVerify == null ? JSONObject.NULL : lastVerify);
     }
 
@@ -332,14 +329,14 @@ final class Updater {
         // 网差时界面能卡在「识别中」十几分钟、没法取消（0.6.9 审计 200-14-07）。超了就按认不出处理，调用方有兜底
         long deadline = System.nanoTime() + IDENTIFY_BUDGET_MS * 1_000_000L;
         try {
-            JSONArray rels = new JSONArray(new String(Installer.httpGetSmall(feed(), msLeft(deadline)), StandardCharsets.UTF_8));
+            JSONArray rels = new JSONArray(new String(Installer.httpGetSmall(feed(DEVKIT_REPO), msLeft(deadline)), StandardCharsets.UTF_8));
             int n = 0;
             for (int i = 0; i < rels.length() && n < 8; i++) {
                 JSONObject r = rels.getJSONObject(i);
                 String tag = r.optString("tag_name");
                 if (r.optBoolean("draft") || !tag.startsWith("devkit-")) continue;
                 n++;
-                String base = "https://github.com/" + REPO + "/releases/download/" + tag + "/";
+                String base = UpdateSources.release(DEVKIT_REPO, tag);
                 try {
                     // 线上清单要验过签才拿来认本地文件：只靠 TLS 的话，换掉清单就能让自制工具包显示成「已发布的版本」（审查 10-29 低8）
                     byte[] lb = Installer.httpGetSmall(base + "devkit.lock.json", msLeft(deadline));
@@ -450,26 +447,21 @@ final class Updater {
     private void check(boolean manual) {
         lastError = "";
         refreshCurrent();
-        String[] ghErr = new String[1];
-        JSONArray[] lists = fetchLists(ghErr);
-        JSONArray rels = lists[0];
-        boolean mirror = false;
-        if (rels == null) {
-            lastError = Tr.t("连不上 GitHub：") + ghErr[0];
-            rels = lists[1];
-            mirror = rels != null;
-            // GitHub 不通：应用本身改看镜像的发布列表；工具包没有镜像，如实说查不了（别报成"已是最新"）
-            if (rels == null) app.set("error", lastError);
-            if (pinnedInstalled()) devkit.set("uptodate", Tr.t("已是本应用配套的版本（GitHub 连不上，暂时查不了更新的）"));
-            else devkit.set("error", lastError);
+        String[] errors = new String[2];
+        JSONArray[] lists = fetchLists(errors);
+        if (lists[0] != null) {
+            try { checkApp(lists[0]); } catch (Exception e) { feedFailure(app, e.getMessage()); }
+        } else {
+            lastError = Tr.t("应用更新源无法访问（私有仓库或网络不可用）：") + APP_REPO + " · " + errors[0];
+            feedFailure(app, lastError);
         }
-        if (rels != null) {
-            try { checkApp(rels); if (mirror && !"error".equals(app.state)) app.message = app.message.isEmpty() ? Tr.t("来自 cccodroid.net 镜像") : app.message + Tr.t(" · 来自 cccodroid.net 镜像"); }
-            catch (Exception e) { app.set("error", e.getMessage()); }
-            // 首装还没完成（工具包没装好）就别查工具包：那时读不到已装的模块，planModules 会按「整包用户」规划成全部模块，
-            // 自动更新在 Wi‑Fi 下把它们全下好，首装刚按勾选装完，启动流程又把这份「已下载的更新」装上 —— 勾了两个、装了八个（群友 10-24）
-            if (!env.devkitReady()) devkit.set("uptodate", Tr.t("首次安装进行中"));
-            else if (!mirror) try { checkDevkit(rels); } catch (Exception e) { devkit.set("error", e.getMessage()); }
+        // Toolchain checks are independent of the app's repository visibility.
+        if (!env.devkitReady()) devkit.set("uptodate", Tr.t("首次安装进行中"));
+        else if (lists[1] != null) {
+            try { checkDevkit(lists[1]); } catch (Exception e) { feedFailure(devkit, e.getMessage()); }
+        } else if (!inFlight(devkit)) {
+            if (pinnedInstalled()) devkit.set("uptodate", Tr.t("已是本应用配套的版本（暂时查不了更新）"));
+            else devkit.set("error", Tr.t("工具包更新源无法访问：") + DEVKIT_REPO + " · " + errors[1]);
         }
         // Codex 首装不包含旧引擎；定期检查只更新已安装的组件，不能顺带把它装回来。
         if (env.claudeReady()) {
@@ -483,44 +475,41 @@ final class Updater {
         releaseApp();         // 工具包停在"已下载"没去装（比如有任务在跑）时，别让 APK 一直等着
     }
 
-    /**
-     * 发布列表三条线同时问：GitHub（App + 工具包）、cccodroid.net 与 dl.cccodroid.net（只有 App，由 GitHub 定时生成）。
-     * 以前先等 GitHub 连接 20 秒 + 读 60 秒超时才看镜像，不开代理的网络里一次检查要卡一分多钟（群友 10-31）。
-     * GitHub 通了就用它（镜像可能晚几分钟）；GitHub 报错立刻看镜像；GitHub 一直挂着，最多等它 15 秒，镜像有了就先用镜像。
-     * 返回 {GitHub 的列表, 镜像的列表}，没取到的是 null
-     */
-    private JSONArray[] fetchLists(String[] ghErr) {
-        final String[] urls = { feed(), MIRROR + "/dl/releases.json", DL + "/dl/releases.json" };
-        final JSONArray[] got = new JSONArray[3];
-        final String[] err = new String[3];
-        final boolean[] fin = new boolean[3];
-        final Object lk = new Object();
-        for (int i = 0; i < 3; i++) {
-            final int k = i;
-            Thread t = new Thread(() -> {
-                JSONArray a = null; String e = null;
-                try { a = new JSONArray(new String(Installer.httpGetSmall(urls[k]), StandardCharsets.UTF_8)); }
-                catch (Exception x) { e = String.valueOf(x.getMessage()); }
-                synchronized (lk) { got[k] = a; err[k] = e; fin[k] = true; lk.notifyAll(); }
+    private boolean inFlight(Item item) {
+        return "downloading".equals(item.state) || "installing".equals(item.state)
+            || "verifying".equals(item.state) || "ready".equals(item.state);
+    }
+    private synchronized void feedFailure(Item item, String message) {
+        if (!inFlight(item)) item.set("error", message);
+    }
+
+    /** App and devkit feeds run concurrently; neither channel substitutes for the other. */
+    private JSONArray[] fetchLists(String[] errors) {
+        final String[] urls = { feed(APP_REPO), feed(DEVKIT_REPO) };
+        final JSONArray[] got = new JSONArray[2];
+        final boolean[] finished = new boolean[2];
+        final Object lock = new Object();
+        for (int i = 0; i < urls.length; i++) {
+            final int index = i;
+            Thread worker = new Thread(() -> {
+                JSONArray result = null; String error = null;
+                try { result = new JSONArray(new String(Installer.httpGetSmall(urls[index], 20000), StandardCharsets.UTF_8)); }
+                catch (Exception e) { error = String.valueOf(e.getMessage()); }
+                synchronized (lock) { got[index] = result; errors[index] = error; finished[index] = true; lock.notifyAll(); }
             }, "upd-feed-" + i);
-            t.setDaemon(true);
-            t.start();
+            worker.setDaemon(true); worker.start();
         }
-        long t0 = System.currentTimeMillis();
-        synchronized (lk) {
-            for (;;) {
-                long el = System.currentTimeMillis() - t0;
-                boolean mirOk = got[1] != null || got[2] != null, mirDone = mirOk || fin[1] && fin[2];
-                // GitHub 通了就用；GitHub 失败且镜像都有结果了就收；GitHub 挂过 15 秒、镜像确实拿到了列表才不等它。
-                // 镜像都不通时得接着等 GitHub（慢但能通的梯子），不能 15 秒就放弃
-                if (got[0] != null || fin[0] && mirDone || el >= 15000 && mirOk || el >= 90000) break;
-                try { lk.wait(250); } catch (InterruptedException e) { break; }
+        long deadline = System.nanoTime() + 25000_000_000L;
+        synchronized (lock) {
+            while (!finished[0] || !finished[1]) {
+                long left = (deadline - System.nanoTime()) / 1_000_000L;
+                if (left <= 0) break;
+                try { lock.wait(Math.min(250, left)); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
             }
-            ghErr[0] = fin[0] ? err[0] : Tr.t("超时");
-            JSONArray mir = got[1];
-            if (mir == null || got[2] != null && cmpVer(latestApp(got[2]), latestApp(mir)) > 0) mir = got[2];
-            Log.i(TAG, "发布列表：GitHub " + (got[0] != null ? "通" : fin[0] ? "不通" : "未回") + "，镜像 " + (got[1] != null ? "通" : "-") + "/" + (got[2] != null ? "通" : "-"));
-            return new JSONArray[]{ got[0], mir };
+            for (int i = 0; i < urls.length; i++) if (!finished[i]) errors[i] = Tr.t("超时");
+            // Copy results: a late worker must not mutate the completed check's snapshot.
+            return new JSONArray[]{ got[0], got[1] };
         }
     }
 
@@ -567,9 +556,9 @@ final class Updater {
                 if (!a.optString("name").equals(name)) continue;
                 app.url = a.getString("browser_download_url");
                 // 三处都是同一份文件，谁先谁后由下载前测速定（Installer.rank），这里只管都列上
-                String gh = "https://github.com/" + REPO + "/releases/download/" + tag + "/" + name;
-                app.alt = app.url.equals(gh) ? MIRROR + "/dl/" + tag + "/" + name : gh;
-                app.alt2 = DL + "/dl/" + tag + "/" + name;
+                String gh = UpdateSources.release(APP_REPO, tag) + name;
+                app.alt = app.url.equals(gh) ? null : gh;
+                app.alt2 = null;
                 app.size = a.optLong("size");
                 String d = a.optString("digest", "");
                 app.sha = d.startsWith("sha256:") ? d.substring(7).toLowerCase(java.util.Locale.ROOT) : null;
@@ -610,7 +599,7 @@ final class Updater {
         String st0 = devkit.state;
         if ("verifying".equals(st0)) { recheckDevkit = true; return; }   // 校验完再补查（见 verifyAsync）
         if ("downloading".equals(st0) || "installing".equals(st0) || "ready".equals(st0)) return;
-        String base = "https://github.com/" + REPO + "/releases/download/" + best + "/";
+        String base = UpdateSources.release(DEVKIT_REPO, best);
         // 最新的就是 APK 钉的那版（常态：新工具包跟着新 APK 走）：校验值用 APK 自带的，不联网 ——
         // 国内连不上 github.com 时，以前这里取 devkit.lock.json 失败，整行报错（群友 10-22）
         JSONObject pin = devkitPin(ctx), lock;
@@ -829,12 +818,12 @@ final class Updater {
 
     /** 发布列表地址。home/.config/cccodroid/update-feed 里写了地址就用它（测试更新流程用，形状同 GitHub API）。
      *  只在可调试的包里认：正式包里应用身份的任何程序都能写这个文件，拿它把更新检查指到别处（审查 v0.5.9 B1） */
-    private String feed() {
-        File f = new File(env.home, ".config/cccodroid/update-feed");
+    private String feed(String repository) {
+        File f = new File(env.home, ".config/cccodroid/" + (APP_REPO.equals(repository) ? "update-feed" : "devkit-update-feed"));
         boolean debuggable = (ctx.getApplicationInfo().flags & android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0;
         try { if (debuggable && f.isFile()) { String u = new String(java.nio.file.Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8).trim(); if (!u.isEmpty()) return u; } }
         catch (Exception ignored) {}
-        return "https://api.github.com/repos/" + REPO + "/releases?per_page=30";
+        return UpdateSources.feed(repository);
     }
 
     /** 自动模式的规则：见类注释 */

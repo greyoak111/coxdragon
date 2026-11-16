@@ -1,4 +1,5 @@
 /* The Codex shell is active before either application script loads. */
+.cx-automation-task{margin-top:20px;overflow-wrap:anywhere}.cx-automation-actions{display:flex;flex-wrap:wrap;gap:8px}
 html.cx-shell #topbar,html.cx-shell #drawer,html.cx-shell #chat,html.cx-shell #composer,html.cx-shell #ctxbar,html.cx-shell #wl-below{display:none!important}
 html.cx-shell .cx-legacy-control{display:none!important}
 html.cx-shell #pages{top:0;inset-inline-start:0}#cx-page-back{display:none}

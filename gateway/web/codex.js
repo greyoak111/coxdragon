@@ -63,6 +63,7 @@
     onboarded: LS.get("onboarded", "") === "1", setupSession: false, setupBusy: "", setupError: "", setupStep: 0, threadsLoaded: false,
     settingsTab: "general", settingsBusy: false, extensions: null, extensionsBusy: false, extensionsError: "", extensionsSeq: 0,
     skipLogin: LS.get("skipLogin", "") === "1", connectionBusy: false,
+    automation: null, automationBusy: false, automationError: "",
   };
   try { st.pins = JSON.parse(LS.get("pins", "[]")); if (!Array.isArray(st.pins)) st.pins = []; } catch {}
 
@@ -125,7 +126,7 @@
   <section class="cx-onboarding" id="cx-onboarding" aria-labelledby="cx-setup-title" hidden></section>
   <dialog class="cx-dialog cx-preferences" id="cx-preferences" aria-labelledby="cx-preferences-title">
     <div class="cx-dialog-head"><h2 id="cx-preferences-title">${esc(t("Codex 设置"))}</h2><button class="cx-icon" data-act="settings-close" aria-label="${esc(t("关闭"))}">${ico("close")}</button></div>
-    <nav class="cx-pref-tabs" aria-label="${esc(t("设置"))}"><button data-act="settings-tab" data-tab="general">${esc(t("通用"))}</button><button data-act="settings-tab" data-tab="connection">${esc(t("模型连接"))}</button><button data-act="settings-tab" data-tab="extensions">${esc(t("技能与 MCP"))}</button><button data-act="settings-tab" data-tab="device">${esc(t("应用与设备设置"))}</button></nav>
+    <nav class="cx-pref-tabs" aria-label="${esc(t("设置"))}"><button data-act="settings-tab" data-tab="general">${esc(t("通用"))}</button><button data-act="settings-tab" data-tab="connection">${esc(t("模型连接"))}</button><button data-act="settings-tab" data-tab="extensions">${esc(t("技能与 MCP"))}</button><button data-act="settings-tab" data-tab="automation">${esc(t("自动化"))}</button><button data-act="settings-tab" data-tab="device">${esc(t("应用与设备设置"))}</button></nav>
     <div id="cx-preferences-body"></div>
     <div id="cx-device-settings" class="cx-device-settings" hidden></div>
   </dialog>
@@ -216,7 +217,9 @@
     if (act === "app-menu" || act === "settings") return openSettings();
     if (act === "extensions") return openSettings("extensions");
     if (act === "settings-close") return dom.preferences.close();
-    if (act === "settings-tab") { st.settingsTab = el.dataset.tab; paintSettings(); if (st.settingsTab === "extensions") loadExtensions(); return; }
+    if (act === "settings-tab") { st.settingsTab = el.dataset.tab; paintSettings(); if (st.settingsTab === "extensions") loadExtensions(); if (st.settingsTab === "automation") loadAutomation(); return; }
+    if (act === "automation-refresh") return loadAutomation();
+    if (act === "automation-toggle" || act === "automation-stop" || act === "automation-delete") return changeAutomation(el, act);
     if (act === "extensions-refresh") return loadExtensions();
     if (act === "skill-toggle") return toggleSkill(el);
     if (act === "extension-files") { dom.preferences.close(); return CC.openFiles?.(el.dataset.dir); }
@@ -1192,6 +1195,7 @@
     ensureDom(); st.settingsTab = tab; paintSettings();
     if (!dom.preferences.open) dom.preferences.showModal();
     if (tab === "extensions") loadExtensions();
+    if (tab === "automation") loadAutomation();
   }
   function paintSettings() {
     st.cancelConnectionForm?.();
@@ -1202,6 +1206,7 @@
     if (st.settingsTab === "device") { CC.mountDeviceSettings($("cx-device-settings")); return; }
     if (st.settingsTab === "extensions") { paintExtensions(); return; }
     if (st.settingsTab === "connection") { paintConnection(); return; }
+    if (st.settingsTab === "automation") { paintAutomation(); return; }
     const models = (s.models || []).filter((m) => !m.hidden);
     const cur = models.find((m) => m.id === st.model) || models.find((m) => m.isDefault) || models[0];
     const row = (name, value) => `<div class="cx-pref-row"><b>${esc(t(name))}</b><span>${value}</span></div>`;
@@ -1225,6 +1230,37 @@
     $("cx-pref-theme").addEventListener("change", (e) => { const prefix = (window.Theme?.pref || "").match(/^(qs|zy|gc|ss)-/)?.[0] || ""; window.Theme?.set(prefix + e.target.value); });
     $("cx-pref-lang").addEventListener("change", (e) => { saveDraft(); window.I18N?.setLang(e.target.value); });
     loadNotifySettings();
+  }
+
+  function paintAutomation() {
+    const data = st.automation, disabled = st.automationBusy ? " disabled" : "";
+    $("cx-preferences-body").innerHTML = `<section><h3>${esc(t("自动化"))}</h3><p>${esc(t("这里管理升级前的 Claude 定时任务。Codex 定时执行尚未接入；现有任务仍使用原来的项目与接口配置。"))}</p><p>${esc(t("暂停会阻止后续调度；停止会暂停任务并取消本次排队和执行。"))}</p><button data-act="automation-refresh"${disabled}>${esc(t("刷新"))}</button><p class="cx-form-error" role="alert">${esc(st.automationError)}</p>
+      ${!data ? `<p>${esc(t(st.automationBusy ? "加载中…" : "请刷新重试"))}</p>` : !data.tasks.length ? `<p>${esc(t("没有旧自动化任务"))}</p>` : data.tasks.map((task) => {
+        const running = data.running.includes(task.id);
+        return `<section class="cx-automation-task" data-task="${esc(task.id)}"><h3>${esc(task.name)}</h3><p>Claude · ${esc(t(running ? "正在执行或排队" : task.on ? "已启用" : "已暂停"))}</p><p>${esc(task.prompt || "")}</p><p>${esc(t("下次执行"))}：${task.nextAt ? esc(new Date(task.nextAt).toLocaleString()) : "—"}</p>${task.last ? `<p>${esc(t("最近结果"))}：${esc(task.last.msg || task.last.st)}</p>` : ""}<div class="cx-automation-actions"><button data-act="automation-toggle" data-id="${esc(task.id)}"${disabled}>${esc(t(task.on ? "暂停" : "启用"))}</button>${running ? `<button data-act="automation-stop" data-id="${esc(task.id)}"${disabled}>${esc(t("停止本次并暂停"))}</button>` : ""}<button data-act="automation-delete" data-id="${esc(task.id)}"${disabled}>${esc(t("删除"))}</button></div></section>`;
+      }).join("")}</section>`;
+  }
+  async function loadAutomation() {
+    if (st.automationBusy) return;
+    st.automationBusy = true; st.automationError = ""; paintAutomation();
+    try { const data = await api("/api/sched"); st.automation = { tasks: data.tasks || [], running: data.running || [] }; }
+    catch (e) { st.automationError = e.message; }
+    finally { st.automationBusy = false; if (dom.preferences.open && st.settingsTab === "automation") paintAutomation(); }
+  }
+  async function changeAutomation(el, act) {
+    if (st.automationBusy) return;
+    const task = st.automation?.tasks.find((task) => task.id === el.dataset.id);
+    if (!task) return;
+    st.automationBusy = true; st.automationError = ""; paintAutomation();
+    try {
+      const url = "/api/sched/" + encodeURIComponent(task.id);
+      const result = await api(url + (act === "automation-stop" ? "/stop" : ""), { method: act === "automation-delete" ? "DELETE" : act === "automation-stop" ? "POST" : "PATCH", headers: { "content-type": "application/json" }, body: act === "automation-toggle" ? JSON.stringify({ on: !task.on }) : undefined });
+      if (result.ok === false) throw new Error(result.message || result.error || t("保存失败"));
+      if (act === "automation-delete") st.automation.tasks = st.automation.tasks.filter(item => item.id !== task.id);
+      else if (result.task) Object.assign(task, result.task);
+      const data = await api("/api/sched"); st.automation = { tasks: data.tasks || [], running: data.running || [] };
+    } catch (e) { st.automationError = e.message; }
+    finally { st.automationBusy = false; if (dom.preferences.open && st.settingsTab === "automation") paintAutomation(); }
   }
 
   function paintConnection() {

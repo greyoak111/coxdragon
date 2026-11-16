@@ -141,14 +141,20 @@ async function bridge(body, config, res, signal) {
     emit("response.content_part.done", { item_id: textItem.id, output_index: output.indexOf(textItem), content_index: 0, part: textItem.content[0] });
     emit("response.output_item.done", { output_index: output.indexOf(textItem), item: textItem });
   }
-  // Never publish a partially generated tool call for execution.
+  // Validate the whole batch before publishing any executable call. A later
+  // malformed call must not turn an already executed earlier call into a retry.
+  const validatedCalls = [];
   if (finish !== "length") for (const call of calls.values()) {
     if (!call.id || !request.tools?.some((t) => t.function.name === call.name)) throw apiError("invalid_tool", "第三方接口返回了未声明的工具调用");
     let args; try { args = JSON.parse(call.arguments); } catch { throw apiError("invalid_tool", "第三方接口返回了无效的工具参数"); }
     if (custom.has(call.name) && typeof args?.input !== "string") throw apiError("invalid_tool", "自定义工具缺少 input 字符串");
-    const output_index = output.length, item = { id: "fc_" + crypto.randomBytes(10).toString("hex"),
+    const item = { id: "fc_" + crypto.randomBytes(10).toString("hex"),
       type: custom.has(call.name) ? "custom_tool_call" : "function_call", call_id: call.id, ...toolMap.get(call.name), status: "completed",
       ...(custom.has(call.name) ? { input: args.input } : { arguments: call.arguments }) };
+    validatedCalls.push({ call, args, item });
+  }
+  for (const { call, args, item } of validatedCalls) {
+    const output_index = output.length;
     output.push(item);
     emit("response.output_item.added", { output_index, item: { ...item, status: "in_progress", ...(custom.has(call.name) ? { input: "" } : { arguments: "" }) } });
     const stem = custom.has(call.name) ? "response.custom_tool_call_input" : "response.function_call_arguments";

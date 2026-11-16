@@ -208,7 +208,7 @@ test("移动端：从输入区按钮起手不算抽屉手势", () => {
 
 test("app.js 加载失败时静态壳给重试提示（#182 S-02 网页端半）", () => {
   assert.ok(indexHtml.includes("界面脚本没能加载，点这里重试"));
-  assert.ok(indexHtml.includes("if (window.__cc) return;"));
+  assert.ok(indexHtml.includes('if (!document.getElementById("cx-loading")) return;'));
   assert.ok(indexHtml.includes("location.reload()"));
 });
 

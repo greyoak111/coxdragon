@@ -680,6 +680,7 @@
     if (window.CODEX && name !== "codex" && name !== "changelog") {
       if (name === "settings") return openSettings(cat);
       if (name === "ext" || name === "caps") return CODEX.openSettings("extensions");
+      if (name === "sched") return CODEX.openSettings("automation");
       openPage("codex");
       return CODEX.openSidebar();
     }
