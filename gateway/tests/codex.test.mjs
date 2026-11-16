@@ -28,14 +28,14 @@ after(() => { cx.stopServer(); runFlag(false); });
 test("Codex：四种权限传给引擎，运行中禁止改变权限", async () => {
   reset(); const calls=[];
   cx.S.rpc.request=async(method,params)=>{calls.push({method,params});return method==="turn/start"?{turn:{id:"permission-turn",status:"completed"}}:{thread:{id:"permission-thread",cwd:CFG.workspace,turns:[]}};};
-  for(const [mode,sandbox,approval,reviewer] of [["read","read-only","never","user"],["ask","workspace-write","untrusted","user"],["auto","workspace-write","on-request","auto_review"],["full","danger-full-access","never","user"]]){
+  for(const [mode,sandbox,approval,reviewer] of [["read","read-only","never","user"],["ask","danger-full-access","untrusted","user"],["auto","danger-full-access","untrusted","auto_review"],["full","danger-full-access","never","user"]]){
     cx.updatePermissions(mode);
     assert.equal(cx.status().permissions.mode,mode);
     await cx.startThread(CFG.workspace); const created=calls.at(-1).params;
     assert.equal(created.sandbox,sandbox);assert.equal(created.approvalPolicy,approval);assert.equal(created.approvalsReviewer,reviewer);
     await cx.startTurn("permission check","permission-thread"); const turn=calls.at(-1).params;
     assert.equal(turn.approvalPolicy,approval);assert.equal(turn.approvalsReviewer,reviewer);
-    assert.equal(turn.sandboxPolicy.type,({read:"readOnly",ask:"workspaceWrite",auto:"workspaceWrite",full:"dangerFullAccess"})[mode]);
+    assert.equal(turn.sandboxPolicy.type,mode==="read"?"readOnly":"dangerFullAccess");
   }
   cx.S.runningTurns.set("b",{id:"busy",status:"inProgress"});
   assert.throws(()=>cx.updatePermissions("full"),/任务结束/);

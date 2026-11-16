@@ -43,7 +43,7 @@ const server = http.createServer(async (req, res) => {
       assert(body.tools.some(tool => tool.function.name === "exec_command"));
       assert.equal(body.reasoning_effort, "high", "Chat 适配器保留所选思考强度");
       send({ choices: [{ delta: { reasoning_content: "Synthetic reasoning summary." }, finish_reason: null }] });
-      if (mode === "chat-valid" && requests.length > 1) {
+      if ((mode === "chat-valid" || mode === "chat-approval") && requests.length > 1) {
         assert(body.messages.some(message => message.role === "tool" && message.tool_call_id === "call_fixture"));
         send({ choices: [{ delta: { content: text }, finish_reason: "stop" }] });
       } else {
@@ -141,12 +141,10 @@ try {
   assert.equal((await second.turn(first.thread.id)).status, "completed");
   await second.stop(); results.push("persisted thread resumes in a new engine process");
 
-  for(const [name,sandbox,approvalPolicy,approvalsReviewer,policyType] of [["read","read-only","never","user","readOnly"],["ask","workspace-write","untrusted","user","workspaceWrite"],["auto","workspace-write","on-request","auto_review","workspaceWrite"],["full","danger-full-access","never","user","dangerFullAccess"]]){
+  for(const [name,sandbox,approvalPolicy,approvalsReviewer,policyType] of [["read","read-only","never","user","readOnly"],["ask","danger-full-access","untrusted","user","dangerFullAccess"],["auto","danger-full-access","untrusted","auto_review","dangerFullAccess"],["full","danger-full-access","never","user","dangerFullAccess"]]){
     mode="responses";requests=[];
     const {driver,response}=await start("responses",{sandbox,approvalPolicy,approvalsReviewer});
-    // Without the optional Windows sandbox setup, Codex narrows workspace-write
-    // to read-only. It must never broaden either policy to full access.
-    assert([policyType,...(process.platform==="win32"&&["ask","auto"].includes(name)?["readOnly"]:[])].includes(response.sandbox.type),name+": actual engine sandbox "+response.sandbox.type);
+    assert.equal(response.sandbox.type,policyType,name+": actual engine sandbox "+response.sandbox.type);
     assert.equal(response.approvalPolicy,approvalPolicy);assert.equal(response.approvalsReviewer,approvalsReviewer);
     results.push({permission:name,effectiveSandbox:response.sandbox.type,reviewer:response.approvalsReviewer});await driver.stop();
   }
@@ -158,6 +156,20 @@ try {
   await readOnly.driver.stop();adapterClose?.();adapterClose=null;
   assert.equal(executionCount(),0,"read-only sandbox cannot execute a write to the workspace");
   results.push("read-only policy prevents a real tool from writing to the workspace");
+
+  for(const decision of ["decline","accept"]){
+    mode="chat-approval";requests=[];fs.rmSync(marker,{force:true});
+    const probe=await start("chat",{sandbox:"danger-full-access",approvalPolicy:"untrusted",approvalsReviewer:"user"});
+    const completion=probe.driver.turn(probe.thread.id);
+    const deadline=Date.now()+15000;
+    while(Date.now()<deadline&&!probe.driver.events.some(e=>e.method==="item/commandExecution/requestApproval"))await new Promise(resolve=>setTimeout(resolve,20));
+    const approval=probe.driver.events.find(e=>e.method==="item/commandExecution/requestApproval");
+    assert(approval,"risky command must await user approval");assert.equal(executionCount(),0,"command cannot run before user approval");
+    probe.driver.child.stdin.write(JSON.stringify({id:approval.id,result:{decision}})+"\n");
+    await completion;await probe.driver.stop();adapterClose?.();adapterClose=null;
+    assert.equal(executionCount(),decision==="accept"?1:0,"approval decision controls real command execution");
+    results.push({permission:"ask",decision,executedCommands:executionCount()});
+  }
 
   for (const scenario of ["chat-valid", "chat-invalid-json", "chat-unknown-tool", "chat-truncated", "responses-interrupted"]) {
     mode = scenario; requests = []; fs.rmSync(marker, { force: true });

@@ -155,6 +155,8 @@
       <div class="cx-menu-model-heading">${esc(t("模型与思考强度"))}</div><div id="cx-menu-models"></div>
     </div>
     <div class="cx-menu-list" id="cx-task-actions" hidden>
+      <button data-act="files">${ico("folder")}<span>${esc(t("文件浏览器"))}</span></button>
+      <button data-act="terminal">${ico("terminal")}<span>${esc(t("终端"))}</span></button>
       <button data-act="review">${ico("diff")}<span>${esc(t("改动审阅"))}</span><b id="cx-menu-change-count">0</b></button>
       <button data-act="git">${ico("branch")}<span>${esc(t("在 Git 面板中提交"))}</span></button>
       <button data-act="extensions">${ico("plus")}<span>${esc(t("技能与 MCP"))}</span></button>
@@ -175,7 +177,12 @@
       mobileMenu: $("cx-mobile-menu"), activity: $("cx-activity"),
     };
     root.addEventListener("click", onClick);
-    $("cx-controls").addEventListener("close", () => { if($("cx-controls").open)return;st.referenceSeq++; const action = st.controlTab === "model" ? "composer-model" : st.controlTab === "permission" ? "composer-permission" : "composer-reference"; root.querySelector(`[data-act="${action}"]`)?.focus(); });
+    $("cx-controls").addEventListener("close", () => { if($("cx-controls").open)return;st.referenceSeq++;st.referenceLoading=false; const action = st.controlTab === "model" ? "composer-model" : st.controlTab === "permission" ? "composer-permission" : "composer-reference"; root.querySelector(`[data-act="${action}"]`)?.focus(); });
+    $("cx-controls").addEventListener("click", event => {
+      if(event.target!==$("cx-controls"))return;
+      const bounds=$("cx-controls").getBoundingClientRect();
+      if(event.clientX<bounds.left||event.clientX>bounds.right||event.clientY<bounds.top||event.clientY>bounds.bottom)$("cx-controls").close();
+    });
     dom.input.addEventListener("input", () => { if (/(?:^|\s)@$/.test(dom.input.value)) openControls("references"); });
     document.addEventListener("click", (event) => {
       const context = $("cx-context");
@@ -820,6 +827,10 @@
         const out = d.querySelector(".cx-out");
         out.textContent = it.out || "";
         out.style.display = it.out ? "" : "none";
+        const sandboxFailed = stt === "failed" && /error building bubblewrap command|bwrap:|filesystem-restricted execution requires bubblewrap|error applying legacy Linux sandbox restrictions|LandlockRestrict/.test(it.out || "");
+        let notice=d.querySelector(".cx-sandbox-error");
+        if(sandboxFailed&&!notice){notice=document.createElement("div");notice.className="cx-sandbox-error cx-form-error";notice.setAttribute("role","alert");notice.innerHTML=`<p>${esc(t("当前设备无法启用 Codex 文件沙箱，该命令未执行。可以更换运行环境，或自行选择完全访问后重试。"))}</p><button data-act="composer-permission">${esc(t("权限控制"))}</button>`;d.appendChild(notice);}
+        if(!sandboxFailed)notice?.remove();
         break;
       }
       case "fileChange": {
@@ -1285,6 +1296,7 @@
 
   function openControls(tab) {
     ensureDom(); st.controlTab = tab;
+    $("cx-controls").dataset.tab=tab;
     $("cx-controls-title").textContent = t(tab === "model" ? "模型设置" : tab === "permission" ? "权限控制" : "添加引用");
     if (tab === "model") paintModelControls();
     else if (tab === "permission") paintPermissions();
@@ -1330,7 +1342,7 @@
   }
   function paintPermissions() {
     const mode = st.status?.permissions?.mode || "ask";
-    const descriptions = { read:"只能读取，禁止写入和提权。", ask:"工作区内执行，风险操作向你询问。", auto:"由 Codex 自动审批器判断提权请求。", full:"允许访问应用可用的文件和网络，无操作审批。" };
+    const descriptions = { read:"只能读取，禁止写入和提权。", ask:"风险命令由你审批；获批后可访问应用文件。", auto:"风险命令由 Codex 审批；获批后可访问应用文件。", full:"允许访问应用可用的文件和网络，无操作审批。" };
     $("cx-controls-body").innerHTML = `<div class="cx-permission-options">${[["read","只读"],["ask","询问"],["auto","帮我批准"],["full","完全访问"]].map(([id,name])=>`<button class="cx-permission-option" data-act="permission-mode" data-mode="${id}" aria-pressed="${id===mode}"${st.permissionBusy ? " disabled":""}>${ico("shield")}<span><b>${esc(t(name))}</b><small>${esc(t(descriptions[id]))}</small></span><i>${id===mode?"✓":""}</i></button>`).join("")}</div><p class="cx-field-note">${esc(t("权限由 Codex 引擎执行，仍受 Android 应用权限边界约束。"))}</p><p class="cx-form-error" role="alert">${esc(st.permissionError || "")}</p>`;
   }
   async function savePermission(mode) {
@@ -1367,7 +1379,10 @@
     if(st.controlTab!=="references")return;
     const tab=st.referenceTab||"all", data=st.referenceCatalog||{};
     const row=(type,path,name,detail)=>`<button class="cx-reference-row" data-act="reference-add" data-type="${type}" data-path="${esc(path)}" data-name="${esc(name)}"><span><b>${esc(type==="file"?name:"@"+name)}</b><small>${esc(detail||path)}</small></span>${ico("plus")}</button>`;
-    $("cx-controls-body").innerHTML=`<nav class="cx-reference-tabs">${[["all","全部"],["plugin","插件"],["skill","技能"],["mcp","MCP"],["file","本地文件"]].map(([id,name])=>`<button data-act="reference-tab" data-tab="${id}" aria-pressed="${tab===id}">${esc(t(name))}</button>`).join("")}</nav><div id="cx-reference-list"></div>`;
+    // Keep tab buttons mounted while async inventories arrive, including between
+    // pointerdown and click; replacing them can silently lose a user's tap.
+    if(!$("cx-controls-body").querySelector(".cx-reference-tabs"))$("cx-controls-body").innerHTML=`<nav class="cx-reference-tabs">${[["all","全部"],["plugin","插件"],["skill","技能"],["mcp","MCP"],["file","本地文件"]].map(([id,name])=>`<button data-act="reference-tab" data-tab="${id}">${esc(t(name))}</button>`).join("")}</nav><div id="cx-reference-list"></div>`;
+    $("cx-controls-body").querySelectorAll('[data-act="reference-tab"]').forEach(button=>button.setAttribute("aria-pressed",String(button.dataset.tab===tab)));
     const box=$("cx-reference-list");
     if(st.referenceLoading){box.textContent=t("加载中…");return;}
     if(st.referenceError){box.innerHTML=`<p class="cx-form-error">${esc(st.referenceError)}</p>`;return;}

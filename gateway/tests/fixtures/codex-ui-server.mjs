@@ -27,7 +27,7 @@ export async function startCodexUiServer() {
     cwd: projects[0].path, activeThread: threads.find((th) => th.id === state.active) || null, approvals: state.pending,
     model: state.model, effort: state.effort, connection: { ...state.connection }, paths: { codexHome: "/synthetic/home/.codex" },
     contexts: state.contexts, compacting: state.compacting, metrics: state.metrics, contextWindow: state.contextWindow,
-    permissions: { mode: state.permissionMode, sandbox: state.permissionMode === "full" ? "danger-full-access" : "workspace-write" },
+    permissions: { mode: state.permissionMode, sandbox: state.permissionMode === "read" ? "read-only" : "danger-full-access", approvalPolicy: ["ask","auto"].includes(state.permissionMode)?"untrusted":"never", approvalsReviewer: state.permissionMode==="auto"?"auto_review":"user" },
     runningTurns: state.running, models: state.connection.mode === "custom" ? [{ id: state.connection.model, displayName: state.connection.model, isDefault: true, supportedReasoningEfforts: [] }] :
       [{ id: "fixture-model", displayName: "Codex · Demo", isDefault: true, inputModalities: ["text", "image", "audio"], contextWindow: 128000, capabilitySources: { input: "codex", context: "models.dev" }, supportedReasoningEfforts: [{ reasoningEffort: "high" }] },
       { id: "fixture-fast", displayName: "Codex · Fast", supportedReasoningEfforts: [{ reasoningEffort: "low" }] }], install: state.install });

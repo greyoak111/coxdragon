@@ -94,7 +94,7 @@ try {
   await cdp.eval("__cc.openPage('settings','provider')");
   await until(() => cdp.eval("document.querySelector('#cx-preferences').open && !!document.querySelector('#cx-api-url')"), "old provider entry routes to Codex connection");
   await click('[data-act="settings-tab"][data-tab="general"]');
-  assert.equal(await cdp.eval("document.querySelector('#cx-preferences-body').innerText.includes('workspace-write')"), true);
+  assert.equal(await cdp.eval("document.querySelector('#cx-preferences-body').innerText.includes('danger-full-access') && document.querySelector('#cx-preferences-body').innerText.includes('untrusted')"), true);
   await change("#cx-pref-model", "fixture-model"); await change("#cx-pref-effort", "high");
   await click("#cx-settings-form button[type=submit]");
   await until(() => cdp.eval("CODEX.state.effort === 'high' && !CODEX.state.settingsBusy"), "persistent settings saved");
@@ -189,8 +189,14 @@ try {
   await screenshot("mobile-input");
   await click('.cx-add');
   await until(() => cdp.eval("document.querySelector('#cx-controls').open && !!document.querySelector('.cx-reference-tabs')"), "phone references");
+  const referenceTabY=await cdp.eval("document.querySelector('.cx-reference-tabs').getBoundingClientRect().top");
   await screenshot("mobile-tools");
   await until(()=>cdp.eval("!!document.querySelector('[data-type=plugin]')"),"plugin inventory");
+  assert.equal(await cdp.eval("document.querySelector('.cx-reference-tabs').getBoundingClientRect().top"),referenceTabY,"async inventories do not move reference tabs under a pending tap");
+  await cdp.eval("window.__referenceFileTab=document.querySelector('[data-act=reference-tab][data-tab=file]')");
+  await cdp.eval("document.querySelector('[data-act=reference-tab][data-tab=skill]').click()");
+  assert.equal(await cdp.eval("window.__referenceFileTab===document.querySelector('[data-act=reference-tab][data-tab=file]')"),true,"reference tabs remain mounted through inventory renders");
+  await click('[data-act=reference-tab][data-tab=all]');
   await click('[data-type=plugin]');assert.equal(await cdp.eval("CODEX.state.references[0].path"),"project-plugin@local");
   fixture.codex.skillEnabled=true;
   await click('.cx-add');await until(()=>cdp.eval("!!document.querySelector('[data-type=skill]')"),"skill inventory");await click('[data-type=skill]');
@@ -243,6 +249,15 @@ try {
   // Exercise the actual collapsed DOM, native copy bridge and compaction UI.
   await cdp.eval("window.__copiedTools=[];window.CCApp={copyText:text=>{__copiedTools.push(text);return true}};");
   const emitItem = (method, item) => fixture.emit({ type: "rpc", method, params: { threadId: "b", turnId: mobileTurn, item } });
+  emitItem("item/completed",{id:"sandbox-fail",type:"commandExecution",command:"ls",status:"failed",exitCode:1,aggregatedOutput:"error building bubblewrap command: No such file or directory (os error 2)\n"});
+  await until(()=>cdp.eval("!!document.querySelector('[data-item=sandbox-fail] .cx-sandbox-error')"),"Android sandbox failure has visible explanation outside collapsed results");
+  assert.equal(await cdp.eval("document.querySelector('[data-item=sandbox-fail] details').open"),false);
+  const permissionBeforeSandboxError=fixture.codex.permissionMode;
+  await click('[data-item=sandbox-fail] [data-act=composer-permission]');
+  assert.equal(await cdp.eval("document.querySelector('#cx-controls').open"),true);
+  assert.equal(fixture.codex.permissionMode,permissionBeforeSandboxError,"sandbox errors never silently widen permissions");
+  await click('[data-act=controls-close]');
+  await cdp.eval("CODEX.state.items.get('sandbox-fail').el.remove();CODEX.state.items.delete('sandbox-fail')");
   const longCommand = "node --check gateway/web/codex.js\n" + "echo long-command-".repeat(30);
   emitItem("item/started", { id: "copy-command", type: "commandExecution", command: longCommand, status: "inProgress" });
   fixture.emit({ type: "rpc", method: "item/commandExecution/outputDelta", params: { threadId: "b", turnId: mobileTurn, itemId: "copy-command", delta: "first line\n" } });

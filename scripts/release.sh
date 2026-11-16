@@ -14,7 +14,7 @@ ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OLDB=/data/user/0/li.dsh.claudecli/files/bldtools     # 旧开发端；不在就是 cccodroid 终端的 ~/.bldtools
 [ -d "$OLDB" ] || OLDB=${BLDTOOLS:-$HOME/.bldtools}
 TOKEN=${TOKEN:-$OLDB/gh-token-coxdragon}
-REPO=greyoak111/coxdragon
+REPO=${REPO:-leemwood/coxdragon}
 APK="$ROOT/dist/coxdragon.apk"
 # 双方案：coxdragon-36.apk（targetSdk 36）同版本一起发；没打出来就只发 28 的
 APK36="$ROOT/dist/coxdragon-36.apk"
@@ -25,6 +25,7 @@ if [ ! -s "$TOKEN" ]; then
 fi
 [ -s "$APK" ] || { echo "✗ 没有 $APK，先跑 build.sh"; exit 1; }
 VER=$(sed -n 's/.*android:versionName="\([^"]*\)".*/\1/p' "$ROOT/android/AndroidManifest.xml")
+PRERELEASE=$(node --input-type=module -e 'import fs from "node:fs"; const [file,version]=process.argv.slice(1); const r=JSON.parse(fs.readFileSync(file,"utf8")); if(r.version!==version || typeof r.prerelease!=="boolean")throw new Error("release.json must match AndroidManifest version and declare prerelease"); process.stdout.write(String(r.prerelease));' "$ROOT/release.json" "$VER")
 TAG="v$VER"
 [ -z "$(git -C "$ROOT" status --porcelain)" ] || { echo "✗ 工作区有未提交的改动，发布要对应一个确定的提交"; exit 1; }
 DEVKIT=$(sed -n 's|.*/download/\([^/]*\)/.*|\1|p' "$ROOT/devkit-sources.txt" | head -1)
@@ -46,10 +47,10 @@ W="$ROOT/android/assets/whatsnew"
 [ -n "$NOTES" ] && [ -z "$NOTES_EN" ] && echo "⚠ 只给了中文说明（NOTES），没给英文（NOTES_EN）"
 # App 里的「更新日志」页（gateway/web/changelog/*.json）要已经带着这一版：写好 whatsnew 后跑 node scripts/changelog.mjs 再提交、打包
 grep -q "\"v\":\"$VER\"" "$ROOT/gateway/web/changelog/zh.json" 2>/dev/null || echo "⚠ 更新日志里没有 $TAG：这个包里的「更新日志」页会缺这一版（先跑 node scripts/changelog.mjs，提交后重新打包）"
-export TOKEN REPO TAG COMMIT SHA SHA36 DEVKIT APK APK36 NOTES NOTES_EN
+export TOKEN REPO TAG COMMIT SHA SHA36 DEVKIT APK APK36 NOTES NOTES_EN PRERELEASE
 node --input-type=module -e '
 import fs from "node:fs";
-const { TOKEN, REPO, TAG, COMMIT, SHA, SHA36, DEVKIT, APK, APK36, NOTES, NOTES_EN } = process.env;
+const { TOKEN, REPO, TAG, COMMIT, SHA, SHA36, DEVKIT, APK, APK36, NOTES, NOTES_EN, PRERELEASE } = process.env;
 const auth = { authorization: "Bearer " + fs.readFileSync(TOKEN, "utf8").trim(), accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
 const api = async (method, url, body, extra = {}) => {
   const r = await fetch(url, { method, headers: { ...auth, ...extra }, body });
@@ -91,7 +92,7 @@ if (rel) {
   console.log("  已有 Release " + TAG + "（同一提交），更新附件和正文");
 }
 else {
-  rel = await api("POST", `https://api.github.com/repos/${REPO}/releases`, JSON.stringify({ tag_name: TAG, target_commitish: COMMIT, name: "coxdragon " + TAG, body, prerelease: TAG.includes("-") })); console.log("  已建 Release " + TAG);
+  rel = await api("POST", `https://api.github.com/repos/${REPO}/releases`, JSON.stringify({ tag_name: TAG, target_commitish: COMMIT, name: "coxdragon " + TAG, body, prerelease: PRERELEASE === "true" })); console.log("  已建 Release " + TAG);
 }
 const files = [["coxdragon.apk", APK], ...(SHA36 ? [["coxdragon-36.apk", APK36]] : [])];
 // 这次没有 36 包：上一次发的那份留着就和正文对不上了，一并删掉
@@ -102,6 +103,6 @@ for (const [name, file] of files) {
   const asset = await api("POST", up, fs.readFileSync(file), { "content-type": "application/vnd.android.package-archive" });
   console.log("  ✓ " + asset.browser_download_url + "  " + (asset.size / 1048576).toFixed(2) + " MB");
 }
-if (rel.patchBody) { await api("PATCH", rel.url, JSON.stringify({ body })); console.log("  ✓ 正文已按这次的包重写"); }
+if (rel.patchBody) { await api("PATCH", rel.url, JSON.stringify({ body, prerelease: PRERELEASE === "true" })); console.log("  ✓ 正文已按这次的包重写"); }
 console.log("  " + rel.html_url);
 '

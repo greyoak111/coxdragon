@@ -15,8 +15,8 @@ window.I18N_DICT.en = {
   "帮我批准": "Auto review",
   "完全访问": "Full access",
   "只能读取，禁止写入和提权。": "Read access only; no writes or escalation.",
-  "工作区内执行，风险操作向你询问。": "Work in the project; ask you about risky operations.",
-  "由 Codex 自动审批器判断提权请求。": "Codex reviews escalation requests automatically.",
+  "风险命令由你审批；获批后可访问应用文件。": "You review risky commands; approved commands can access app files.",
+  "风险命令由 Codex 审批；获批后可访问应用文件。": "Codex reviews risky commands; approved commands can access app files.",
   "允许访问应用可用的文件和网络，无操作审批。": "Access files and networks available to the app without action approvals.",
   "权限由 Codex 引擎执行，仍受 Android 应用权限边界约束。": "Codex enforces this policy within the Android app permission boundary.",
   "添加引用": "Add reference",
@@ -3502,4 +3502,5 @@ window.I18N_DICT.en = {
   "下次执行": "Next run",
   "最近结果": "Latest result",
   "停止本次并暂停": "Stop and pause",
+  "当前设备无法启用 Codex 文件沙箱，该命令未执行。可以更换运行环境，或自行选择完全访问后重试。": "This device could not start the Codex file sandbox, so the command did not run. Use another runtime, or choose Full access yourself before retrying.",
 };

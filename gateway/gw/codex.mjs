@@ -9,9 +9,8 @@
 //      自己的 sha256 核一次，与工具包 / pkg 无关。
 //    · 只监听回环的 CONNECT 代理 + CA 包，给这个静态 musl 程序联网用；代理要口令，
 //      别的本机应用拿不到。
-//    · 命令以本应用 uid 执行，不开 root、不碰 Shizuku。sandbox 用 danger-full-access
-//      （安卓内核本身已经把应用关在自己的沙箱里，bubblewrap 在多数机型上起不来），
-//      审批策略用 untrusted：模型想跑非只读命令时，必须由界面点确认。
+//    · 命令以本应用 uid 执行，不开 root、不碰 Shizuku。权限由用户选择，
+//      每次新建、恢复和发送均传给引擎；无法建立沙箱时不自动放大权限。
 //    · 工具包里的 bash / git / rg 等只作为子进程的 PATH；Codex 本身不依赖工具包。
 // ─────────────────────────────────────────────────────────────────────
 
@@ -58,8 +57,10 @@ const METRICS_FILE = path.join(CFG.home, "coxdragon-codex-metrics.json");
 const savedMetrics = loadState(METRICS_FILE, { max: 1 << 20, shape: j => j && typeof j === "object" && !Array.isArray(j) ? j : undefined }).data;
 const PERMISSIONS = {
   read: { sandbox: "read-only", approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly", networkAccess: false } },
-  ask: { sandbox: "workspace-write", approvalPolicy: "untrusted", approvalsReviewer: "user", sandboxPolicy: { type: "workspaceWrite", networkAccess: false } },
-  auto: { sandbox: "workspace-write", approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandboxPolicy: { type: "workspaceWrite", networkAccess: false } },
+  // Android often cannot create the Linux file sandbox. These modes use the
+  // native command approval gate, with the app UID as their execution boundary.
+  ask: { sandbox: "danger-full-access", approvalPolicy: "untrusted", approvalsReviewer: "user", sandboxPolicy: { type: "dangerFullAccess" } },
+  auto: { sandbox: "danger-full-access", approvalPolicy: "untrusted", approvalsReviewer: "auto_review", sandboxPolicy: { type: "dangerFullAccess" } },
   full: { sandbox: "danger-full-access", approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "dangerFullAccess" } },
 };
 function threadPermissions() { const { sandbox, approvalPolicy, approvalsReviewer } = PERMISSIONS[S.permissionMode]; return { sandbox, approvalPolicy, approvalsReviewer }; }
