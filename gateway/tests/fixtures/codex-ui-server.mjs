@@ -28,7 +28,7 @@ export async function startCodexUiServer() {
   const selectedProvider=()=>state.connection.mode==="custom"?state.connection.providerId||"custom":"chatgpt";
   const modelRows=pid=>{
     const p=state.profiles.find(p=>p.id===pid),rows=pid==="chatgpt"?accountModels:p?.models||[{id:p?.model||state.connection.model,displayName:p?.model||state.connection.model,isDefault:true,supportedReasoningEfforts:[]}];
-    return rows.map(m=>{const settings=state.modelSettings[JSON.stringify([pid,m.id])]||{};return {...m,settings,contextWindow:settings.contextWindow||m.contextWindow,inputModalities:settings.inputModalities??m.inputModalities,supportedReasoningEfforts:settings.supportedReasoningEfforts?.map(reasoningEffort=>({reasoningEffort}))??m.supportedReasoningEfforts};});
+    return rows.map(m=>{const settings=state.modelSettings[JSON.stringify([pid,m.id])]||{},reference=settings.referenceId==="fixture/vision"?{contextWindow:128000,inputModalities:["text","image"],supportedReasoningEfforts:[{reasoningEffort:"low"},{reasoningEffort:"high"}]}:{};return {...m,...reference,settings,contextWindow:settings.contextWindow||reference.contextWindow||m.contextWindow,inputModalities:settings.inputModalities??reference.inputModalities??m.inputModalities,supportedReasoningEfforts:settings.supportedReasoningEfforts?.map(reasoningEffort=>({reasoningEffort}))??reference.supportedReasoningEfforts??m.supportedReasoningEfforts};});
   };
   const snapshot = () => ({ installed: state.installed, server: state.server, version: "fixture", account: state.account,
     cwd: projects[0].path, activeThread: threads.find((th) => th.id === state.active) || null, approvals: state.pending,
@@ -111,6 +111,9 @@ export async function startCodexUiServer() {
       emit({ type: "rpc", method: "item/started", params: { threadId: body.threadId, turnId: "compact-turn", item: { id: "compact-item", type: "contextCompaction" } } });
       return reply(res, { ok: true });
     }
+    if(p==="/api/codex/model-catalog")return reply(res,{total:1,models:[{referenceId:"fixture/vision",id:"fixture-vision",providerId:"fixture",displayName:"Fixture Vision",contextWindow:128000}]});
+    if(p==="/api/codex/model-metadata")return reply(res,{id:body.model,displayName:body.model,contextWindow:128000,inputModalities:["text","image"],supportedReasoningEfforts:[{reasoningEffort:"low"},{reasoningEffort:"high"}],capabilitySources:{input:"models.dev",context:"models.dev",effort:"models.dev"}});
+    if(p==="/api/codex/connection/delete"){state.profiles=state.profiles.filter(p=>p.id!==body.providerId);return reply(res,snapshot());}
     if (p === "/api/codex/models") {
       const pid=body.providerId;if(state.modelDelay)await new Promise(r=>setTimeout(r,state.modelDelay));
       return reply(res,{ok:!state.modelFailure,models:modelRows(pid),status:snapshot(),message:state.modelFailure?"Synthetic catalog unavailable":""});
@@ -144,10 +147,13 @@ export async function startCodexUiServer() {
     if (p === "/api/codex/connection") {
       if (state.running.length) return reply(res, { error: "还有任务在运行，请结束后再切换连接" }, 409);
       if (state.connectionFailure) return reply(res, { error: "Synthetic connection storage full" }, 500);
+      const previousConnection=state.connection;
       state.connection = { mode: body.mode, baseUrl: body.baseUrl || state.connection.baseUrl,
         model: body.model || state.connection.model, hasKey: body.noKey ? false : !!body.apiKey || state.connection.hasKey,
-        noKey: !!body.noKey, configured: body.mode === "custom", wireApi: body.wireApi || state.connection.wireApi || "responses",providerId:body.providerId||"custom",name:body.name||"" };
-      if(body.mode==="custom")state.profiles=[...state.profiles.filter(p=>p.id!==state.connection.providerId),{...state.connection,id:state.connection.providerId,name:state.connection.name||new URL(state.connection.baseUrl).hostname}];
+        noKey: !!body.noKey, configured: body.mode === "custom", wireApi: body.wireApi || state.connection.wireApi || "responses",providerId:body.providerId||(!state.profiles.length?"custom":"profile-"+state.profiles.length),name:body.name||"",modelIds:body.models?.map(m=>m.id),effort:body.effort||"",contextWindow:body.contextWindow||0 };
+      if(body.models)for(const row of body.models)state.modelSettings[JSON.stringify([state.connection.providerId,row.id])]=row.settings;
+      if(body.mode==="custom")state.profiles=[...state.profiles.filter(p=>p.id!==state.connection.providerId),{...state.connection,id:state.connection.providerId,name:state.connection.name||new URL(state.connection.baseUrl).hostname,models:body.models?.map(m=>({id:m.id,displayName:m.settings?.displayName||m.id,supportedReasoningEfforts:[]}))}];
+      if(body.activate===false&&previousConnection.providerId!==state.connection.providerId){state.connection=previousConnection;return reply(res,snapshot());}
       state.model = body.mode === "custom" ? body.model : ""; state.effort = ""; state.account = null; state.active = null;
       return reply(res, snapshot());
     }

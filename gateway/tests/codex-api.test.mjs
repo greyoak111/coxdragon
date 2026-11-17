@@ -79,6 +79,16 @@ test("API：模型列表检测网页、路径回退、空列表及无需密钥�
   finally { await empty.close(); }
 });
 
+test("API：提供商模型发现失败仍返回 models.dev 能力，不暴露密钥或伪造模型列表",async()=>{
+  const api=await server((req,res)=>html(res));
+  try{
+    const result=await discoverApiModels(draft(api.url,{model:"openai/gpt-5"}));
+    assert.equal(result.ok,false);assert.deepEqual(result.models,[]);assert.equal(result.metadataSource,"models.dev/cache");
+    const model=result.modelDetails.find(m=>m.id==="openai/gpt-5");assert(model?.contextWindow>0);assert.equal(model.capabilitySources.context,"models.dev");
+    assert(model.supportedReasoningEfforts.length>0);assert.equal(JSON.stringify(result).includes(key),false);
+  }finally{await api.close();}
+});
+
 test("API：自动识别从网页 404 转到 Chat Completions，验证实际流式完成与耗时", async () => {
   const api = await server((req, res) => req.url.endsWith("/responses") ? html(res) : sse(res, [
     { choices: [{ delta: { content: "OK" }, finish_reason: null }] }, { choices: [{ delta: {}, finish_reason: "stop" }] },

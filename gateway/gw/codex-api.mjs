@@ -1,6 +1,6 @@
 import { connectionDraft } from "./codex-connection.mjs";
 import { providerRequest, readApiJson, apiEvents, apiError, safeApiMessage } from "./codex-api-http.mjs";
-import { refreshModelCatalog, rememberApiModels } from "./codex-models.mjs";
+import { refreshModelCatalog, rememberApiModels, customModels } from "./codex-models.mjs";
 
 function candidates(config) {
   const u = new URL(config.baseUrl);
@@ -13,6 +13,9 @@ function failure(e, config, url, started) {
 
 export async function discoverApiModels(body, { signal, timeoutMs = 10000 } = {}) {
   const config = connectionDraft(body, { requireModel: false, allowAuto: true }), attempts = [];
+  // Public capabilities also refresh when the provider is offline or /models is
+  // unavailable. This request has no provider credentials.
+  await refreshModelCatalog({signal});
   for (const baseUrl of candidates(config)) {
     const started = Date.now(), url = baseUrl + "/models";
     try {
@@ -21,7 +24,6 @@ export async function discoverApiModels(body, { signal, timeoutMs = 10000 } = {}
       if (!rows) throw apiError("invalid_models", "接口没有返回模型列表，可手动填写模型名称");
       const models = [...new Set(rows.map((r) => typeof r === "string" ? r : r?.id).filter((id) => typeof id === "string" && id.length > 0 && id.length <= 200 && !/[\x00-\x1f\x7f]/.test(id)))].sort().slice(0, 2000);
       if (!models.length) throw apiError("empty_models", "接口模型列表为空，可手动填写模型名称");
-      await refreshModelCatalog({ signal });
       const modelDetails = rememberApiModels(baseUrl, models.map(id => rows.find(row => row?.id === id) || id));
       if(baseUrl!==config.baseUrl)rememberApiModels(config.baseUrl,models.map(id=>rows.find(row=>row?.id===id)||id));
       attempts.push({ ok: true, url, status: 200, elapsedMs: Date.now() - started });
@@ -31,7 +33,7 @@ export async function discoverApiModels(body, { signal, timeoutMs = 10000 } = {}
       if (!["html", "not_found", "invalid_json", "invalid_models"].includes(e.code) || signal?.aborted) break;
     }
   }
-  return { ok: false, models: [], message: attempts.at(-1).message, attempts };
+  return { ok: false, models: [], modelDetails:customModels(config.baseUrl,config.model),metadataSource:"models.dev/cache",message: attempts.at(-1).message, attempts };
 }
 
 async function verifyStream(response, wireApi) {

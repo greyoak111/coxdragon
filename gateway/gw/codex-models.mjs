@@ -63,7 +63,7 @@ function lookup(id, baseUrl, providers) {
     for (const [providerId, provider] of Object.entries(providers)) for (const [key, model] of Object.entries(provider?.models || {})) {
       if (!object(model) || typeof model.id !== "string") continue;
       for (const alias of new Set([key, model.id, `${providerId}/${model.id}`])) {
-        const list = index.get(alias) || []; list.push({ model, providerId, api: provider.api }); index.set(alias, list);
+        const list = index.get(alias) || []; list.push({ model, key, providerId, api: provider.api }); index.set(alias, list);
       }
     }
     indexes.set(providers, index);
@@ -76,10 +76,25 @@ function lookup(id, baseUrl, providers) {
   return matches.length === 1 ? matches[0] : null;
 }
 
-export function modelDetails(row, { baseUrl = "", engine = false, providers = catalog.providers } = {}) {
+function referenceModel(id) {
+  if(typeof id!=="string")return null;
+  const split=id.indexOf("/"),providerId=id.slice(0,split),key=id.slice(split+1),provider=catalog.providers[providerId];
+  const model=Object.hasOwn(provider?.models||{},key)?provider.models[key]:null;return model?{model,key,providerId}:null;
+}
+export function searchModelCatalog(query="",limit=40) {
+  const words=String(query).toLowerCase().trim().split(/\s+/).filter(Boolean).slice(0,8),rows=[];
+  for(const [providerId,provider]of Object.entries(catalog.providers))for(const [key,m]of Object.entries(provider.models||{})){
+    const referenceId=providerId+"/"+key,text=(referenceId+" "+m.name).toLowerCase();
+    if(words.every(w=>text.includes(w)))rows.push({referenceId,providerId,id:m.id,displayName:m.name||m.id,contextWindow:positive(m.limit?.context),inputModalities:modalities(m.modalities?.input)||[],reasoningOptions:m.reasoning_options||[]});
+  }
+  const term=String(query).toLowerCase().trim();rows.sort((a,b)=>(a.id.toLowerCase()===term?-1:0)-(b.id.toLowerCase()===term?-1:0)||a.referenceId.localeCompare(b.referenceId));
+  return {models:rows.slice(0,Math.min(60,limit)),total:rows.length,updatedAt:catalog.updatedAt};
+}
+
+export function modelDetails(row, { baseUrl = "", engine = false, providers = catalog.providers, referenceId = "" } = {}) {
   const id = typeof row === "string" ? row : row.id;
   const api = typeof row === "string" ? {} : row;
-  const match = lookup(id, baseUrl, providers), reference = match?.model || {};
+  const match = referenceModel(referenceId)||lookup(id, baseUrl, providers), reference = match?.model || {};
   const apiInput = modalities(api.inputModalities ?? api.input_modalities ?? api.modalities?.input ?? api.input ?? api.architecture?.input_modalities);
   const apiOutput = modalities(api.outputModalities ?? api.output_modalities ?? api.modalities?.output ?? api.output ?? api.architecture?.output_modalities);
   const optionValues = value => Array.isArray(value) && value.some(o => o?.type === "effort") ? strings(value.filter(o => o?.type === "effort").flatMap(o => Array.isArray(o.values) ? o.values : [])) : null;
@@ -100,6 +115,7 @@ export function modelDetails(row, { baseUrl = "", engine = false, providers = ca
       reasoning: typeof api.reasoning === "boolean" ? source : typeof reference.reasoning === "boolean" ? "models.dev" : null,
       effort: api.reasoning === false || apiEfforts ? source : reference.reasoning_options ? "models.dev" : null },
     metadataUpdatedAt: catalog.updatedAt,
+    referenceId:match?match.providerId+"/"+match.key:null,
   };
 }
 
@@ -126,15 +142,28 @@ export function customModels(baseUrl, selected) {
   for(const key of Object.keys(configured)){
     try{const [scope,id]=JSON.parse(key);if(scope===baseUrl&&typeof id==="string"&&id&&id.length<=200&&!models.some(m=>m.id===id))models.push(modelDetails(id,{baseUrl}));}catch{}
   }
-  if (!models.some(m => m.id === selected)) models.unshift(modelDetails(selected, { baseUrl }));
+  if (selected&&!models.some(m => m.id === selected)) models.unshift(modelDetails(selected, { baseUrl }));
   return models.map(m => ({ ...configuredModel(baseUrl,m), isDefault: m.id === selected }));
 }
 
 const settingKey=(scope,id)=>JSON.stringify([scope,id]);
-export function modelSettings(scope,id) { try{return validateModelSettings(configured[settingKey(scope,id)]||{});}catch{return {};} }
+export function modelSettings(scope,id) {
+  const value={...configured[settingKey(scope,id)]};
+  // Removing a catalog entry must preserve unrelated user settings.
+  if(value.referenceId&&!referenceModel(value.referenceId))delete value.referenceId;
+  try{return validateModelSettings(value);}catch{return {};}
+}
 export function validateModelSettings(value) {
   if(!object(value))throw new Error("模型设置无效");
   const next={};
+  if(Object.hasOwn(value,"referenceId")){
+    if(value.referenceId!==null&&(typeof value.referenceId!=="string"||value.referenceId.length>400||!referenceModel(value.referenceId)))throw new Error("models.dev 能力模板不存在，请重新选择");
+    next.referenceId=value.referenceId;
+  }
+  if(Object.hasOwn(value,"displayName")){
+    if(typeof value.displayName!=="string"||value.displayName.length>200||/[\x00-\x1f\x7f]/.test(value.displayName))throw new Error("模型显示名称无效");
+    next.displayName=value.displayName.trim();
+  }
   if(Object.hasOwn(value,"contextWindow")){
     if(value.contextWindow!==0&&(!positive(value.contextWindow)||value.contextWindow<1024))throw new Error("上下文大小应为 1024 到 1000000000 的整数，留空使用默认值");
     next.contextWindow=value.contextWindow;
@@ -158,11 +187,33 @@ export function saveModelSettings(scope,id,value,{replace=false}={}) {
   if(!writeAtomic(SETTINGS,JSON.stringify(next),{mode:0o600}))throw new Error("模型设置没有保存");
   Object.assign(configured,next);return next[settingKey(scope,id)];
 }
+export function saveModelSettingsBatch(scope,rows,{replace=false}={}) {
+  const next={...configured},previous=new Map(rows.map(row=>{const key=settingKey(scope,row.id);return [key,configured[key]];}));
+  for(const row of rows)next[settingKey(scope,row.id)]={...(replace?{}:modelSettings(scope,row.id)),...validateModelSettings(row.settings)};
+  if(Object.keys(next).length>500||Buffer.byteLength(JSON.stringify(next))>1<<20)throw new Error("模型设置数量过多");
+  if(!writeAtomic(SETTINGS,JSON.stringify(next),{mode:0o600}))throw new Error("模型设置没有保存");
+  Object.assign(configured,next);
+  return ()=>{
+    const restored={...configured};
+    for(const [key,value]of previous)if(value===undefined)delete restored[key];else restored[key]=value;
+    if(!writeAtomic(SETTINGS,JSON.stringify(restored),{mode:0o600}))throw new Error("模型设置未能恢复，请重试保存");
+    for(const key of previous.keys())delete configured[key];Object.assign(configured,restored);
+  };
+}
 export function configuredModel(scope,model) {
-  const declaredCapabilities=model.declaredCapabilities || {contextWindow:model.contextWindow,inputModalities:model.inputModalities,
+  const declaredCapabilities=model.declaredCapabilities || {displayName:model.displayName,contextWindow:model.contextWindow,inputModalities:model.inputModalities,
+    outputModalities:model.outputModalities,reasoning:model.reasoning,referenceId:model.referenceId,
     supportedReasoningEfforts:model.supportedReasoningEfforts,capabilitySources:model.capabilitySources};
   const settings=modelSettings(scope,model.id),sources={...declaredCapabilities.capabilitySources};
   const result={...model,...declaredCapabilities,declaredCapabilities,settings,capabilitySources:sources};
+  if(settings.referenceId){
+    const reference=modelDetails(model.id,{referenceId:settings.referenceId});
+    for(const [field,source]of [["contextWindow","context"],["inputModalities","input"],["outputModalities","output"],["supportedReasoningEfforts","effort"],["reasoning","reasoning"]]){
+      if(!["provider","codex"].includes(sources[source])){result[field]=reference[field];sources[source]=reference.capabilitySources[source];}
+    }
+    result.referenceId=settings.referenceId;
+  }
+  if(settings.displayName)result.displayName=settings.displayName;
   if(settings.contextWindow){result.contextWindow=settings.contextWindow;sources.context="user";}
   if(settings.inputModalities!=null){result.inputModalities=settings.inputModalities;sources.input="user";}
   if(settings.supportedReasoningEfforts!=null){result.supportedReasoningEfforts=settings.supportedReasoningEfforts.map(reasoningEffort=>({reasoningEffort,description:reasoningEffort}));sources.effort="user";}

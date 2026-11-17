@@ -26,9 +26,9 @@ import { NEXT, readBody, sendJson } from "./http.mjs";
 import { SETTINGS } from "./settings-store.mjs";
 import { runFlag } from "./activity.mjs";
 import { loadState, writeAtomic as saveState } from "./statefile.mjs";
-import { connectionStatus, connectionProfiles, prepareConnectionLaunch, updateConnection, updateCustomSelection, connectionErrorMessage, CUSTOM_PROVIDER } from "./codex-connection.mjs";
+import { connectionStatus, connectionProfiles, connectionModels, deleteConnectionProfile, prepareConnectionLaunch, updateConnection, updateCustomSelection, connectionErrorMessage, CUSTOM_PROVIDER } from "./codex-connection.mjs";
 import { discoverApiModels, testApiConnection } from "./codex-api.mjs";
-import { customModels, modelDetails, modelSettings, saveModelSettings, configuredModel, validateModelSettings } from "./codex-models.mjs";
+import { customModels, modelDetails, modelSettings, saveModelSettings, configuredModel, validateModelSettings, searchModelCatalog, refreshModelCatalog } from "./codex-models.mjs";
 import { readThreadUsage, normalizeTokenUsage } from "./codex-context.mjs";
 
 // ── 钉住的 Codex 版本 ─────────────────────────────────────────────────
@@ -407,7 +407,7 @@ const S = {
   titles: new Map(),
   diagnostics: [],
 };
-if(connectionStatus().mode==="custom")S.models=customModels(connectionStatus().baseUrl,connectionStatus().model);
+if(connectionStatus().mode==="custom")S.models=connectionModels();
 
 // Deliberately omit prompts, replies, tool arguments and account credentials.
 // Native diagnostic export reads this bounded snapshot even if the UI reconnects.
@@ -468,7 +468,7 @@ function slimModel(m) {
     inputModalities: m.inputModalities || [],
     outputModalities: m.outputModalities || [], contextWindow: m.contextWindow || null,
     reasoning: m.reasoning ?? null, capabilitySources: m.capabilitySources || {},
-    settings:m.settings||{},
+    settings:m.settings||{},referenceId:m.referenceId||null,metadataUpdatedAt:m.metadataUpdatedAt||null,
     serviceTiers: m.serviceTiers || [],
     defaultServiceTier: m.defaultServiceTier ?? null,
     multiAgentVersion: m.multiAgentVersion ?? null,
@@ -528,7 +528,7 @@ async function refreshModels() {
   const connection = connectionStatus();
   if (connection.mode === "custom") {
     S.model = connection.model; S.effort = connection.effort || "";
-    S.models = customModels(connection.baseUrl, connection.model);
+    S.models = connectionModels();
     return S.models;
   }
   if (!rpc) return [];
@@ -993,7 +993,7 @@ function applySettings(body) {
     if (changed && codexActivity().busy) throw Object.assign(new Error("请等待任务结束后再切换模型"), { statusCode: 409 });
     updateCustomSelection(model, effort, contextWindow);
     if (changed || contextWindow !== previousWindow) stopServer();
-    S.models = customModels(connectionStatus().baseUrl, model);
+    S.models = connectionModels();
   }
   else {
     const next = { ...prefs, model, effort, contextWindow };
@@ -1019,11 +1019,12 @@ function updatePermissions(mode) {
 
 function setConnection(body) {
   if (codexActivity().busy || S.starting) throw Object.assign(new Error("还有任务在运行，请结束后再切换连接"), { statusCode: 409 });
-  const connection = updateConnection(body);
+  const old=connectionStatus(),connection = updateConnection(body);
+  if(body.activate===false&&old.mode===connection.mode&&old.providerId===connection.providerId&&body.providerId!==old.providerId){broadcast({type:"status",status:status()});return status();}
   stopServer(); S.account = null; S.models = []; S.activeThread = null;
   S.model = connection.mode === "custom" ? connection.model : prefs.model || "";
   S.effort = connection.mode === "custom" ? connection.effort || "" : prefs.effort || "";
-  if (connection.mode === "custom") S.models = customModels(connection.baseUrl, connection.model);
+  if (connection.mode === "custom") S.models = connectionModels();
   broadcast({ type: "status", status: status() });
   return status();
 }
@@ -1135,6 +1136,20 @@ export async function routeCodex(req, res, u, p) {
         return json(res, 200, updateSettings(body));
       }
       if (p === "/api/codex/connection") return json(res, 200, setConnection(body));
+      if(p==="/api/codex/connection/delete"){
+        if(codexActivity().busy||S.starting)throw Object.assign(new Error("请等待任务结束后再修改提供商"),{statusCode:409});
+        deleteConnectionProfile(body.providerId);broadcast({type:"status",status:status()});return json(res,200,status());
+      }
+      if(p==="/api/codex/model-catalog"){
+        if(typeof body.query!=="string"||body.query.length>200)throw new Error("模型搜索内容过长");
+        await refreshModelCatalog();return json(res,200,searchModelCatalog(body.query));
+      }
+      if(p==="/api/codex/model-metadata"){
+        const id=typeof body.model==="string"?body.model.trim():"";
+        if(!id||id.length>200||/[\x00-\x1f\x7f]/.test(id))throw new Error("模型名称无效");
+        const capabilities=validateModelSettings({referenceId:body.referenceId||null});
+        return json(res,200,modelDetails(id,{baseUrl:typeof body.baseUrl==="string"?body.baseUrl:"",referenceId:capabilities.referenceId}));
+      }
       if (p === "/api/codex/models") {
         if(S.connectionProbe)return json(res,429,{error:"模型获取正在进行，请稍后重试"});
         const controller=new AbortController();S.connectionProbe=controller;

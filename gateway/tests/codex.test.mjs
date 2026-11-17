@@ -7,8 +7,8 @@ import { Readable } from "node:stream";
 import { CFG, PREFIX } from "../gw/config.mjs";
 import { activityBusy, runFlag } from "../gw/activity.mjs";
 import { _codexForTest as cx, codexActivity, onCodexActivity } from "../gw/codex.mjs";
-import { connectionStatus, connectionLaunch, connectionProfiles } from "../gw/codex-connection.mjs";
-import { rememberApiModels } from "../gw/codex-models.mjs";
+import { connectionStatus, connectionLaunch, connectionProfiles,deleteConnectionProfile,connectionModels } from "../gw/codex-connection.mjs";
+import { rememberApiModels,modelSettings } from "../gw/codex-models.mjs";
 
 // The legacy status module imports Android usage accounting. This test only reads
 // protocol state; its isolated Windows process needs a synthetic UID for that import.
@@ -46,6 +46,38 @@ test("Codex：账号模型列表分页，打开设置可在冷模型列表中主
   cx.S.rpc.request=async(method,params)=>{calls.push({method,params});return params.cursor?{data:[{id:"page-two",inputModalities:["text","image"]}],nextCursor:null}:{data:[{id:"page-one"}],nextCursor:"next"};};
   const result=await cx.loadModels("chatgpt");assert.equal(result.ok,true);assert.deepEqual(result.models.map(m=>m.id),["page-one","page-two"]);
   assert.equal(calls[1].params.cursor,"next");assert.deepEqual(result.models[1].inputModalities,["text","image"]);
+});
+
+test("提供商：多模型独立能力、仅保存保留引擎与聊天，发现候选不取代配置，可删除非当前提供商",()=>{
+  reset();const baseUrl="https://provider-directory.test/v1";
+  try{
+    cx.setConnection({mode:"custom",baseUrl,model:"one",noKey:true,newProvider:true,models:[{id:"one",settings:{contextWindow:64000}},{id:"two",settings:{supportedReasoningEfforts:["deep"],effort:"deep",inputModalities:["text","image"]}}]});
+    const first=connectionStatus().providerId;
+    assert.deepEqual(connectionModels().map(m=>m.id).sort(),["one","two"]);
+    rememberApiModels(baseUrl,[{id:"one"},{id:"candidate"}]);assert.deepEqual(connectionModels().map(m=>m.id).sort(),["one","two"]);
+    const rpc={stderr:""};cx.S.rpc=rpc;cx.S.activeThread={id:"preserved"};
+    cx.setConnection({mode:"custom",baseUrl,model:"separate",noKey:true,newProvider:true,activate:false,models:[{id:"separate",settings:{contextWindow:32000}}]});
+    assert.equal(connectionStatus().providerId,first);assert.equal(cx.S.rpc,rpc);assert.equal(cx.S.activeThread.id,"preserved");
+    const second=connectionProfiles().find(p=>p.baseUrl===baseUrl&&p.id!==first).id;
+    assert.throws(()=>deleteConnectionProfile(first),/先切换/);deleteConnectionProfile(second);assert.equal(connectionProfiles().some(p=>p.id===second),false);
+    cx.updateSettings({model:"two"});assert.equal(connectionStatus().effort,"deep");assert.equal(connectionModels().find(m=>m.id==="two").capabilitySources.input,"user");
+    cx.setConnection({mode:"custom",providerId:first,model:"two",noKey:true,models:[{id:"two",settings:{}}]});assert.deepEqual(connectionModels().map(m=>m.id),["two"]);
+    assert.throws(()=>cx.setConnection({mode:"custom",providerId:first,model:"two",modelIds:["two","two"],noKey:true}),/模型列表/);
+  }finally{cx.stopServer();cx.setConnection({mode:"chatgpt"});}
+});
+
+test("提供商：批量模型保存失败完整回滚模型设置和连接",()=>{
+  reset();const baseUrl="https://directory-failure.test/v1",file=path.join(CFG.home,"coxdragon-codex-connection.json");
+  try{
+    cx.setConnection({mode:"custom",baseUrl,model:"existing",noKey:true,models:[{id:"existing",settings:{contextWindow:64000}}]});
+    const before=fs.readFileSync(file),settingsBefore=fs.readFileSync(path.join(CFG.home,"coxdragon-model-settings.json"),"utf8");
+    fs.rmSync(file);fs.mkdirSync(file);
+    try{assert.throws(()=>cx.setConnection({mode:"custom",baseUrl,model:"new-failed",noKey:true,newProvider:true,models:[{id:"existing",settings:{contextWindow:32000}},{id:"new-failed",settings:{contextWindow:48000}}]}),/没有保存/);}
+    finally{fs.rmdirSync(file);fs.writeFileSync(file,before);}
+    assert.equal(connectionStatus().model,"existing");assert.equal(modelSettings(baseUrl,"existing").contextWindow,64000);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(CFG.home,"coxdragon-model-settings.json"),"utf8")),JSON.parse(settingsBefore));
+    assert.equal(connectionProfiles().some(p=>p.model==="new-failed"),false);
+  }finally{cx.stopServer();cx.setConnection({mode:"chatgpt"});}
 });
 
 test("Codex：四种权限传给引擎，运行中禁止改变权限", async () => {
