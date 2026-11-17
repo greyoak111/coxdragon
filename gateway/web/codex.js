@@ -1659,7 +1659,7 @@
     const body=$("cx-preferences-body"), saved=(st.status?.providers||[]).filter(p=>p.id!=="chatgpt"), active=st.status?.connection||{};
     const editId=st.connectionEditId===undefined||st.connectionEditId===null?active.providerId||saved[0]?.id||"new":st.connectionEditId;
     const c=editId==="new"?{}:editId===active.providerId?{...saved.find(p=>p.id===editId),...active}:saved.find(p=>p.id===editId)||{};
-    body.innerHTML=`      <section class="cx-api-section"><form id="cx-connection-form" autocomplete="off"><fieldset${st.connectionBusy?" disabled":""}>
+    body.innerHTML=`      <section class="cx-api-section"><form id="cx-connection-form" autocomplete="off" novalidate><fieldset${st.connectionBusy?" disabled":""}>
         <div id="cx-provider-basic">
         <label>${esc(t("提供商名称"))}<input id="cx-api-name" maxlength="80" value="${esc(c.name||"")}" placeholder="${esc(t("留空使用服务商域名"))}"></label>
         <label>${esc(t("API 基础地址"))}<input id="cx-api-url" type="url" required maxlength="2048" value="${esc(c.baseUrl||"")}" placeholder="https://example.com/v1" autocapitalize="off" spellcheck="false"></label><p id="cx-api-url-help">${esc(t("请使用 API 地址而非网站首页；也可粘贴完整的 /responses 或 /chat/completions 地址。"))}</p>

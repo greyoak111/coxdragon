@@ -540,6 +540,8 @@ try {
   assert.equal(fixture.codex.requests.filter(r => r.path === "/api/codex/turn").length, beforeSkippedTurns);
   assert.equal(fixture.codex.requests.filter(r => r.path === "/api/codex/login").length, loginCount);
   await fill("#cx-api-url", "https://provider.example.test/v1"); await fill("#cx-api-model", "my-provider-model");
+  await fill('#cx-api-model','');await click('#cx-connection-form [type=submit]');assert.equal(await cdp.eval("CODEX.state.providerModelPage"),'editor','save navigates to missing required model');
+  await fill('#cx-api-model','my-provider-model');await providerPage('');
   const syntheticKey = "synthetic-api-key-for-ui-tests"; await fill("#cx-api-key", syntheticKey);
   await click("#cx-connection-form button[type=submit]");
   await until(() => cdp.eval("document.querySelector('#cx-connection-error').textContent.length > 0"), "auto protocol requires test before save");
