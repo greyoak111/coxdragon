@@ -30,6 +30,7 @@ import { connectionStatus, connectionProfiles, connectionModels, deleteConnectio
 import { discoverApiModels, testApiConnection } from "./codex-api.mjs";
 import { customModels, modelDetails, modelSettings, saveModelSettings, configuredModel, validateModelSettings, searchModelCatalog, refreshModelCatalog } from "./codex-models.mjs";
 import { readThreadUsage, normalizeTokenUsage } from "./codex-context.mjs";
+import { codexOptions, saveCodexOptions, validateCodexOptions, codexOverrides, codexOptionArgs, publicEffectiveOptions } from "./codex-options.mjs";
 
 // ── 钉住的 Codex 版本 ─────────────────────────────────────────────────
 // 升级只改这里，并把新的 tar / 二进制 sha256 一起换掉。和 cccodroid 的 devkit 无关。
@@ -508,6 +509,7 @@ function status() {
     model: S.model || "",
     effort: S.effort || "",
     permissions: { mode: S.permissionMode, ...threadPermissions(), boundary: "android-app-uid" },
+    engineOptions: codexOptions(),
     lastError: S.lastError,
     stderr: (S.rpc ? S.rpc.stderr : S.stderr).slice(-4000),
     proxy: proxy ? { port: proxy.port } : null,
@@ -715,7 +717,7 @@ async function startRpc(generation) {
   delete env.COXDRAGON_CUSTOM_API_KEY;
   if (connectionStatus().mode === "custom") { delete env.OPENAI_API_KEY; delete env.CODEX_API_KEY; delete env.OPENAI_BASE_URL; }
   Object.assign(env, connection.env);
-  const argv = [...connection.args, "--listen", "stdio://"];
+  const argv = [...connection.args, ...codexOptionArgs(connectionStatus()), "--listen", "stdio://"];
   if (connectionStatus().mode !== "custom" && contextOverride()) argv.unshift("-c", "model_context_window=" + contextOverride());
   const child = spawn(er || BIN, er ? ["-f", BIN, ...argv] : argv, { cwd: isDir(S.cwd) ? S.cwd : CFG.workspace, env, stdio: ["pipe", "pipe", "pipe"] });
   // 停止或换过引擎之后，旧进程缓冲区里剩下的事件和审批不能进入新会话。
@@ -788,6 +790,7 @@ async function startThread(cwd) {
     const params = {
       cwd: dir,
       modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
+      config: codexOverrides(connectionStatus()),
       ...threadPermissions(),
     };
     if (S.model) params.model = S.model;
@@ -802,6 +805,7 @@ async function resumeThread(threadId, { select = true } = {}) {
   return rpcOperation(async (rpc, check) => {
     const r = await rpc.request("thread/resume", {
       threadId: String(threadId),
+      config: codexOverrides(connectionStatus()),
       modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
       ...(S.model ? { model: S.model } : {}),
       ...threadPermissions(),
@@ -848,6 +852,14 @@ async function startTurn(text, threadId, references = []) {
     const params = { threadId: target, input: [{ type: "text", text: s }, ...input], approvalPolicy: permission.approvalPolicy, approvalsReviewer: permission.approvalsReviewer, sandboxPolicy: permission.sandboxPolicy };
     if (S.model) params.model = S.model;
     if (S.effort) params.effort = S.effort;
+    // Resume retains the last turn's summary preference. Resolve inheritance
+    // explicitly so clearing a client override also clears that retained value.
+    params.summary = codexOptions().model_reasoning_summary;
+    if (!params.summary) {
+      const effective = await rpc.request("config/read", { cwd: S.threadCwds.get(target) || S.cwd, includeLayers: false });
+      assertRpc(rpc, generation);
+      params.summary = effective?.config?.model_reasoning_summary || "auto";
+    }
     let r = await rpc.request("turn/start", params, 60000);
     if (generation !== S.generation || S.rpc !== rpc) throw new Error("Codex 引擎已停止，请重新发送");
     if (r?.turn && S.endedTurns.has(r.turn.id)) r = { ...r, turn: { ...r.turn, status: "completed" } };
@@ -1017,6 +1029,24 @@ function updatePermissions(mode) {
   return status();
 }
 
+function updateEngineOptions(body) {
+  validateCodexOptions(body);
+  if (codexActivity().busy || S.starting) throw Object.assign(new Error("请等待任务结束后再修改 Codex 设置"), { statusCode: 409 });
+  saveCodexOptions(body);
+  stopServer();
+  broadcast({ type: "status", status: status() });
+  return status();
+}
+async function inspectEngineOptions(cwd) {
+  const dir = safeCwd(cwd || S.cwd);
+  if (!dir) throw Object.assign(new Error("项目目录不存在"), { statusCode: 400 });
+  return rpcOperation(async (rpc, check) => {
+    const result = await rpc.request("config/read", { cwd: dir, includeLayers: false });
+    check();
+    return { options: publicEffectiveOptions(result.config), cwd: dir, version: CODEX.version };
+  });
+}
+
 function setConnection(body) {
   if (codexActivity().busy || S.starting) throw Object.assign(new Error("还有任务在运行，请结束后再切换连接"), { statusCode: 409 });
   const old=connectionStatus(),connection = updateConnection(body);
@@ -1122,6 +1152,8 @@ export async function routeCodex(req, res, u, p) {
       if (p === "/api/codex/open-thread") { const r = await resumeThread(body.threadId); return json(res, 200, { thread: slimThread(r && r.thread) }); }
       if (p === "/api/codex/turn") { const r = await startTurn(body.text, body.threadId, body.references); return json(res, 200, { turn: r && r.turn ? { id: r.turn.id, status: r.turn.status } : null }); }
       if (p === "/api/codex/permissions") return json(res, 200, updatePermissions(body.mode));
+      if (p === "/api/codex/engine-options") return json(res, 200, updateEngineOptions(body));
+      if (p === "/api/codex/engine-options/inspect") return json(res, 200, await inspectEngineOptions(body.cwd));
       if (p === "/api/codex/steer") { const r = await steerTurn(body.text); return json(res, 200, r || {}); }
       if (p === "/api/codex/interrupt") { const r = await interruptTurn(body.threadId); return json(res, 200, r || {}); }
       if (p === "/api/codex/compact") { await compactThread(body.threadId); return json(res, 200, { ok: true }); }
@@ -1176,4 +1208,4 @@ export async function routeCodex(req, res, u, p) {
 }
 
 // 只供隔离测试注入协议替身，正式网关不暴露内部状态。
-export const _codexForTest = LIVE ? null : { S, status, handleNotify, handleRequest, startThread, startTurn, resumeThread, interruptTurn, compactThread, stopServer, approve, refreshModels, loadModels, updateSettings, updatePermissions, referenceInput, setConnection, extensions, setSkill, downloadTo };
+export const _codexForTest = LIVE ? null : { S, status, handleNotify, handleRequest, startThread, startTurn, resumeThread, interruptTurn, compactThread, stopServer, approve, refreshModels, loadModels, updateSettings, updatePermissions, updateEngineOptions, inspectEngineOptions, referenceInput, setConnection, extensions, setSkill, downloadTo };

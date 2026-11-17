@@ -124,6 +124,7 @@ Early alpha. The protocol and login path have been exercised against the officia
 - [x] map `item/*` / `turn/*` notifications into the workbench UI
 - [x] approval cards and JSON-RPC responses
 - [x] Codex settings with persistent model/effort preferences and actual permission policy
+- [x] [Paged settings](docs/settings-pages.zh-CN.md), engine behavior overrides and effective configuration inspection
 - [x] Codex activity in Android busy detection, completion and approval notifications
 - [x] project-aware Codex skills/MCP inventory, skill toggles and instruction/config file entry points
 - [x] a dedicated `devkit-2026.11.12` build for `cox.dragon`
@@ -196,7 +197,7 @@ checked into the build only for reproducibility. Build caches (`devkit/cache`,
    ChatGPT uses its official browser authorization flow. Custom APIs need a base URL,
    model name and key, and must support the Responses API. Skip preserves your draft
    and asks you to connect only when you send a task. The connection can be changed
-   later under **Codex settings → Model connection** while no Codex task is running.
+   later under **Settings → Providers** while no Codex task is running.
 5. Select a project or use the current workspace. This opens an empty task without
    sending anything to the model. Returning users resume their workbench directly.
 

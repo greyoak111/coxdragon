@@ -4,7 +4,7 @@
   let setFrom = null;
   function openSettings(cat) {
     if (window.CODEX) {
-      const tab = cat === "provider" ? "connection" : cat === "claude" ? "extensions" : ["run", "storage", "device", "update", "usage", "trouble"].includes(cat) ? "device" : "general";
+      const tab = ({provider:"connection",claude:"extensions",run:"device-background",storage:"device-diagnostics",device:"device-permissions",update:"device-updates",usage:"device-diagnostics",trouble:"device-diagnostics",general:"general"})[cat] || "index";
       return CODEX.openSettings(tab);
     }
     setFrom = document.activeElement;

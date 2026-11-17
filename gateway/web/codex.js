@@ -62,7 +62,7 @@
     review: false, git: null, gitError: "", gitBusy: false, diff: "", diffFile: "", diffBusy: false,
     switching: false, viewSeq: 0, gitSeq: 0, diffSeq: 0, sidebar: false,
     onboarded: LS.get("onboarded", "") === "1", setupSession: false, setupBusy: "", setupError: "", setupStep: 0, threadsLoaded: false,
-    settingsTab: "general", settingsBusy: false, extensions: null, extensionsBusy: false, extensionsError: "", extensionsSeq: 0,
+    settingsTab: "index", settingsBusy: false, settingsDrafts: new Map(), providerDrafts: new Map(), extensions: null, extensionsBusy: false, extensionsError: "", extensionsSeq: 0,
     skipLogin: LS.get("skipLogin", "") === "1", connectionBusy: false,
     automation: null, automationBusy: false, automationError: "",
     contexts: new Map(), compacting: new Set(), compactBusy: false,
@@ -132,10 +132,8 @@
   </aside>
   <section class="cx-onboarding" id="cx-onboarding" aria-labelledby="cx-setup-title" hidden></section>
   <dialog class="cx-dialog cx-preferences" id="cx-preferences" aria-labelledby="cx-preferences-title">
-    <div class="cx-dialog-head"><h2 id="cx-preferences-title">${esc(t("Codex 设置"))}</h2><button class="cx-icon" data-act="settings-close" aria-label="${esc(t("关闭"))}">${ico("close")}</button></div>
-    <nav class="cx-pref-tabs" aria-label="${esc(t("设置"))}"><button data-act="settings-tab" data-tab="general">${esc(t("通用"))}</button><button data-act="settings-tab" data-tab="connection">${esc(t("模型连接"))}</button><button data-act="settings-tab" data-tab="extensions">${esc(t("技能与 MCP"))}</button><button data-act="settings-tab" data-tab="automation">${esc(t("自动化"))}</button><button data-act="settings-tab" data-tab="device">${esc(t("应用与设备设置"))}</button></nav>
-    <div id="cx-preferences-body"></div>
-    <div id="cx-device-settings" class="cx-device-settings" hidden></div>
+    <div class="cx-dialog-head cx-settings-head"><button class="cx-icon" id="cx-settings-back" data-act="settings-back" aria-label="${esc(t("返回设置"))}">${ico("chevron")}</button><div><small id="cx-settings-breadcrumb">${esc(t("设置"))}</small><h2 id="cx-preferences-title">${esc(t("设置"))}</h2></div><button class="cx-icon" data-act="settings-close" aria-label="${esc(t("关闭"))}">${ico("close")}</button></div>
+    <div class="cx-settings-layout"><nav class="cx-settings-nav" id="cx-settings-nav" aria-label="${esc(t("设置分类"))}"></nav><main class="cx-settings-main" id="cx-settings-main"><div id="cx-preferences-body"></div><div id="cx-device-settings" class="cx-device-settings" hidden></div></main></div>
   </dialog>
   <dialog class="cx-dialog" id="cx-project-dialog" aria-labelledby="cx-project-dialog-title">
     <form id="cx-project-form"><div class="cx-dialog-head"><h2 id="cx-project-dialog-title">${esc(t("选择项目"))}</h2><button type="button" class="cx-icon" data-act="dialog-close" aria-label="${esc(t("关闭"))}">${ico("close")}</button></div>
@@ -177,6 +175,8 @@
       mobileMenu: $("cx-mobile-menu"), activity: $("cx-activity"),
     };
     root.addEventListener("click", onClick);
+    dom.preferences.addEventListener("cancel", event => { if (st.settingsTab !== "index") { event.preventDefault(); settingsBack(); } });
+    dom.preferences.addEventListener("close", () => { if(!dom.preferences.open){st.cancelConnectionForm?.();st.providerDrafts.clear();st.settingsDrafts.clear();st.settingsTab="index";st.settingsRenderedTab="";st.engineInspectSeq=(st.engineInspectSeq||0)+1;} });
     $("cx-controls").addEventListener("close", () => { if($("cx-controls").open)return;st.referenceSeq++;st.referenceLoading=false; const action = st.controlTab === "model" ? "composer-model" : st.controlTab === "permission" ? "composer-permission" : "composer-reference"; root.querySelector(`[data-act="${action}"]`)?.focus(); });
     $("cx-controls").addEventListener("click", event => {
       if(event.target!==$("cx-controls"))return;
@@ -190,7 +190,7 @@
     });
     new MutationObserver(() => window.CCLayout?.apply()).observe(root, { subtree: true, attributes: true, attributeFilter: ["open", "hidden"] });
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden && dom.preferences.open && st.settingsTab === "general") loadNotifySettings();
+      if (!document.hidden && dom.preferences.open && st.settingsTab === "notifications") loadNotifySettings();
     });
     dom.input.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }
@@ -249,7 +249,9 @@
     if (act === "app-menu" || act === "settings") return openSettings();
     if (act === "extensions") return openSettings("extensions");
     if (act === "settings-close") return dom.preferences.close();
-    if (act === "settings-tab") { st.settingsTab = el.dataset.tab; paintSettings(); if (st.settingsTab === "extensions") loadExtensions(); if (st.settingsTab === "automation") loadAutomation(); return; }
+    if (act === "settings-tab") return navigateSettings(el.dataset.tab);
+    if (act === "settings-back") return settingsBack();
+    if (act === "provider-open") { st.connectionEditId=el.dataset.id;return navigateSettings("provider"); }
     if (act === "automation-refresh") return loadAutomation();
     if (act === "automation-toggle" || act === "automation-stop" || act === "automation-delete") return changeAutomation(el, act);
     if (act === "extensions-refresh") return loadExtensions();
@@ -1395,16 +1397,20 @@
       else{submit.disabled=false;error.textContent=t("保存失败，请检查设置后重试。");}
     };
   }
-  function paintPermissions() {
+  function permissionCards() {
     const mode = st.status?.permissions?.mode || "ask";
     const descriptions = { read:"只能读取，禁止写入和提权。", ask:"风险命令由你审批；获批后可访问应用文件。", auto:"风险命令由 Codex 审批；获批后可访问应用文件。", full:"允许访问应用可用的文件和网络，无操作审批。" };
-    $("cx-controls-body").innerHTML = `<div class="cx-permission-options">${[["read","只读"],["ask","询问"],["auto","帮我批准"],["full","完全访问"]].map(([id,name])=>`<button class="cx-permission-option" data-act="permission-mode" data-mode="${id}" aria-pressed="${id===mode}"${st.permissionBusy ? " disabled":""}>${ico("shield")}<span><b>${esc(t(name))}</b><small>${esc(t(descriptions[id]))}</small></span><i>${id===mode?"✓":""}</i></button>`).join("")}</div><p class="cx-field-note">${esc(t("权限由 Codex 引擎执行，仍受 Android 应用权限边界约束。"))}</p><p class="cx-form-error" role="alert">${esc(st.permissionError || "")}</p>`;
+    return `<div class="cx-permission-options">${[["read","只读"],["ask","询问"],["auto","帮我批准"],["full","完全访问"]].map(([id,name])=>`<button class="cx-permission-option" data-act="permission-mode" data-mode="${id}" aria-pressed="${id===mode}"${st.permissionBusy ? " disabled":""}>${ico("shield")}<span><b>${esc(t(name))}</b><small>${esc(t(descriptions[id]))}</small></span><i>${id===mode?"✓":""}</i></button>`).join("")}</div>`;
+  }
+  function paintPermissions() {
+    $("cx-controls-body").innerHTML = permissionCards()+`<p class="cx-field-note">${esc(t("权限由 Codex 引擎执行，仍受 Android 应用权限边界约束。"))}</p><p class="cx-form-error" role="alert">${esc(st.permissionError || "")}</p>`;
   }
   async function savePermission(mode) {
-    if(st.permissionBusy)return; st.permissionBusy=true;st.permissionError="";paintPermissions();
-    try{syncStatus(await post("/api/codex/permissions",{mode}));$("cx-controls").close();}
+    if(st.permissionBusy)return; st.permissionBusy=true;st.permissionError="";
+    const repaint=()=>{if(dom.preferences.open&&st.settingsTab==="permissions")paintSettings();else if($("cx-controls").open)paintPermissions();};repaint();
+    try{syncStatus(await post("/api/codex/permissions",{mode}));if($("cx-controls").open)$("cx-controls").close();}
     catch(e){st.permissionError=t(e.message);}
-    finally{st.permissionBusy=false;paint();}
+    finally{st.permissionBusy=false;paint();repaint();}
   }
   function paintReferenceChips() {
     if(!dom)return;
@@ -1472,48 +1478,121 @@
     $("cx-composer-meta").textContent=value;$("cx-composer-meta").title=value+" · "+t("会话累计用量；速度从首个输出事件至完成估算。");
   }
 
-  function openSettings(tab = "general") {
+  const SETTINGS_PAGES = [
+    ["connection","提供商","连接与模型","管理 API、账号和模型目录","branch"],
+    ["models","模型与上下文","连接与模型","默认模型、思考强度和上下文大小","settings"],
+    ["engine","Codex 行为","Codex","联网搜索、思考摘要、回复与压缩","terminal"],
+    ["instructions","指令与项目","Codex","自定义指令和项目 AGENTS.md","edit"],
+    ["permissions","权限与审批","Codex","只读、询问、自动审批和完全访问","shield"],
+    ["extensions","技能与 MCP","Codex","管理技能、插件和 MCP 服务","plus"],
+    ["general","外观与语言","应用","主题和显示语言","settings"],
+    ["notifications","通知","应用","任务完成与等待确认提醒","settings"],
+    ["device","应用与设备设置","应用","设备权限、后台运行、更新和排障","panel"],
+    ["automation","自动化","应用","管理已有定时任务","refresh"],
+  ];
+  function captureSettingsDraft(){
+    if(!dom?.preferences.open||["index","connection","provider"].includes(st.settingsTab))return;
+    const values={};$("cx-preferences-body").querySelectorAll("input[id],select[id],textarea[id]").forEach(e=>{if(!e.disabled)values[e.id]=e.type==="checkbox"?e.checked:e.value;});
+    st.settingsDrafts.set(st.settingsTab,values);
+  }
+  function restoreSettingsDraft(){
+    const draft=st.settingsDrafts.get(st.settingsTab);if(!draft)return;
+    if(draft["cx-pref-model"]!==undefined&&$("cx-pref-model")){$("cx-pref-model").value=draft["cx-pref-model"];$("cx-pref-model").dispatchEvent(new Event("change"));}
+    for(const [id,value]of Object.entries(draft)){const e=$(id);if(e&&!e.disabled){if(e.type==="checkbox")e.checked=value;else e.value=value;}}
+  }
+  function navigateSettings(tab){
+    captureSettingsDraft();st.cancelConnectionForm?.();st.settingsTab=tab;st.settingsRenderedTab="";st.providerModelPage=false;
+    paintSettings();dom.preferences.scrollTop=0;$("cx-settings-main").scrollTop=0;
+    if(tab==="extensions")loadExtensions();if(tab==="automation")loadAutomation();
+    requestAnimationFrame(()=>$("cx-preferences-title").focus({preventScroll:true}));
+  }
+  function openSettings(tab = "index") {
     if (!st.open) CC.openPage("codex");
-    ensureDom(); st.settingsTab = tab; paintSettings();
+    ensureDom();
+    if(tab==="connection"&&!(st.status?.providers||[]).some(p=>p.id!=="chatgpt")){st.connectionEditId="new";tab="provider";}
+    navigateSettings(tab);
     if (!dom.preferences.open) dom.preferences.showModal();
-    if (tab === "extensions") loadExtensions();
-    if (tab === "automation") loadAutomation();
+  }
+  function settingsBack(){
+    if(st.settingsTab==="provider"&&st.providerModelPage){st.providerModelBack?.();return;}
+    if(st.settingsTab==="provider"){navigateSettings("connection");return;}
+    if(st.settingsTab.startsWith("device-")){navigateSettings("device");return;}
+    if(st.settingsTab!=="index"){navigateSettings("index");return;}
+    dom.preferences.close();
+  }
+  function paintSettingsChrome(){
+    const page=st.settingsTab,provider=page==="provider",device=page.startsWith("device-");
+    dom.preferences.dataset.page=page;dom.preferences.dataset.root=String(page==="index");
+    const title=provider?st.providerModelPage?t(st.providerModelPage==="editor"?"模型设置":"模型目录"):t(st.connectionEditId==="new"?"添加提供商":"编辑提供商"):device?t(({"device-permissions":"设备与权限","device-background":"后台运行","device-updates":"更新","device-diagnostics":"排障"})[page]):t(SETTINGS_PAGES.find(p=>p[0]===page)?.[1]||"设置");
+    $("cx-preferences-title").textContent=title;$("cx-preferences-title").tabIndex=-1;
+    $("cx-settings-breadcrumb").textContent=provider?t(st.providerModelPage?"提供商 / 模型目录":"提供商"):device?t("应用与设备设置"):"coxdragon";
+    $("cx-settings-back").hidden=page==="index";
+    let group="";$("cx-settings-nav").innerHTML=SETTINGS_PAGES.map(([id,name,section,description,icon])=>{
+      const heading=section!==group?`<h3>${esc(t(section))}</h3>`:"";group=section;
+      return heading+`<button data-act="settings-tab" data-tab="${id}" aria-current="${page===id||provider&&id==="connection"||device&&id==="device"?"page":"false"}">${ico(icon)}<span><b>${esc(t(name))}</b><small>${esc(t(description))}</small></span>${ico("chevron")}</button>`;
+    }).join("");
   }
   function paintSettings() {
-    st.cancelConnectionForm?.();
-    const body = $("cx-preferences-body"), s = st.status || {};
-    body.hidden = st.settingsTab === "device";
-    $("cx-device-settings").hidden = st.settingsTab !== "device";
-    dom.preferences.querySelectorAll("[data-tab]").forEach((b) => b.setAttribute("aria-current", b.dataset.tab === st.settingsTab ? "page" : "false"));
-    if (st.settingsTab === "device") { CC.mountDeviceSettings($("cx-device-settings")); return; }
-    if (st.settingsTab === "extensions") { paintExtensions(); return; }
-    if (st.settingsTab === "connection") { paintConnection(); return; }
-    if (st.settingsTab === "automation") { paintAutomation(); return; }
-    const models = (s.models || []).filter((m) => !m.hidden);
-    const cur = models.find((m) => m.id === st.model) || models.find((m) => m.isDefault) || models[0];
-    const row = (name, value) => `<div class="cx-pref-row"><b>${esc(t(name))}</b><span>${value}</span></div>`;
-    body.innerHTML = `<section><h3>${esc(t("账号与模型"))}</h3>
-      ${row("连接方式", `<span>${esc(s.connection?.mode === "custom" ? t("自定义 API") : s.account?.email || t("尚未连接模型"))}</span><button data-act="connection">${esc(t("配置连接"))}</button>${s.account && s.connection?.mode !== "custom" ? `<button data-act="logout">${esc(t("退出登录"))}</button>` : ""}`)}
-      <form id="cx-settings-form"><label>${esc(t("模型"))}<select id="cx-pref-model"${!models.length || st.settingsBusy ? " disabled" : ""}><option value="">${esc(t("默认模型"))}</option>${models.map((m) => `<option value="${esc(m.id)}"${m.id === st.model ? " selected" : ""}>${esc(m.displayName || m.id)}</option>`).join("")}</select></label>
-      <label>${esc(t("思考强度"))}<select id="cx-pref-effort"><option value="">${esc(t("默认"))}</option>${(cur?.supportedReasoningEfforts || []).map((e) => `<option value="${esc(e.reasoningEffort)}"${e.reasoningEffort === st.effort ? " selected" : ""}>${esc(e.reasoningEffort)}</option>`).join("")}</select></label>
-      <p id="cx-model-capabilities">${esc(t("输入能力"))}：${esc(capabilityText(cur))} · ${esc(t("上下文上限"))}：${cur?.contextWindow ? esc(tokenNumber(cur.contextWindow)) : esc(t("未知"))}${Object.values(cur?.capabilitySources || {}).includes("models.dev") ? " · models.dev" : ""}</p>
-      <p>${esc(t("模型和思考强度保存在本机，将用于下一次发送。"))}</p><button class="cx-pref-save" type="submit"${st.settingsBusy || !models.length ? " disabled" : ""}>${esc(t("保存"))}</button></form></section>
-      <section><h3>${esc(t("权限与运行"))}</h3><p>${esc(t("权限由 Codex 引擎执行，仍受 Android 应用权限边界约束。"))}</p>
-      ${row("审批策略", "<code>"+esc(s.permissions?.approvalPolicy||"untrusted")+"</code>")}${row("执行沙箱", "<code>"+esc(s.permissions?.sandbox||"workspace-write")+"</code>")}
-      ${row("后台任务", esc(t("正在运行 {n} 个任务", { n: st.running.size })))}<button data-act="device-settings">${esc(t("应用与设备设置"))}</button></section>
-      <section><h3>${esc(t("通知"))}</h3><div id="cx-notify-status">${esc(t("加载中…"))}</div></section>
-      <section><h3>${esc(t("外观与语言"))}</h3><label>${esc(t("外观"))}<select id="cx-pref-theme">${[["auto", "跟随系统"], ["light", "浅色"], ["dark", "深色"]].map(([v, k]) => `<option value="${v}"${v === (window.Theme?.pref || "auto").replace(/^(qs|zy|gc|ss)-/, "") ? " selected" : ""}>${esc(t(k))}</option>`).join("")}</select></label>
-      <label>${esc(t("语言"))}<select id="cx-pref-lang"><option value="auto">${esc(t("跟随系统"))}</option>${(window.I18N?.langs || []).map((l) => `<option value="${esc(l.code)}"${l.code === I18N.pref ? " selected" : ""}>${esc(l.name)}</option>`).join("")}</select></label></section>
-      <section><h3>${esc(t("引擎"))}</h3>${row("Codex 版本", esc(s.version || "—"))}${row("状态", esc(t(s.server ? "就绪" : "引擎未启动")))}<p class="cx-pref-path">${esc(s.paths?.codexHome || "")}</p></section>`;
-    $("cx-settings-form").addEventListener("submit", (e) => { e.preventDefault(); saveSettings($("cx-pref-model").value, $("cx-pref-effort").value); });
-    $("cx-pref-model").addEventListener("change", (e) => {
-      const selected = models.find((m) => m.id === e.target.value) || models.find((m) => m.isDefault) || models[0];
-      $("cx-pref-effort").innerHTML = `<option value="">${esc(t("默认"))}</option>` + (selected?.supportedReasoningEfforts || []).map((x) => `<option value="${esc(x.reasoningEffort)}">${esc(x.reasoningEffort)}</option>`).join("");
-      $("cx-model-capabilities").textContent = t("输入能力") + "：" + capabilityText(selected) + " · " + t("上下文上限") + "：" + (selected?.contextWindow ? tokenNumber(selected.contextWindow) : t("未知"));
-    });
-    $("cx-pref-theme").addEventListener("change", (e) => { const prefix = (window.Theme?.pref || "").match(/^(qs|zy|gc|ss)-/)?.[0] || ""; window.Theme?.set(prefix + e.target.value); });
-    $("cx-pref-lang").addEventListener("change", (e) => { saveDraft(); window.I18N?.setLang(e.target.value); });
-    loadNotifySettings();
+    st.cancelConnectionForm?.();paintSettingsChrome();
+    const body=$("cx-preferences-body"),s=st.status||{},page=st.settingsTab;
+    body.hidden=page.startsWith("device-");$("cx-device-settings").hidden=!page.startsWith("device-");
+    if(page.startsWith("device-")){
+      const panel=$("cx-device-settings");CC.mountDeviceSettings(panel);
+      const index=["device-permissions","device-background","device-updates","device-diagnostics"].indexOf(page);
+      [...panel.children].forEach((el,i)=>el.hidden=i!==index);return;
+    }
+    if(page==="extensions"){paintExtensions();return;}
+    if(page==="provider"){paintConnection();return;}
+    if(page==="connection"){paintConnectionIndex();return;}
+    if(page==="automation"){paintAutomation();return;}
+    const row=(name,value)=>`<div class="cx-pref-row"><b>${esc(t(name))}</b><span>${value}</span></div>`;
+    if(page==="index"){
+      body.innerHTML=`<div class="cx-settings-intro"><span class="cx-settings-brand">${ico("settings")}</span><h3>${esc(t("你的工作台，由你设置"))}</h3><p>${esc(t("连接模型、调整 Codex 行为，管理应用和设备。"))}</p><div>${row("当前连接",esc(s.connection?.mode==="custom"?s.connection.name||s.connection.baseUrl:s.account?.email||"ChatGPT"))}${row("Codex 版本",esc(s.version||"—"))}</div></div>`;return;
+    }
+    if(page==="device"){
+      body.innerHTML=`<div class="cx-settings-page-links">${[["permissions","设备与权限","Android 权限与系统通知"],["background","后台运行","保活、执行方式和内存"],["updates","更新","应用、工具包和更新来源"],["diagnostics","排障","诊断、日志和环境检查"]].map(([id,name,description])=>`<button data-act="settings-tab" data-tab="device-${id}"><span><b>${esc(t(name))}</b><small>${esc(t(description))}</small></span>${ico("chevron")}</button>`).join("")}</div>`;return;
+    }
+    if(page==="general"){
+      body.innerHTML=`<section><p>${esc(t("调整工作台外观。更改立即生效。"))}</p><label>${esc(t("外观"))}<select id="cx-pref-theme">${[["auto","跟随系统"],["light","浅色"],["dark","深色"]].map(([v,k])=>`<option value="${v}"${v===(window.Theme?.pref||"auto").replace(/^(qs|zy|gc|ss)-/,"")?" selected":""}>${esc(t(k))}</option>`).join("")}</select></label><label>${esc(t("语言"))}<select id="cx-pref-lang"><option value="auto">${esc(t("跟随系统"))}</option>${(window.I18N?.langs||[]).map(l=>`<option value="${esc(l.code)}"${l.code===I18N.pref?" selected":""}>${esc(l.name)}</option>`).join("")}</select></label></section>`;
+      $("cx-pref-theme").onchange=e=>{const prefix=(window.Theme?.pref||"").match(/^(qs|zy|gc|ss)-/)?.[0]||"";window.Theme?.set(prefix+e.target.value);};
+      $("cx-pref-lang").onchange=e=>{saveDraft();window.I18N?.setLang(e.target.value);};return;
+    }
+    if(page==="notifications"){body.innerHTML=`<section><p>${esc(t("任务完成或等待你确认时提醒。通知还需系统授权。"))}</p><div id="cx-notify-status">${esc(t("加载中…"))}</div></section>`;loadNotifySettings();return;}
+    if(page==="engine"||page==="instructions"){paintEngineOptions();restoreSettingsDraft();return;}
+    if(page==="permissions"){body.innerHTML=`<section><p>${esc(t("权限由 Codex 引擎执行，仍受 Android 应用权限边界约束。"))}</p>${permissionCards()}${row("审批策略",`<code>${esc(s.permissions?.approvalPolicy||"untrusted")}</code>`)}${row("执行沙箱",`<code>${esc(s.permissions?.sandbox||"danger-full-access")}</code>`)}<p id="cx-permission-error" class="cx-form-error" role="alert">${esc(st.permissionError||"")}</p></section>`;return;}
+    if(page==="models"){
+      const models=(s.models||[]).filter(m=>!m.hidden),cur=models.find(m=>m.id===st.model)||models.find(m=>m.isDefault)||models[0];
+      body.innerHTML=`<section><p>${esc(t("按提供商和模型分别保存。留空使用默认值。"))}</p><button data-act="composer-model">${esc(t("切换提供商或输入模型 ID"))}</button><form id="cx-settings-form"><label>${esc(t("模型"))}<select id="cx-pref-model"${!models.length?" disabled":""}><option value="">${esc(t("默认模型"))}</option>${models.map(m=>`<option value="${esc(m.id)}"${m.id===st.model?" selected":""}>${esc(m.displayName||m.id)}</option>`).join("")}</select></label><label>${esc(t("思考强度"))}<select id="cx-pref-effort"><option value="">${esc(t("默认"))}</option>${(cur?.supportedReasoningEfforts||[]).map(e=>`<option value="${esc(e.reasoningEffort)}"${e.reasoningEffort===st.effort?" selected":""}>${esc(e.reasoningEffort)}</option>`).join("")}</select></label><label>${esc(t("上下文大小"))}<input id="cx-pref-context" type="number" min="1024" max="1000000000" step="1" value="${s.contextWindow||""}" placeholder="${esc(t("自动"))}"></label><p id="cx-model-capabilities">${esc(capabilityText(cur))} · ${esc(t("上下文上限"))} ${cur?.contextWindow?tokenNumber(cur.contextWindow):esc(t("未知"))}</p><button type="submit" class="cx-pref-save"${st.settingsBusy||!models.length?" disabled":""}>${esc(t("保存并使用"))}</button></form></section>`;
+      $("cx-settings-form").onsubmit=async event=>{event.preventDefault();st.settingsDrafts.delete(page);await saveSettings($("cx-pref-model").value,$("cx-pref-effort").value,Number($("cx-pref-context").value)||0);};
+      $("cx-pref-model").onchange=event=>{const m=models.find(m=>m.id===event.target.value)||models.find(m=>m.isDefault)||models[0];$("cx-pref-context").value=m?.settings?.contextWindow||"";$("cx-pref-effort").innerHTML=`<option value="">${esc(t("默认"))}</option>`+(m?.supportedReasoningEfforts||[]).map(e=>`<option value="${esc(e.reasoningEffort)}">${esc(e.reasoningEffort)}</option>`).join("");$("cx-model-capabilities").textContent=capabilityText(m)+" · "+t("上下文上限")+" "+(m?.contextWindow?tokenNumber(m.contextWindow):t("未知"));};
+      restoreSettingsDraft();return;
+    }
+  }
+  function paintEngineOptions(){
+    const body=$("cx-preferences-body"),page=st.settingsTab,instructions=page==="instructions",values=st.status?.engineOptions||{};
+    const select=(key,label,choices)=>`<label>${esc(t(label))}<select id="cx-option-${key}" name="${key}">${choices.map(([value,name])=>`<option value="${value}"${value===(values[key]||"")?" selected":""}>${esc(t(name))}</option>`).join("")}</select></label>`;
+    const text=(key,label)=>`<label>${esc(t(label))}<textarea id="cx-option-${key}" name="${key}" maxlength="16000" rows="7" spellcheck="false">${esc(values[key]||"")}</textarea></label>`;
+    body.innerHTML=`<form id="cx-engine-options-form"><p>${esc(t("仅覆盖本客户端的 Codex 设置。留空沿用 Codex 或项目配置；保存后在空闲时重建引擎，应用到后续请求。"))}</p>${instructions?`${text("developer_instructions","自定义指令")}<p>${esc(t("作为开发者指令用于新聊天。已有聊天保留历史指令，请新建聊天应用更改。"))}</p><section><h3>AGENTS.md</h3><p>${esc(t("项目指引由 Codex 按目录读取。"))}</p><code class="cx-pref-path">${esc(currentCwd()+"/AGENTS.md")}</code><button type="button" data-act="extension-files" data-dir="${esc(currentCwd())}">${esc(t("打开项目目录"))}</button></section>`:`${select("web_search","联网搜索",[["","跟随 Codex 配置"],["disabled","关闭"],["cached","缓存搜索"],["indexed","索引搜索"],["live","实时搜索"]])}${st.status?.connection?.mode==="custom"&&st.status.connection.wireApi==="chat"?`<p class="cx-settings-note">${esc(t("当前 Chat Completions 连接不支持 Codex 托管联网搜索，运行时固定关闭。"))}</p>`:""}${select("model_reasoning_summary","思考摘要",[["","跟随 Codex 配置"],["auto","自动"],["concise","简短"],["detailed","详细"],["none","关闭"]])}<p>${esc(t("请求模型提供的思考摘要，实际支持取决于模型。"))}</p>${select("model_verbosity","回复详细程度",[["","跟随 Codex 配置"],["low","简洁"],["medium","适中"],["high","详细"]])}<p>${esc(t("实际支持取决于模型能力，未声明支持时由 Codex 忽略。"))}</p><label>${esc(t("自动压缩阈值（token）"))}<input id="cx-option-model_auto_compact_token_limit" name="model_auto_compact_token_limit" type="number" min="1024" max="1000000000" step="1" value="${values.model_auto_compact_token_limit||""}" placeholder="${esc(t("自动"))}"></label><p>${esc(t("按 token 数触发引擎自动压缩，受模型实际上下文上限约束。"))}</p>${text("compact_prompt","压缩提示词")}<p>${esc(t("留空使用 Codex 默认压缩提示词。"))}</p>`}<p class="cx-form-error" id="cx-engine-options-error" role="alert"></p><p id="cx-engine-options-result" role="status"></p><div class="cx-settings-save"><button type="button" id="cx-engine-options-reset">${esc(t("恢复此页默认"))}</button><button type="submit" class="cx-pref-save">${esc(t("保存并应用"))}</button></div></form><section class="cx-effective-config"><h3>${esc(t("生效配置"))}</h3><p>${esc(t("从当前项目的 Codex 引擎读取，只显示本页支持的字段。"))}</p><button id="cx-engine-inspect">${esc(t("检查生效配置"))}</button><div id="cx-engine-effective" role="status"></div></section>`;
+    const form=$("cx-engine-options-form");
+    $("cx-engine-options-reset").onclick=()=>{for(const e of form.elements)if(e.name)e.value="";$("cx-engine-options-result").textContent=t("已恢复默认选项，保存后生效。");};
+    form.onsubmit=async event=>{
+      event.preventDefault();if(st.engineOptionsBusy)return;
+      const payload={};for(const e of form.elements)if(e.name)payload[e.name]=e.type==="number"?Number(e.value)||0:e.value;
+      st.engineOptionsBusy=true;const button=form.querySelector("[type=submit]");button.disabled=true;$("cx-engine-options-error").textContent="";
+      try{const result=await post("/api/codex/engine-options",payload);syncStatus(result);const draft=st.settingsDrafts.get(page);if(!draft||Object.entries(payload).every(([key,value])=>String(draft["cx-option-"+key]||"")===String(value||"")))st.settingsDrafts.delete(page);if(form.isConnected){$("cx-engine-options-result").textContent=t("已保存，后续请求使用新配置。");$("cx-engine-effective").textContent="";}}
+      catch(error){if(form.isConnected)$("cx-engine-options-error").textContent=t(error.message);}
+      finally{st.engineOptionsBusy=false;if(form.isConnected)button.disabled=false;paint();}
+    };
+    $("cx-engine-inspect").onclick=async event=>{
+      const button=event.currentTarget,output=$("cx-engine-effective"),seq=st.engineInspectSeq=(st.engineInspectSeq||0)+1;button.disabled=true;output.textContent=t("正在读取生效配置…");
+      try{const result=await post("/api/codex/engine-options/inspect",{cwd:currentCwd()});if(!output.isConnected||st.engineInspectSeq!==seq)return;output.innerHTML=`<p>${esc(result.cwd)} · Codex ${esc(result.version)}</p><dl>${Object.entries(result.options||{}).map(([key,value])=>`<dt>${esc(key)}</dt><dd>${esc(value===null?t("默认"):String(value))}</dd>`).join("")}</dl>`;}
+      catch(error){if(output.isConnected&&st.engineInspectSeq===seq)output.textContent=t(error.message);}finally{if(button.isConnected)button.disabled=false;}
+    };
+  }
+  function paintConnectionIndex(){
+    const s=st.status||{},active=s.connection||{},saved=(s.providers||[]).filter(p=>p.id!=="chatgpt");
+    $("cx-preferences-body").innerHTML=`<section class="cx-connection-account"><div><h3>ChatGPT</h3><p>${esc(s.account?.email||t("独立客户端 · 非 OpenAI 官方应用"))}</p></div><div><button data-act="connection-chatgpt">${esc(t("使用 ChatGPT 登录"))}</button>${s.account?`<button data-act="logout">${esc(t("退出登录"))}</button>`:""}</div></section><section class="cx-provider-overview"><div class="cx-api-model-heading"><h3>${esc(t("提供商"))}</h3><button id="cx-provider-add" data-act="provider-open" data-id="new">${ico("plus")}${esc(t("添加提供商"))}</button></div><div class="cx-provider-cards">${saved.map(p=>`<article class="cx-provider-card"><div><b>${esc(p.name)}</b><small>${esc(p.baseUrl)}</small><span>${esc(t(active.mode==="custom"&&active.providerId===p.id?"当前使用":"已保存"))} · ${p.models?.length||0} ${esc(t("模型"))}</span></div><button data-act="provider-open" data-id="${esc(p.id)}" data-provider-edit="${esc(p.id)}">${esc(t("编辑"))}</button><button data-provider-delete="${esc(p.id)}"${active.mode==="custom"&&active.providerId===p.id?" disabled":""}>${esc(t("删除"))}</button></article>`).join("")||`<p>${esc(t("添加提供商后，可获取模型或手动配置。"))}</p>`}</div></section>`;
+    $("cx-preferences-body").querySelectorAll("[data-provider-delete]").forEach(button=>button.onclick=async()=>{if(!confirm(t("删除这个提供商配置？聊天记录将保留。")))return;try{syncStatus(await post("/api/codex/connection/delete",{providerId:button.dataset.providerDelete}));st.providerDrafts.delete(button.dataset.providerDelete);paintConnectionIndex();}catch(error){toast(t(error.message),true);}});
   }
 
   function paintAutomation() {
@@ -1580,30 +1659,30 @@
     const body=$("cx-preferences-body"), saved=(st.status?.providers||[]).filter(p=>p.id!=="chatgpt"), active=st.status?.connection||{};
     const editId=st.connectionEditId===undefined||st.connectionEditId===null?active.providerId||saved[0]?.id||"new":st.connectionEditId;
     const c=editId==="new"?{}:editId===active.providerId?{...saved.find(p=>p.id===editId),...active}:saved.find(p=>p.id===editId)||{};
-    body.innerHTML=`<section class="cx-connection-account"><div><h3>ChatGPT</h3><p>${esc(t("独立客户端 · 非 OpenAI 官方应用"))}</p></div><button data-act="connection-chatgpt">${esc(t("使用 ChatGPT 登录"))}</button></section>
-      <section class="cx-provider-overview"><div class="cx-api-model-heading"><h3>${esc(t("提供商"))}</h3><button type="button" id="cx-provider-add">${ico("plus")}${esc(t("添加提供商"))}</button></div><div class="cx-provider-cards">${saved.map(p=>`<article class="cx-provider-card" data-selected="${p.id===editId}"><div><b>${esc(p.name)}</b><small>${esc(p.baseUrl)}</small><span>${esc(t(active.mode==="custom"&&active.providerId===p.id?"当前使用":"已保存"))} · ${p.hasKey?esc(t("密钥已保存")):esc(t("无需密钥"))} · ${p.models?.length||0} ${esc(t("模型"))}</span></div><button type="button" data-provider-edit="${esc(p.id)}">${esc(t("编辑"))}</button><button type="button" data-provider-delete="${esc(p.id)}"${active.mode==="custom"&&active.providerId===p.id?" disabled":""}>${esc(t("删除"))}</button></article>`).join("")||`<p>${esc(t("添加提供商后，可获取模型或手动配置。"))}</p>`}</div></section>
-      <section class="cx-api-section"><h3>${esc(t(editId==="new"?"添加提供商":"编辑提供商"))}</h3><form id="cx-connection-form" autocomplete="off"><fieldset${st.connectionBusy?" disabled":""}>
-        <label>${esc(t("已保存的提供商"))}<select id="cx-api-profile">${saved.map(p=>`<option value="${esc(p.id)}"${p.id===editId?" selected":""}>${esc(p.name)}</option>`).join("")}<option value="new"${editId==="new"?" selected":""}>${esc(t("添加提供商"))}</option></select></label>
+    body.innerHTML=`      <section class="cx-api-section"><form id="cx-connection-form" autocomplete="off"><fieldset${st.connectionBusy?" disabled":""}>
+        <div id="cx-provider-basic">
         <label>${esc(t("提供商名称"))}<input id="cx-api-name" maxlength="80" value="${esc(c.name||"")}" placeholder="${esc(t("留空使用服务商域名"))}"></label>
         <label>${esc(t("API 基础地址"))}<input id="cx-api-url" type="url" required maxlength="2048" value="${esc(c.baseUrl||"")}" placeholder="https://example.com/v1" autocapitalize="off" spellcheck="false"></label><p id="cx-api-url-help">${esc(t("请使用 API 地址而非网站首页；也可粘贴完整的 /responses 或 /chat/completions 地址。"))}</p>
         <label>${esc(t("API 协议"))}<select id="cx-api-protocol"><option value="auto">${esc(t("自动识别（测试连接后确定）"))}</option><option value="responses">OpenAI Responses</option><option value="chat">OpenAI Chat Completions</option></select></label><div class="cx-api-preview"><span>${esc(t("请求地址"))}</span><code id="cx-api-preview"></code></div>
         <label>API Key<div class="cx-api-key-row"><input id="cx-api-key" type="password" autocomplete="new-password" maxlength="16384" placeholder="${esc(t(c.hasKey?"已保存密钥，留空则保留":"输入你的 API Key"))}"${c.noKey?" disabled":""}><button type="button" id="cx-api-key-toggle" aria-pressed="false">${esc(t("显示"))}</button></div></label>
         <label class="cx-pref-check"><span>${esc(t("此接口无需 API Key"))}</span><input id="cx-api-no-key" type="checkbox"${c.noKey?" checked":""}></label>
-        <div class="cx-api-model-heading"><h3>${esc(t("模型目录"))}</h3><button type="button" id="cx-api-fetch">${esc(t("获取模型"))}</button></div><p>${esc(t("获取结果作为候选，选择后加入；每个模型独立设置能力。"))}</p>
-        <p id="cx-api-model-status" role="status" aria-live="polite"></p><div id="cx-api-candidates" hidden></div><div id="cx-api-model-rows"></div><button type="button" id="cx-api-add-model">${esc(t("手动添加模型"))}</button>
-        <div class="cx-provider-model-editor"><h4>${esc(t("模型设置"))}</h4><label for="cx-api-model">${esc(t("模型 ID"))}</label><input id="cx-api-model" required maxlength="200" value="${esc(c.model||"")}" list="cx-api-models" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(t("选择获取到的模型，或手动输入"))}"><datalist id="cx-api-models"></datalist>
+        <button type="button" id="cx-provider-models" class="cx-settings-page-link"></button></div>
+        <div id="cx-provider-catalog" hidden><div class="cx-api-model-heading"><h3>${esc(t("模型目录"))}</h3><button type="button" id="cx-api-fetch">${esc(t("获取模型"))}</button></div><p>${esc(t("获取结果作为候选，选择后加入；每个模型独立设置能力。"))}</p>
+        <p id="cx-api-model-status" role="status" aria-live="polite"></p><div id="cx-api-candidates" hidden></div><div id="cx-api-model-rows"></div><button type="button" id="cx-api-add-model">${esc(t("手动添加模型"))}</button></div>
+        <div id="cx-provider-editor" class="cx-provider-model-editor" hidden><h4>${esc(t("模型设置"))}</h4><label for="cx-api-model">${esc(t("模型 ID"))}</label><input id="cx-api-model" required maxlength="200" value="${esc(c.model||"")}" list="cx-api-models" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${esc(t("选择获取到的模型，或手动输入"))}"><datalist id="cx-api-models"></datalist>
           <label>${esc(t("显示名称"))}<input id="cx-api-model-name" maxlength="200" placeholder="${esc(t("留空使用模型 ID"))}"></label><p id="cx-api-capabilities"></p>${referenceFields("cx-api")}
           <div class="cx-model-grid"><label>${esc(t("上下文大小"))}<input id="cx-api-context" type="number" min="1024" max="1000000000" step="1" inputmode="numeric" placeholder="${esc(t("自动"))}"></label><label>${esc(t("默认思考强度"))}<select id="cx-api-effort"></select></label></div>
           <label>${esc(t("输入能力"))}<select id="cx-api-input-mode"><option value="auto">${esc(t("自动获取"))}</option><option value="manual">${esc(t("手动指定"))}</option></select></label><div id="cx-api-inputs" class="cx-modality-options">${[["text","文本"],["image","图片"],["audio","音频"],["video","视频"],["pdf","PDF"]].map(([id,label])=>`<label><input type="checkbox" value="${id}">${esc(t(label))}</label>`).join("")}</div>
           <label>${esc(t("可用思考强度"))}<select id="cx-api-effort-mode"><option value="auto">${esc(t("自动获取"))}</option><option value="manual">${esc(t("手动指定"))}</option></select></label><input id="cx-api-effort-values" maxlength="800" placeholder="low, medium, high" aria-label="${esc(t("自定义思考强度列表"))}"><p class="cx-field-note">${esc(t("用逗号分隔；留空表示不发送思考强度。配置不会改变服务商的实际能力。"))}</p><button type="button" id="cx-api-apply-model">${esc(t("加入模型目录"))}</button>
         </div>
-        <div class="cx-api-test-bar"><button type="button" id="cx-api-test">${esc(t("测试连接"))}</button><span>${esc(t("会发送短模型请求，可能产生少量费用。"))}</span></div><div id="cx-api-result" class="cx-api-result" role="status" aria-live="polite" hidden></div>
+        <div id="cx-provider-actions"><div class="cx-api-test-bar"><button type="button" id="cx-api-test">${esc(t("测试连接"))}</button><span>${esc(t("会发送短模型请求，可能产生少量费用。"))}</span></div><div id="cx-api-result" class="cx-api-result" role="status" aria-live="polite" hidden></div>
         <p>${esc(t("密钥保存在应用私有目录，不会显示在状态信息中。更换地址时请重新填写密钥。"))}</p><p class="cx-field-note">${esc(t("Chat Completions 通过本地适配支持文本、图片与工具调用；其他能力优先使用 Responses。测试成功不代表所有工具能力均受支持。"))}</p>
         <p id="cx-connection-error" class="cx-form-error" role="alert"></p><div class="cx-provider-save"><button type="button" id="cx-api-save-only">${esc(t("仅保存"))}</button><button type="submit" class="cx-pref-save">${esc(t("保存并使用 API"))}</button></div>
-      </fieldset></form></section>`;
+      </div></fieldset></form></section>`;
     const form=$("cx-connection-form"), protocol=$("cx-api-protocol"), url=$("cx-api-url"), key=$("cx-api-key"), model=$("cx-api-model"), noKey=$("cx-api-no-key"), error=$("cx-connection-error"), effort=$("cx-api-effort");
     protocol.value=c.baseUrl?c.wireApi||"auto":"auto";
     let revision=0,controller=null,timer=0,metadataTimer=0,busy=false,disposed=false,modelCatalog=(c.models||[]).map(m=>({...m,_referenceApplied:!!m.settings?.referenceId})),defaultId=c.model||"",editingId=c.model||"",metadataSequence=0;
+    const draft=st.providerDrafts.get(editId);
     const rows=new Map((c.models||[]).filter(m=>c.modelIds?c.modelIds.includes(m.id):m.id===c.model).map(m=>[m.id,{id:m.id,settings:{...m.settings}}]));
     const normalized=()=>{try{const u=new URL(url.value.trim());u.pathname=u.pathname.replace(/\/(responses|chat\/completions|models)\/?$/,"");return u.href.replace(/\/+$/,"");}catch{return "";}};
     const references=bindModelReference("cx-api",{getModel:()=>model.value.trim(),getBaseUrl:normalized,onMetadata:m=>{metadataSequence++;modelCatalog=[...modelCatalog.filter(r=>r.id!==m.id),mergeReference(modelCatalog.find(r=>r.id===m.id),m)];paintCapabilities();}});
@@ -1618,7 +1697,14 @@
     }
     function editorSettings(){return {displayName:$("cx-api-model-name").value.trim(),contextWindow:$("cx-api-context").value?Number($("cx-api-context").value):0,effort:effort.value,referenceId:references.get(),inputModalities:$("cx-api-input-mode").value==="manual"?[...$("cx-api-inputs").querySelectorAll("input:checked")].map(e=>e.value):null,supportedReasoningEfforts:$("cx-api-effort-mode").value==="manual"?effortValues():null};}
     function capture(){const id=model.value.trim();if(!id)return;rows.set(id,{id,settings:editorSettings()});if(editingId&&editingId!==id&&rows.has(editingId)){rows.delete(editingId);if(defaultId===editingId)defaultId=id;}editingId=id;defaultId||=id;}
+    function providerPage(page=""){
+      st.providerModelPage=page;$("cx-provider-basic").hidden=!!page;$("cx-provider-catalog").hidden=page!=="catalog";$("cx-provider-editor").hidden=page!=="editor";$("cx-provider-actions").hidden=!!page;
+      paintSettingsChrome();$("cx-settings-main").scrollTop=0;requestAnimationFrame(() => $("cx-preferences-title").focus({preventScroll:true}));
+    }
+    st.providerModelBack=()=>{if(st.providerModelPage==="editor"){capture();paintRows();providerPage("catalog");}else providerPage();};
+    $("cx-provider-models").onclick=()=>providerPage("catalog");
     function paintRows(){
+      $("cx-provider-models").innerHTML=`<span><b>${esc(t("模型目录"))}</b><small>${esc(defaultId||t("尚未选择模型"))} · ${rows.size} ${esc(t("模型"))}</small></span>${ico("chevron")}`;
       $("cx-api-model-rows").innerHTML=[...rows.values()].map(row=>`<article class="cx-provider-model-row"><button type="button" data-model-edit="${esc(row.id)}"><b>${esc(row.settings.displayName||row.id)}</b><small>${esc(row.id)}${row.settings.contextWindow?" · "+tokenNumber(row.settings.contextWindow):""}</small></button><button type="button" data-model-default="${esc(row.id)}" aria-pressed="${row.id===defaultId}">${esc(t(row.id===defaultId?"默认模型":"设为默认"))}</button><button type="button" data-model-remove="${esc(row.id)}" aria-label="${esc(t("移除模型"))}">×</button></article>`).join("");
     }
     function loadEditor(id){
@@ -1632,24 +1718,20 @@
     function preview(){$("cx-api-preview").textContent=normalized()?normalized()+(protocol.value==="chat"?"/chat/completions":protocol.value==="auto"?"/responses · /chat/completions":"/responses"):"https://example.com/v1";key.placeholder=t(c.hasKey&&normalized()===c.baseUrl?"已保存密钥，留空则保留":"输入你的 API Key");}
     function buttons(){for(const id of ["cx-api-fetch","cx-api-test","cx-api-save-only"])$(id).disabled=busy;form.querySelector("[type=submit]").disabled=busy;}
     function reset(catalog=false){revision++;controller?.abort();controller=null;clearTimeout(timer);busy=false;buttons();$("cx-api-result").hidden=true;error.textContent="";if(catalog){metadataSequence++;modelCatalog=[];$("cx-api-models").innerHTML="";$("cx-api-candidates").hidden=true;paintCapabilities();$("cx-api-model-status").textContent=t("填写地址和密钥后自动获取模型，也可手动填写。");}preview();}
-    const cleanup=event=>{if(event?.type==="close"&&dom.preferences.open)return;disposed=true;revision++;metadataSequence++;controller?.abort();references.dispose();clearTimeout(timer);clearTimeout(metadataTimer);dom.preferences.removeEventListener("close",cleanup);if(st.cancelConnectionForm===cleanup)st.cancelConnectionForm=null;};
+    const cleanup=event=>{if(event?.type==="close"&&dom.preferences.open)return;if(form.isConnected){capture();const fields={};form.querySelectorAll("input[id],select[id]").forEach(e=>fields[e.id]=e.type==="checkbox"?e.checked:e.value);st.providerDrafts.set(editId,{fields,rows:[...rows],defaultId,editingId,modelCatalog,referenceId:references.get(),inputs:[...$("cx-api-inputs").querySelectorAll("input:checked")].map(e=>e.value)});}disposed=true;revision++;metadataSequence++;controller?.abort();references.dispose();clearTimeout(timer);clearTimeout(metadataTimer);dom.preferences.removeEventListener("close",cleanup);if(st.cancelConnectionForm===cleanup)st.cancelConnectionForm=null;};
     st.cancelConnectionForm=cleanup;dom.preferences.addEventListener("close",cleanup);
-    function editProvider(id){cleanup();st.connectionEditId=id;paintConnection();}
-    $("cx-provider-add").onclick=()=>editProvider("new");$("cx-api-profile").onchange=e=>editProvider(e.target.value);
-    body.querySelectorAll("[data-provider-edit]").forEach(e=>e.onclick=()=>editProvider(e.dataset.providerEdit));
-    body.querySelectorAll("[data-provider-delete]").forEach(e=>e.onclick=async()=>{if(!confirm(t("删除这个提供商配置？聊天记录将保留。")))return;try{syncStatus(await post("/api/codex/connection/delete",{providerId:e.dataset.providerDelete}));editProvider(active.mode==="custom"?active.providerId:"new");}catch(err){error.textContent=t(err.message);}});
     $("cx-api-model-rows").onclick=event=>{
       const target=event.target.closest("button");if(!target)return;
-      if(target.dataset.modelEdit){capture();loadEditor(target.dataset.modelEdit);paintRows();}
+      if(target.dataset.modelEdit){capture();loadEditor(target.dataset.modelEdit);paintRows();providerPage("editor");}
       if(target.dataset.modelDefault){capture();defaultId=target.dataset.modelDefault;paintRows();}
       if(target.dataset.modelRemove){rows.delete(target.dataset.modelRemove);if(defaultId===target.dataset.modelRemove)defaultId=rows.keys().next().value||"";if(model.value===target.dataset.modelRemove)loadEditor(defaultId);paintRows();}
     };
-    $("cx-api-add-model").onclick=()=>{capture();loadEditor("");paintRows();model.focus();};
-    $("cx-api-apply-model").onclick=()=>{if(!model.reportValidity())return;capture();paintRows();};
+    $("cx-api-add-model").onclick=()=>{capture();loadEditor("");paintRows();providerPage("editor");model.focus();};
+    $("cx-api-apply-model").onclick=()=>{if(!model.reportValidity())return;capture();paintRows();providerPage("catalog");};
     $("cx-api-input-mode").onchange=paintCapabilities;$("cx-api-effort-mode").onchange=()=>{effort.value="";paintCapabilities();};$("cx-api-effort-values").oninput=paintCapabilities;
     model.oninput=()=>{reset();references.set(null);paintCapabilities();const id=model.value.trim(),seq=++metadataSequence;clearTimeout(metadataTimer);if(!id)return;metadataTimer=setTimeout(async()=>{try{const m=await post("/api/codex/model-metadata",{model:id,baseUrl:normalized()});if(disposed||seq!==metadataSequence)return;if(!modelCatalog.some(m=>m.id===id))modelCatalog.push(m);paintCapabilities();}catch{}},300);};
     async function probe(kind){
-      clearTimeout(timer);if(disposed||busy)return;if(!url.reportValidity()||(kind==="test"&&!model.reportValidity()))return;
+      clearTimeout(timer);if(disposed||busy)return;if(!url.reportValidity())return;if(kind==="test"&&!model.value.trim()){providerPage("editor");model.reportValidity();return;}
       reset();const id=revision;controller=new AbortController();busy=true;buttons();const label=$("cx-api-model-status"),result=$("cx-api-result");
       if(kind==="models")label.textContent=t("正在获取模型…");else{result.hidden=false;result.dataset.state="pending";result.textContent=t("正在测试连接…");}
       const current=()=>!disposed&&form.isConnected&&revision===id;
@@ -1673,14 +1755,20 @@
     url.addEventListener("change",()=>{if(/\/chat\/completions\/?$/.test(url.value.trim()))protocol.value="chat";else if(/\/responses\/?$/.test(url.value.trim()))protocol.value="responses";preview();});protocol.onchange=()=>reset();
     $("cx-api-fetch").onclick=()=>probe("models");$("cx-api-test").onclick=()=>probe("test");$("cx-api-key-toggle").onclick=e=>{key.type=key.type==="password"?"text":"password";e.currentTarget.textContent=t(key.type==="password"?"显示":"隐藏");e.currentTarget.setAttribute("aria-pressed",String(key.type==="text"));};
     async function save(activate){
-      if(busy||!form.reportValidity())return;if(protocol.value==="auto"){error.textContent=t("请先测试连接以识别协议，或手动选择协议。");return;}
+      if(busy)return;if(!model.value.trim()){providerPage("editor");model.reportValidity();return;}if(!form.checkValidity()){const invalid=form.querySelector("input:invalid,select:invalid");if(invalid?.closest("#cx-provider-editor"))providerPage("editor");else providerPage();form.reportValidity();return;}if(protocol.value==="auto"){error.textContent=t("请先测试连接以识别协议，或手动选择协议。");return;}
       capture();clearTimeout(timer);form.querySelector("fieldset").disabled=true;error.textContent="";
-      try{const defaultModel=rows.get(defaultId)||rows.values().next().value;await saveConnectionConfig({...value(),activate,model:defaultModel.id,effort:defaultModel.settings.effort||"",contextWindow:defaultModel.settings.contextWindow||0,models:[...rows.values()]});st.connectionEditId=null;toast(t(activate?"连接设置已保存，发送任务时将使用此 API。":"提供商已保存。"));}
+      try{const defaultModel=rows.get(defaultId)||rows.values().next().value;await saveConnectionConfig({...value(),activate,model:defaultModel.id,effort:defaultModel.settings.effort||"",contextWindow:defaultModel.settings.contextWindow||0,models:[...rows.values()]});st.providerDrafts.delete(editId);st.connectionEditId=null;toast(t(activate?"连接设置已保存，发送任务时将使用此 API。":"提供商已保存。"));}
       catch(err){if(form.isConnected)error.textContent=t(err.message);}finally{if(form.isConnected)form.querySelector("fieldset").disabled=false;}
     }
     form.onsubmit=e=>{e.preventDefault();save(true);};$("cx-api-save-only").onclick=()=>save(false);
     loadEditor(c.model||"");paintRows();preview();$("cx-api-model-status").textContent=t("填写地址和密钥后自动获取模型，也可手动填写。");
-    if(c.baseUrl&&(c.hasKey||c.noKey))timer=setTimeout(()=>probe("models"),300);
+    if(draft){
+      rows.clear();for(const [id,row]of draft.rows)rows.set(id,row);defaultId=draft.defaultId;editingId=draft.editingId;modelCatalog=draft.modelCatalog;
+      for(const [id,value]of Object.entries(draft.fields)){const e=$(id);if(e){if(e.type==="checkbox")e.checked=value;else e.value=value;}}
+      references.set(draft.referenceId);$("cx-api-inputs").querySelectorAll("input").forEach(e=>e.checked=(draft.inputs||[]).includes(e.value));paintCapabilities();effort.value=draft.fields["cx-api-effort"];key.disabled=noKey.checked;paintRows();preview();
+    }
+    providerPage();
+    if(c.baseUrl&&(c.hasKey||c.noKey)&&!draft)timer=setTimeout(()=>probe("models"),300);
   }
   async function loadNotifySettings() {
     const box = $("cx-notify-status");
@@ -1753,9 +1841,9 @@
   function back() {
     if (!st.open) return false;
     if (dom.mobileMenu.open) { dom.mobileMenu.close(); return true; }
-    if (dom.preferences.open) { dom.preferences.close(); return true; }
-    if (dom.dialog.open) { dom.dialog.close(); return true; }
     if ($("cx-controls").open) { $("cx-controls").close(); return true; }
+    if (dom.preferences.open) { settingsBack(); return true; }
+    if (dom.dialog.open) { dom.dialog.close(); return true; }
     if ($("cx-context").open) { $("cx-context").open = false; $("cx-context").querySelector("summary").focus(); return true; }
     if (st.sidebar) { toggleSidebar(false); return true; }
     if (st.review) { toggleReview(false); return true; }
@@ -1800,7 +1888,7 @@
   window.CODEX = { onOpen, onHide, refresh, openThread, openNotification, openSettings, newThread, back,
     openSidebar: () => toggleSidebar(true),
     closeSettings: () => dom.preferences.close(),
-    deviceSettingsOpen: () => dom.preferences.open && st.settingsTab === "device",
+    deviceSettingsOpen: () => dom.preferences.open && st.settingsTab.startsWith("device"),
     get state() { return st; } };
   CC.openPage("codex");
   $("cx-loading")?.remove();

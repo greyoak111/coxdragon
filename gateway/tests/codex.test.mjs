@@ -281,8 +281,8 @@ test("Codex：发送和停止显式指定线程，不受当前打开的线程影
   cx.S.rpc.request = async (method, params) => { calls.push({ method, params }); return { turn: { id: "b1", status: "inProgress" } }; };
   await cx.startTurn("check b", "b");
   await cx.interruptTurn("b");
-  assert.equal(calls[0].params.threadId, "b");
-  assert.deepEqual(calls[1], { method: "turn/interrupt", params: { threadId: "b", turnId: "b1" } });
+  assert.equal(calls.find(c=>c.method==="turn/start").params.threadId, "b");
+  assert.deepEqual(calls.find(c=>c.method==="turn/interrupt"), { method: "turn/interrupt", params: { threadId: "b", turnId: "b1" } });
   assert.equal(cx.S.activeThread.id, "a");
   assert.equal(cx.S.activeTurn, null);
 });
@@ -339,11 +339,11 @@ test("Codex：进程已创建但还在初始化时，新请求等待初始化完
 
 test("Codex：停止后的延迟回执不能复活旧任务或清掉新任务的后台标记", async () => {
   reset(); let oldFinish, newFinish;
-  cx.S.rpc.request = () => new Promise((resolve) => { oldFinish = resolve; });
+  cx.S.rpc.request = method => method==="config/read"?Promise.resolve({config:{}}):new Promise((resolve) => { oldFinish = resolve; });
   const oldTurn = cx.startTurn("old", "b");
   await new Promise((r) => setImmediate(r)); cx.stopServer();
   cx.S.loadedThreads.add("b");
-  cx.S.rpc = { stderr: "", request: () => new Promise((resolve) => { newFinish = resolve; }) };
+  cx.S.rpc = { stderr: "", request: method => method==="config/read"?Promise.resolve({config:{}}):new Promise((resolve) => { newFinish = resolve; }) };
   const newTurn = cx.startTurn("new", "b"); await new Promise((r) => setImmediate(r));
   oldFinish({ turn: { id: "old", status: "inProgress" } });
   await assert.rejects(oldTurn, /已停止/);
@@ -372,7 +372,7 @@ test("Codex：新代引擎先恢复目标线程，后台发送不改变当前视
       : { turn: { id: "restarted-turn", status: "inProgress" } };
   } };
   await cx.startTurn("continue after restart", "b");
-  assert.deepEqual(calls.map((c) => c.method), ["thread/resume", "turn/start"]);
+  assert.deepEqual(calls.map((c) => c.method), ["thread/resume", "config/read", "turn/start"]);
   assert.equal(cx.S.activeThread.id, "a");
   assert.equal(cx.S.loadedThreads.has("b"), true);
   cx.handleNotify({ method: "turn/completed", params: { threadId: "b", turn: { id: "restarted-turn", status: "completed" } } });
@@ -383,7 +383,7 @@ test("Codex：新代引擎先恢复目标线程，后台发送不改变当前视
 test("Codex：创建和恢复在途时阻止切连接，停止后的旧回执不复活线程", async () => {
   for (const kind of ["start", "resume"]) {
     reset(); let finish;
-    cx.S.rpc.request = () => new Promise((resolve) => { finish = resolve; });
+    cx.S.rpc.request = method => method==="config/read"?Promise.resolve({config:{}}):new Promise((resolve) => { finish = resolve; });
     const pending = kind === "start" ? cx.startThread(CFG.workspace) : cx.resumeThread("b");
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(codexActivity().busy, true);
@@ -401,7 +401,7 @@ test("Codex：创建和恢复在途时阻止切连接，停止后的旧回执不
 test("Codex：待回执、运行和审批期间保留后台标记，旧引擎空闲不能清掉它", async () => {
   reset(); let finish;
   const pending = new Promise((resolve) => { finish = resolve; });
-  cx.S.rpc.request = () => pending;
+  cx.S.rpc.request = method => method==="config/read"?Promise.resolve({config:{}}):pending;
   const turn = cx.startTurn("background", "b");
   await new Promise((r) => setImmediate(r));
   const marker = path.join(CFG.home, ".run-active");
@@ -487,7 +487,7 @@ test("Codex：等待启动回执时拒绝网关重启，拒绝前不写执行方
   const { routeSettings } = await import("../gw/settings.mjs");
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let finish;
-  cx.S.rpc.request = () => new Promise((resolve) => { finish = resolve; });
+  cx.S.rpc.request = method => method==="config/read"?Promise.resolve({config:{}}):new Promise((resolve) => { finish = resolve; });
   const turn = cx.startTurn("pending restart guard", "b");
   await new Promise((r) => setImmediate(r));
   const pref = path.join(CFG.runtime, ".exec-mode");

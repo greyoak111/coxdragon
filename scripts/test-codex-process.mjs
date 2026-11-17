@@ -12,8 +12,9 @@ const binary = process.env.CODEX_TEST_BIN || path.join(root, ".cache", process.p
 assert.match(spawnSync(binary, ["--version"], { encoding: "utf8", windowsHide: true }).stdout || "", /\b0\.166\.0\b/, "Install pinned codex-app-server 0.166.0 or set CODEX_TEST_BIN");
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "coxdragon-process-test-"));
 Object.assign(process.env, { CCAPP_TEST: "1", CCAPP_HOME: temporary, CCAPP_WORKSPACE: temporary, CCAPP_LOG: path.join(temporary, "gateway.log") });
-const { updateConnection, prepareConnectionLaunch } = await import("../gateway/gw/codex-connection.mjs");
+const { updateConnection, prepareConnectionLaunch, connectionStatus } = await import("../gateway/gw/codex-connection.mjs");
 const { rememberApiModels } = await import("../gateway/gw/codex-models.mjs");
+const { OPTION_DEFAULTS, saveCodexOptions, codexOverrides, codexOptionArgs } = await import("../gateway/gw/codex-options.mjs");
 const { readThreadUsage } = await import("../gateway/gw/codex-context.mjs");
 const marker = path.join(temporary, "executed.txt");
 const quote = text => "'" + text.replaceAll("'", "'\\''") + "'";
@@ -70,7 +71,7 @@ class Driver {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => /^(PATH|PATHEXT|SYSTEMROOT|WINDIR|COMSPEC|TEMP|TMP|LOCALAPPDATA)$/i.test(key)));
     Object.assign(env, launch.env, { HOME: temporary, USERPROFILE: temporary, CODEX_HOME: path.join(temporary, ".codex"), HTTP_PROXY: "http://127.0.0.1:1", HTTPS_PROXY: "http://127.0.0.1:1", NO_PROXY: "127.0.0.1,localhost" });
     fs.mkdirSync(env.CODEX_HOME, { recursive: true });
-    this.child = spawn(binary, [...launch.args, "--listen", "stdio://"], { env, cwd: temporary, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
+    this.child = spawn(binary, [...launch.args, ...codexOptionArgs(connectionStatus()), "--listen", "stdio://"], { env, cwd: temporary, windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     this.closed = new Promise(resolve => this.child.once("close", resolve));
     this.child.stderr.on("data", data => { this.stderr = (this.stderr + data).slice(-3000); });
     this.child.stdout.setEncoding("utf8");
@@ -100,7 +101,8 @@ class Driver {
   }
   async init() { await this.request("initialize", { clientInfo: { name: "coxdragon_process_test", version: "1" }, capabilities: { experimentalApi: true } }); }
   async turn(threadId, extra = {}) {
-    const { turn } = await this.request("turn/start", { threadId, input: [{ type: "text", text: "synthetic fixture" }], ...extra });
+    const effective = await this.request("config/read", { cwd: temporary, includeLayers: false });
+    const { turn } = await this.request("turn/start", { threadId, input: [{ type: "text", text: "synthetic fixture" }], summary:effective.config.model_reasoning_summary || "auto", ...extra });
     const end = Date.now() + 40000;
     while (Date.now() < end) {
       const result = this.events.find(event => event.method === "turn/completed" && event.params.turn.id === turn.id);
@@ -124,11 +126,18 @@ try {
     updateConnection({ mode: "custom", baseUrl, model: "process-fixture", noKey: true, wireApi, effort: "high" });
     const launch = await prepareConnectionLaunch(); adapterClose = launch.close;
     const driver = new Driver(launch); await driver.init();
-    const response = await driver.request("thread/start", { cwd: temporary, model: "process-fixture", modelProvider: launch.modelProvider, ...permission });
+    const response = await driver.request("thread/start", { cwd: temporary, model: "process-fixture", modelProvider: launch.modelProvider, config:codexOverrides(connectionStatus()), ...permission });
     return { driver, thread:response.thread, launch, response };
   }
+  saveCodexOptions({web_search:"disabled",model_reasoning_summary:"concise",model_verbosity:"low",model_auto_compact_token_limit:48000,developer_instructions:'SETTINGS_INSTRUCTION_MARKER\n"quoted" \\ path',compact_prompt:"Keep facts and pending work."});
   const first = await start("responses");
+  const effective=await first.driver.request("config/read",{cwd:temporary,includeLayers:false});
+  assert.equal(effective.config.model_verbosity,"low");assert.equal(effective.config.model_auto_compact_token_limit,48000);
+  assert.equal(effective.config.developer_instructions,'SETTINGS_INSTRUCTION_MARKER\n"quoted" \\ path');
   assert.equal((await first.driver.turn(first.thread.id)).status, "completed");
+  assert.equal(requests[0].reasoning.summary,"concise");assert.equal(requests[0].text?.verbosity,undefined,"unknown model does not advertise verbosity support; engine omits it");
+  assert(JSON.stringify(requests[0]).includes("SETTINGS_INSTRUCTION_MARKER"),"custom instruction reaches provider");
+  results.push("persisted engine options reach real config/read and provider request, including escaped multiline instructions; unsupported model verbosity is omitted");
   const usage = first.driver.events.find(event => event.method === "thread/tokenUsage/updated");
   assert(usage?.params.tokenUsage.last.totalTokens > 0, "实际引擎报告最近请求 token 数");
   assert(usage.params.tokenUsage.modelContextWindow > 0 && usage.params.tokenUsage.modelContextWindow <= 64000, "使用所选模型上限而非引擎默认值");
@@ -145,10 +154,18 @@ try {
   assert(first.driver.events.some(event => event.method === "item/completed" && event.params.item.type === "contextCompaction"), "实际压缩完成事件");
   results.push("real context usage and manual context compaction lifecycle");
   await first.driver.stop();
+  saveCodexOptions(OPTION_DEFAULTS);
   const second = new Driver(first.launch); await second.init();
   await assert.rejects(second.request("turn/start", { threadId: first.thread.id, input: [{ type: "text", text: "before resume" }] }), /thread.*not found/i);
-  await second.request("thread/resume", { threadId: first.thread.id, modelProvider: first.launch.modelProvider, approvalPolicy: "never", sandbox: "danger-full-access" });
-  assert.equal((await second.turn(first.thread.id)).status, "completed");
+  await second.request("thread/resume", { threadId: first.thread.id, modelProvider: first.launch.modelProvider, config:codexOverrides(connectionStatus()), approvalPolicy: "never", sandbox: "danger-full-access" });
+  const cleared=await second.request("config/read",{cwd:temporary,includeLayers:false});assert.equal(cleared.config.developer_instructions,null);
+  requests=[];assert.equal((await second.turn(first.thread.id)).status, "completed");
+  assert.notEqual(requests[0].reasoning?.summary,"concise","cleared reasoning summary does not remain active on resume");
+  assert(JSON.stringify(requests[0]).includes("SETTINGS_INSTRUCTION_MARKER"),"native resumed history retains previous developer instructions");
+  const fresh=await second.request("thread/start",{cwd:temporary,model:"process-fixture",modelProvider:first.launch.modelProvider,config:codexOverrides(connectionStatus()),approvalPolicy:"never",sandbox:"danger-full-access"});
+  requests=[];assert.equal((await second.turn(fresh.thread.id)).status,"completed");
+  assert(!JSON.stringify(requests[0]).includes("SETTINGS_INSTRUCTION_MARKER"),"cleared custom instructions are absent from a new chat");
+  results.push("clearing options restores inherited config; new chats use cleared instructions, resumed history is preserved");
   await second.stop(); results.push("persisted thread resumes in a new engine process");
 
   for(const [name,sandbox,approvalPolicy,approvalsReviewer,policyType] of [["read","read-only","never","user","readOnly"],["ask","danger-full-access","untrusted","user","dangerFullAccess"],["auto","danger-full-access","untrusted","auto_review","dangerFullAccess"],["full","danger-full-access","never","user","dangerFullAccess"]]){

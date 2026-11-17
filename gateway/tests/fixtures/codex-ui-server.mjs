@@ -3,7 +3,7 @@ import { startManagedUiServer } from "./managed-ui-server.mjs";
 
 export async function startCodexUiServer() {
   const clients = new Set(), now = Math.floor(Date.now() / 1000);
-  const state = { requests: [], pending: [], running: [], active: null, seq: 0, turnDelay: 0,
+  const state = { engineOptions:{web_search:"",model_reasoning_summary:"",model_verbosity:"",model_auto_compact_token_limit:0,developer_instructions:"",compact_prompt:""},engineOptionsFailure:false,engineOptionsDelay:0, requests: [], pending: [], running: [], active: null, seq: 0, turnDelay: 0,
     installed: true, server: true, account: { email: "developer@example.test", planType: "Plus" }, install: { state: "done" },
     installFailures: 0, loginDelay: 0, cancelFailure: false, authorizeOnRefresh: false,
     model: "", effort: "", settingsFailure: false, skillEnabled: true, extensionFailure: false, connectionFailure: false,
@@ -33,7 +33,7 @@ export async function startCodexUiServer() {
   const snapshot = () => ({ installed: state.installed, server: state.server, version: "fixture", account: state.account,
     cwd: projects[0].path, activeThread: threads.find((th) => th.id === state.active) || null, approvals: state.pending,
     model: state.model, effort: state.effort, connection: { ...state.connection }, paths: { codexHome: "/synthetic/home/.codex" },
-    contexts: state.contexts, compacting: state.compacting, metrics: state.metrics, contextWindow: state.contextWindow,
+    contexts: state.contexts, compacting: state.compacting, metrics: state.metrics, contextWindow: state.contextWindow, engineOptions:{...state.engineOptions},
     permissions: { mode: state.permissionMode, sandbox: state.permissionMode === "read" ? "read-only" : "danger-full-access", approvalPolicy: ["ask","auto"].includes(state.permissionMode)?"untrusted":"never", approvalsReviewer: state.permissionMode==="auto"?"auto_review":"user" },
     providers:[{id:"chatgpt",name:"ChatGPT",models:modelRows("chatgpt")},...state.profiles.map(p=>({...p,models:modelRows(p.id)}))],
     runningTurns: state.running,models:modelRows(selectedProvider()), install: state.install });
@@ -130,6 +130,13 @@ export async function startCodexUiServer() {
       }
       return reply(res,{model:state.model,effort:state.effort,contextWindow:state.contextWindow,status:snapshot()});
     }
+    if(p==="/api/codex/engine-options"){
+      if(state.engineOptionsDelay)await new Promise(r=>setTimeout(r,state.engineOptionsDelay));
+      if(state.engineOptionsFailure)return reply(res,{error:"Synthetic engine settings save failure"},500);
+      if(state.running.length)return reply(res,{error:"Finish running tasks before changing Codex settings"},409);
+      Object.assign(state.engineOptions,body);return reply(res,snapshot());
+    }
+    if(p==="/api/codex/engine-options/inspect")return reply(res,{cwd:body.cwd,version:"fixture",options:{...state.engineOptions,web_search:state.connection.wireApi==="chat"?"disabled":state.engineOptions.web_search||"cached"}});
     if (p === "/api/codex/permissions") {
       if(state.permissionFailure)return reply(res,{error:"Synthetic permission save failure"},503);
       state.permissionMode=body.mode;return reply(res,snapshot());

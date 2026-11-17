@@ -41,7 +41,7 @@ html.cx-shell[data-theme=light][data-skin],html[data-theme=light] .cx{--bg:#fff;
 @media (prefers-reduced-motion:reduce){.cx *{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
 /* Codex 偏好与扩展：同一项目上下文，桌面居中、手机全屏。 */
-.cx-preferences{width:min(740px,calc(100vw - 40px));max-height:min(850px,calc(100dvh - 48px));padding:24px;overscroll-behavior:contain}
+.cx-preferences{width:min(940px,calc(100vw - 48px));height:min(790px,calc(100dvh - 48px));max-height:calc(100dvh - 48px);padding:0;overscroll-behavior:contain;overflow:hidden}
 .cx-pref-tabs{display:flex;gap:6px;border-bottom:1px solid var(--line);padding-bottom:12px;margin-bottom:22px;position:sticky;top:-24px;padding-top:12px;background:var(--bg);z-index:1}
 .cx-pref-tabs button,.cx-preferences section button,.cx-pref-row>button{border:1px solid var(--line);background:transparent;border-radius:7px;padding:7px 12px;font-size:12px}
 .cx-pref-tabs button[aria-current=page]{background:var(--bg3);border-color:transparent}
@@ -60,7 +60,7 @@ html.cx-shell[data-theme=light][data-skin],html[data-theme=light] .cx{--bg:#fff;
 .cx-api-result{border:1px solid var(--line);border-radius:8px;padding:12px;margin:10px 0 16px;font-size:12px;overflow-wrap:anywhere}.cx-api-result[data-state=error]{border-color:var(--err)}.cx-api-result[data-state=ok]{border-color:var(--fg3)}.cx-api-result p:last-child{margin-bottom:0}.cx-api-result code{font:11px/1.6 var(--mono)}.cx-api-result summary,.cx-api-notes summary{cursor:pointer;font-size:11px;color:var(--fg2)}.cx-api-notes{margin:18px 0}.cx-api-section input,.cx-api-section select{font-size:14px}.cx-api-section>form>fieldset>label{display:block}
 .cx-preferences .cx-pref-check{display:flex;align-items:center;justify-content:space-between;gap:12px}.cx-preferences input[type=checkbox]{width:17px;height:17px;display:inline-block;margin:0;accent-color:var(--fg)}
 .cx-pref-path,.cx-extension code{font:11px/1.7 var(--mono)!important;overflow-wrap:anywhere}.cx-extension{display:flex;align-items:center;gap:14px;background:var(--bg2);border:1px solid var(--line);border-radius:9px;padding:12px;margin:9px 0}.cx-extension>div{flex:1;min-width:0}.cx-extension b{font-size:12px;font-weight:500}.cx-extension p{margin:4px 0 8px}.cx-extension small,.cx-extension code{color:var(--fg3)}.cx-extension button{flex:none}
-@media(max-width:600px){.cx-preferences{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0;padding:calc(var(--safe-t) + 18px) 18px calc(var(--safe-b) + 24px)}.cx-pref-tabs{top:calc(-1 * (var(--safe-t) + 18px));padding-top:calc(var(--safe-t) + 12px)}.cx-pref-row{gap:12px}.cx-extension{padding:10px;gap:8px}.cx-preferences .cx-dialog-head{margin-bottom:16px}}
+@media(max-width:600px){.cx-pref-row{gap:12px}.cx-extension{padding:10px;gap:8px}}
 .cx-device-settings .srow{gap:12px;padding:14px 0}.cx-device-settings .sblock{border-bottom:1px solid var(--line);padding-bottom:10px}.cx-device-settings .sblock:last-child{border:0}.cx-device-settings .sl{min-width:0}.cx-device-settings .sl b{font-size:12px;font-weight:500}.cx-device-settings .sc{min-width:0;flex-wrap:wrap}.cx-device-settings .sc select{min-width:0;max-width:100%;width:auto;margin:0}.cx-device-settings .sc .btn{white-space:normal;overflow-wrap:anywhere}.cx-device-settings textarea{width:100%;padding:10px;background:var(--bg2);border:1px solid var(--line);border-radius:7px;color:var(--fg)}.cx-device-settings .srow p{margin:5px 0}.cx-device-group:not(:has(> :is(.srow,.sblock):not(.hidden))){display:none}
 .cx-device-settings input[type=checkbox].sw{width:42px;height:24px;flex:none}.cx-device-settings .row-actions{min-width:0;max-width:100%}.cx-device-settings .row-actions>div{min-width:0;overflow-wrap:anywhere}.cx-device-settings .sinline{flex-wrap:wrap}.cx-device-settings .sinline input{min-width:0;max-width:100%}
 @media(max-width:600px){.cx-device-settings .srow:has(select),.cx-device-settings .srow:has(.btn){flex-direction:column;align-items:stretch}.cx-device-settings .sc{max-width:none;justify-content:flex-start}.cx-device-settings .sc select{width:100%}}
@@ -192,3 +192,36 @@ html.cx-shell[data-theme][data-skin]{--bar-bg:var(--bg);--bar-bg2:var(--bg2);--a
   .cx-composer-status{margin:3px 7px -5px;gap:7px}.cx-composer-meta{font-size:10px}
 }
 @media(max-width:360px){.cx-compose-model>span{display:none}.cx-composer{padding-inline:9px}.cx-compose-permission{font-size:11px}.cx-compose-model,.cx-compose-permission{gap:3px}}
+/* Paged settings: directory on phones, persistent navigation on larger screens. */
+.cx-preferences[open]{display:flex;flex-direction:column}
+.cx-preferences .cx-settings-head{flex:none;gap:12px;margin:0;padding:18px 24px;border-bottom:1px solid var(--line)}
+.cx-settings-head>div{flex:1;min-width:0}.cx-settings-head small{font-size:10px;color:var(--fg3)}.cx-settings-head h2{margin:3px 0 0;font-size:17px;outline:none}
+#cx-settings-back svg{transform:rotate(180deg)}#cx-settings-back[hidden]{display:none}
+.cx-settings-layout{flex:1;min-height:0;display:grid;grid-template-columns:230px minmax(0,1fr)}
+.cx-settings-nav{padding:10px 12px 24px;overflow:auto;overscroll-behavior:contain;background:var(--bg2);border-inline-end:1px solid var(--line)}
+.cx-settings-nav h3{font-size:10px;color:var(--fg3);margin:20px 12px 8px;font-weight:500;letter-spacing:.06em}
+.cx-settings-nav button{display:flex;align-items:center;gap:10px;width:100%;min-height:44px;border:0;background:transparent;text-align:start;border-radius:9px;padding:11px 12px;color:var(--fg2)}
+.cx-settings-nav button[aria-current=page]{background:var(--bg);color:var(--fg)}.cx-settings-nav button:hover{background:var(--bg3)}
+.cx-settings-nav button>svg{width:17px;height:17px;flex:none}.cx-settings-nav button>svg:last-child{display:none}.cx-settings-nav button>span{min-width:0}
+.cx-settings-nav b{font-size:12px;font-weight:500}.cx-settings-nav small{display:none}
+.cx-settings-main{min-width:0;overflow:auto;padding:26px 30px 40px;overscroll-behavior:contain;scroll-padding:20px}
+.cx-settings-main label{display:block;font-size:12px}.cx-settings-main textarea{display:block;box-sizing:border-box;resize:vertical;width:100%;max-width:100%;margin-top:8px;padding:12px;min-height:110px;border:1px solid var(--line);border-radius:9px;background:var(--bg2);color:var(--fg);font:13px/1.7 var(--mono)}
+.cx-settings-main button:not(.cx-permission-option){font-size:12px}.cx-settings-main button:focus-visible,.cx-settings-nav button:focus-visible{outline:2px solid var(--fg2);outline-offset:2px}
+.cx-settings-save{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:22px 0 30px}.cx-settings-save button{padding:10px 14px;border:1px solid var(--line);border-radius:8px;background:transparent}
+.cx-settings-main .cx-settings-note{padding:10px 12px;background:var(--bg2);border-radius:8px}
+.cx-effective-config{padding-top:24px!important;border-top:1px solid var(--line)}.cx-effective-config dl{font:11px/1.8 var(--mono);overflow-wrap:anywhere}.cx-effective-config dt{color:var(--fg3);margin-top:12px}.cx-effective-config dd{margin:0;white-space:pre-wrap}
+.cx-settings-intro{padding:40px 0;max-width:400px;margin:auto}.cx-settings-intro .cx-settings-brand{display:flex;align-items:center;justify-content:center;width:44px;height:44px;border:1px solid var(--line);border-radius:14px;margin-bottom:24px}.cx-settings-brand svg{width:24px;height:24px}.cx-settings-intro h3{font-size:19px}.cx-settings-intro>div{margin-top:30px;padding-top:14px;border-top:1px solid var(--line)}
+.cx-settings-page-links{display:grid;gap:10px}.cx-settings-page-links button,.cx-settings-page-link{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px!important;text-align:start;border:1px solid var(--line);background:transparent;border-radius:10px;width:100%;margin-top:12px}
+.cx-settings-page-links b,.cx-settings-page-link b{font-size:13px;font-weight:500}.cx-settings-page-links small,.cx-settings-page-link small{display:block;font-size:11px;color:var(--fg3);margin-top:6px;overflow-wrap:anywhere}.cx-settings-page-links svg,.cx-settings-page-link svg{width:16px;height:16px;flex:none}
+.cx-device-group[hidden],#cx-provider-basic[hidden],#cx-provider-catalog[hidden],#cx-provider-editor[hidden],#cx-provider-actions[hidden]{display:none!important}
+@media(max-width:700px){
+ .cx-preferences{width:100vw;max-width:100vw;height:100dvh;max-height:100dvh;margin:0;border:0;border-radius:0}
+ .cx-preferences .cx-settings-head{padding:calc(var(--safe-t) + 12px) 16px 14px;min-height:76px;box-sizing:border-box}
+ .cx-settings-layout{display:flex;flex-direction:column}.cx-settings-nav{border:0;background:var(--bg);padding:0 16px calc(var(--safe-b) + 24px);flex:1}
+ .cx-settings-nav h3{margin:24px 12px 6px}.cx-settings-nav button{min-height:70px;padding:14px 12px;gap:14px;border-bottom:1px solid var(--line);border-radius:0}.cx-settings-nav button>span{flex:1}
+ .cx-settings-nav button>svg{width:20px;height:20px}.cx-settings-nav button>svg:last-child{display:block;width:14px;height:14px;color:var(--fg3)}.cx-settings-nav b{font-size:14px}.cx-settings-nav small{display:block;font-size:11px;color:var(--fg3);margin-top:6px;line-height:1.5}
+ .cx-preferences[data-root=true] .cx-settings-main,.cx-preferences[data-root=false] .cx-settings-nav{display:none}
+ .cx-settings-main{flex:1;padding:18px 20px calc(var(--safe-b) + 32px)}.cx-settings-main input,.cx-settings-main select,.cx-settings-main textarea{font-size:16px!important}
+ .cx-preferences .cx-connection-account{align-items:flex-start;flex-direction:column}.cx-preferences .cx-connection-account>div:last-child{display:flex;gap:8px;flex-wrap:wrap}
+ .cx-settings-main .cx-permission-option{padding:14px 12px}.cx-settings-save{position:relative}.cx-provider-save{flex-wrap:wrap}
+}
