@@ -31,3 +31,9 @@
 - `node scripts/test-codex-engine.mjs`：66 项通过，包含发现失败的 models.dev 回退、模板映射/重启/重置、接口声明优先、多模型配置、仅保存保留引擎与聊天、失败完整回滚。
 - `node scripts/test-codex-process.mjs`：固定 Codex 0.166.0 进程连接隔离的本地合成接口，验证真实请求、用量、压缩、强度与审批；不使用真实模型。
 - `node scripts/test-codex-ui.mjs --screenshots`：真实浏览器覆盖 320/390/820/1440px、中英文，包含候选显式导入/移除、模板保持模型 ID、默认模型、仅保存、重新打开与删除。
+
+26.1.3 标准版已安装至小米 M2012K11AC / Android 13。读回手机已安装 APK 的 SHA-256 为 `da92dec73a362d1a01ff5e83095a473822fdf76144dab7276eaefa52af5401c6`，与本地最终包一致；资源标识 `fc157930e425`。标准版和 targetSdk 36 版均完成签名、版本和逐文件资源校验。targetSdk 36 版未安装到该手机。
+
+本轮真实引擎测试运行在 Windows，使用隔离的合成服务；浏览器回归使用协议替身。ADB 启动应用的命令被自动审批以 `blocked by policy` 拒绝，已请求用户手动打开应用。最终版尚未完成手机 UI 与真实 CodeFlow 请求验证，不能将安装成功当作真机功能验收。
+
+完整 [CI](https://github.com/leemwood/coxdragon/actions/runs/43989011452)已全部通过，包括 Linux 全量网关、固定引擎、浏览器、Java 和 APK 构建。首轮全量测试发现旧 HEAD 测试夹具启动时 `EADDRINUSE`；现仅对明确端口冲突换端口重试，其余启动错误继续报错。
