@@ -21,13 +21,19 @@ const freePort = () => new Promise((res, rej) => {
 });
 
 test("HEAD 静态资源：与 GET 同头、不带正文；回收站清理登记为每天一次且已 unref", async () => {
-  const port = await freePort();
   const env = { ...process.env, CCAPP_HOME: home, HOME: home, CCAPP_LOG: path.join(home, "gateway.log"), CCAPP_B3_PROBE: probe };
   delete env.NODE_TEST_CONTEXT; delete env.CCAPP_TEST;
-  child = spawn(process.execPath, ["--import", PROBE, SERVER, String(port)], { env, stdio: ["ignore", "pipe", "pipe"] });
-  let out = "";
-  child.stdout.on("data", (d) => { out += d; }); child.stderr.on("data", (d) => { out += d; });
-  for (let i = 0; i < 300 && !/网关 v3 已启动/.test(out) && child.exitCode == null; i++) await new Promise((r) => setTimeout(r, 100));
+  let port, out;
+  // The OS may reuse the released port before the child binds it. Retry only
+  // that explicit startup collision; all other failures still fail immediately.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    port = await freePort(); out = "";
+    child = spawn(process.execPath, ["--import", PROBE, SERVER, String(port)], { env, stdio: ["ignore", "pipe", "pipe"] });
+    child.stdout.on("data", (d) => { out += d; }); child.stderr.on("data", (d) => { out += d; });
+    for (let i = 0; i < 300 && !/网关 v3 已启动/.test(out) && child.exitCode == null; i++) await new Promise((r) => setTimeout(r, 100));
+    if (/网关 v3 已启动/.test(out)) break;
+    if (!/监听失败：EADDRINUSE/.test(out) || child.exitCode == null || attempt === 2) break;
+  }
   assert.match(out, /网关 v3 已启动/, "网关没起来：\n" + out);
 
   const base = `http://127.0.0.1:${port}`;
