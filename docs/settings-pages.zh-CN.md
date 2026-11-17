@@ -46,6 +46,8 @@
 - “检查生效配置”从手机实际 Codex 0.166.0 返回：托管搜索 disabled，思考摘要、回复详细程度、自动压缩阈值、自定义指令与压缩提示词均为默认。
 - 在原聊天发送短确认请求，真实 CodeFlow 返回 `SETTINGS_26_1_5_OK`，运行指示消失并恢复发送按钮。没有工具调用。界面记录会话累计输入约 80.1k、输出 620、缓存命中率 88.2%；显示速度只作估计，不作为性能测试结果。
 
-真机证据保存在本地交付目录 `dist/settings-phone-26.1.5/`，验收清单为 `dist/settings-acceptance-26.1.5.md`。当前界面与真实聊天验收已通过；源码推送与当前实现的 Linux CI 尚未完成。
+真机证据保存在本地交付目录 `dist/settings-phone-26.1.5/`，验收清单为 `dist/settings-acceptance-26.1.5.md`。界面与真实聊天验收已通过。
 
-以上合成进程测试、浏览器回归与真机真实服务商测试分别记录，不能互相替代。官方页面网络核验、GitHub 推送及 Linux CI 当前仍受网络连通性限制。
+随后将提交 `5362e6b` 推送到用户独立仓库 `leemwood/coxdragon` 的 `codex/context-model-controls` 分支，远端 API 确认提交一致且 `fork=false`。此实现的 Linux CI [44068140300](https://github.com/leemwood/coxdragon/actions/runs/44068140300) 全部通过：网关测试、真实 Codex 进程、浏览器工作流及 Java 测试均成功，targetSdk 28/36 两种 APK 均构建并上传。分支手动运行使用 CI 测试签名；手机验收使用本地原发布签名安装包。
+
+以上合成进程测试、浏览器回归与真机真实服务商测试分别记录，不能互相替代。官方文档网页在核对时返回 403，字段兼容依据仍为固定版本 schema 与真实引擎验证。
