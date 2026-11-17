@@ -34,6 +34,15 @@
 
 26.1.3 标准版已安装至小米 M2012K11AC / Android 13。读回手机已安装 APK 的 SHA-256 为 `da92dec73a362d1a01ff5e83095a473822fdf76144dab7276eaefa52af5401c6`，与本地最终包一致；资源标识 `fc157930e425`。标准版和 targetSdk 36 版均完成签名、版本和逐文件资源校验。targetSdk 36 版未安装到该手机。
 
-本轮真实引擎测试运行在 Windows，使用隔离的合成服务；浏览器回归使用协议替身。ADB 启动应用的命令被自动审批以 `blocked by policy` 拒绝，已请求用户手动打开应用。最终版尚未完成手机 UI 与真实 CodeFlow 请求验证，不能将安装成功当作真机功能验收。
+真实引擎协议回归运行在 Windows，使用隔离的合成服务；浏览器回归使用协议替身。2026-11-17 用户手动打开应用后，通过无线 ADB 完成小米真机 UI 与真实 CodeFlow 请求验证：
+
+- 模型设置按钮为固定文字，统计行位于输入框下方。模型列表从 CodeFlow 成功获取；保存的能力模板提供上下文、输入能力及 `low / high / max` 强度选项。
+- 提供商页面连接测试成功：Chat Completions，2227 ms。测试使用应用已保存的密钥，未显示或导出密钥。
+- models.dev 搜索返回 47 项；在未保存草稿中选择 deepinfra 模板后，上下文变为约 1.05M、强度变为 `none / low / high / xhigh / max`，实际请求 ID 保持 `deepseek-ai/DeepSeek-V4.1-Flash`。退出时未保存该模板修改，原配置保留。
+- 实际聊天返回 `WIRELESS_26_1_3_OK`，累计 token、缓存命中率与速度随请求更新，无工具调用。
+- 手动上下文 64000 保存后统计行显示 `64k`，重新打开设置仍保留；随后恢复自动，保持原模型和 `max` 强度，再次发送成功返回 `CONTEXT_AUTO_RESTORED_OK`，确认引擎重建后能继续会话。
+- 最后统计显示累计输入约 53k、输出 583、缓存命中率 82.7%。当前请求上下文约 9k，`258400 · Codex` 仍是引擎预算，不是服务商认证上限。速度是 UI 的估计值，不作为服务商性能基准。
+
+真机测试截图位于本地 `.cache/phone-test/wireless-capability-template.png` 和 `.cache/phone-test/wireless-context-restored.png`。本轮没有覆盖媒体上传、实际图片理解或全部模型强度的上游支持。
 
 完整 [CI](https://github.com/leemwood/coxdragon/actions/runs/43989011452)已全部通过，包括 Linux 全量网关、固定引擎、浏览器、Java 和 APK 构建。首轮全量测试发现旧 HEAD 测试夹具启动时 `EADDRINUSE`；现仅对明确端口冲突换端口重试，其余启动错误继续报错。
