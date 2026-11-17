@@ -37,7 +37,7 @@ test('Codex 选项：忙时拒绝修改，空闲保存重启且保留聊天引�
 test('Codex 选项：新建、恢复和思考摘要传给引擎，检查配置仅返回白名单',async()=>{
  reset();saveCodexOptions({web_search:'cached',developer_instructions:'test instruction',model_reasoning_summary:'concise',model_auto_compact_token_limit:48000});
  const calls=[];cx.S.rpc={stderr:'',request:async(method,params)=>{calls.push({method,params});if(method==='config/read')return {config:{web_search:'cached',api_key:'must-not-expose'}};return method==='turn/start'?{turn:{id:'t',status:'completed'}}:{thread:{id:'options-thread',cwd:CFG.workspace,turns:[]}};}};
- await cx.startThread(CFG.workspace);assert.equal(calls.at(-1).params.config.developer_instructions,'test instruction');
+ await cx.startThread(CFG.workspace);assert.equal(calls.findLast(c=>c.method==='thread/start').params.config.developer_instructions,'test instruction');
  cx.S.loadedThreads.clear();await cx.resumeThread('options-thread');assert.equal(calls.findLast(c=>c.method==='thread/resume').params.config.model_auto_compact_token_limit,48000);
  await cx.startTurn('test','options-thread');assert.equal(calls.at(-1).params.summary,'concise');
  const result=await cx.inspectEngineOptions(CFG.workspace);assert.equal(result.options.web_search,'cached');assert(!JSON.stringify(result).includes('must-not-expose'));assert.equal(calls.at(-1).params.includeLayers,false);

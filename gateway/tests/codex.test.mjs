@@ -6,7 +6,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { CFG, PREFIX } from "../gw/config.mjs";
 import { activityBusy, runFlag } from "../gw/activity.mjs";
-import { _codexForTest as cx, codexActivity, onCodexActivity } from "../gw/codex.mjs";
+import { _codexForTest as cx, codexActivity, onCodexActivity, routeCodex } from "../gw/codex.mjs";
 import { connectionStatus, connectionLaunch, connectionProfiles,deleteConnectionProfile,connectionModels } from "../gw/codex-connection.mjs";
 import { rememberApiModels,modelSettings } from "../gw/codex-models.mjs";
 
@@ -94,7 +94,7 @@ test("Codex：四种权限传给引擎，运行中禁止改变权限", async () 
   for(const [mode,sandbox,approval,reviewer] of [["read","read-only","never","user"],["ask","danger-full-access","untrusted","user"],["auto","danger-full-access","untrusted","auto_review"],["full","danger-full-access","never","user"]]){
     cx.updatePermissions(mode);
     assert.equal(cx.status().permissions.mode,mode);
-    await cx.startThread(CFG.workspace); const created=calls.at(-1).params;
+    await cx.startThread(CFG.workspace); const created=calls.findLast(c=>c.method==="thread/start").params;
     assert.equal(created.sandbox,sandbox);assert.equal(created.approvalPolicy,approval);assert.equal(created.approvalsReviewer,reviewer);
     await cx.startTurn("permission check","permission-thread"); const turn=calls.at(-1).params;
     assert.equal(turn.approvalPolicy,approval);assert.equal(turn.approvalsReviewer,reviewer);
@@ -378,6 +378,41 @@ test("Codex：新代引擎先恢复目标线程，后台发送不改变当前视
   cx.handleNotify({ method: "turn/completed", params: { threadId: "b", turn: { id: "restarted-turn", status: "completed" } } });
   await cx.startTurn("next", "b");
   assert.equal(calls.filter((c) => c.method === "thread/resume").length, 1);
+});
+
+test("Codex：会话记录缺失返回明确恢复信息，保留原任务且不重发消息", async () => {
+  for (const endpoint of ["open-thread", "turn"]) {
+    reset(); cx.S.loadedThreads.delete("b"); const calls=[];
+    cx.S.rpc.request=async method=>{calls.push(method);throw new Error("no rollout found for thread id b");};
+    const req=Readable.from([Buffer.from(JSON.stringify({threadId:"b",text:"private-unsent-draft"}))]);req.method="POST";
+    const res={writeHead(code){this.code=code;},end(body){this.body=JSON.parse(body);}};
+    const url=new URL("http://localhost/api/codex/"+endpoint);
+    await routeCodex(req,res,url,url.pathname);
+    assert.equal(res.code,404);assert.equal(res.body.code,"thread_history_missing");assert.equal(res.body.threadId,"b");
+    assert.deepEqual(calls,["thread/resume"]);assert.equal(cx.S.activeThread.id,"a");assert(!cx.S.loadedThreads.has("b"));
+    assert.equal(codexActivity().busy,false);assert.equal(cx.S.startingTurns.size,0);
+    const diag=fs.readFileSync(path.join(CFG.home,".cache","coxdragon","codex-diagnostics.json"),"utf8");
+    assert(!diag.includes("private-unsent-draft"));assert.equal(JSON.parse(diag).events.at(-1).event,"thread/resume/failed");
+  }
+  reset();cx.S.loadedThreads.delete("b");
+  cx.S.rpc.request=async()=>{throw new Error("temporary RPC transport failure");};
+  await assert.rejects(cx.resumeThread("b"),e=>!e.code&&e.message==="temporary RPC transport failure","other errors must not be treated as missing history");
+});
+
+test("Codex：新空任务写入名称确认持久化后才切换视图，失败保留原任务", async () => {
+  reset();const calls=[];let persist;
+  cx.S.rpc.request=async(method,params)=>{
+    calls.push({method,params});
+    if(method==="thread/start")return{thread:{id:"durable-empty",cwd:CFG.workspace,turns:[]}};
+    return new Promise(resolve=>{persist=resolve;});
+  };
+  const pending=cx.startThread(CFG.workspace);await new Promise(r=>setImmediate(r));
+  assert.equal(cx.S.activeThread.id,"a");assert(codexActivity().busy);
+  assert.equal(calls[0].params.ephemeral,false);assert.equal(calls[1].method,"thread/name/set");
+  persist({});await pending;assert.equal(cx.S.activeThread.id,"durable-empty");assert(!codexActivity().busy);
+  assert.equal(cx.status().activeThread.name,"","empty placeholder lets the first message preview remain visible");
+  reset();cx.S.rpc.request=async method=>{if(method==="thread/start")return{thread:{id:"not-saved",cwd:CFG.workspace,turns:[]}};throw new Error("synthetic persistence failure");};
+  await assert.rejects(cx.startThread(CFG.workspace),/persistence failure/);assert.equal(cx.S.activeThread.id,"a");assert(!codexActivity().busy);
 });
 
 test("Codex：创建和恢复在途时阻止切连接，停止后的旧回执不复活线程", async () => {

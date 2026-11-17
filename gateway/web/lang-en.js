@@ -3618,4 +3618,10 @@ window.I18N_DICT.en = {
   "作为开发者指令用于新聊天。已有聊天保留历史指令，请新建聊天应用更改。": "Used as developer instructions for new chats. Existing chats retain their instruction history; start a new chat to apply changes.",
   "提供商 / 模型目录": "Provider / models",
   "正在读取生效配置…": "Reading effective configuration…",
+  "这条任务的本地记录无法恢复，请重试恢复或新建任务。": "The local history for this task could not be restored. Retry restoring it or start a new task.",
+  "任务记录暂时不可用": "Task history is unavailable",
+  "输入内容和引用已保留。新建任务不会带入旧聊天历史，请确认草稿后发送。": "Your draft and references are preserved. A new task will not include the previous chat history. Review the draft before sending.",
+  "重试恢复": "Retry restoring",
+  "新建任务并保留草稿": "New task with draft",
+  "草稿已带到新任务，请确认后发送。": "Draft moved to the new task. Review it before sending.",
 };

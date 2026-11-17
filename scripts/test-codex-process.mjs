@@ -166,7 +166,20 @@ try {
   requests=[];assert.equal((await second.turn(fresh.thread.id)).status,"completed");
   assert(!JSON.stringify(requests[0]).includes("SETTINGS_INSTRUCTION_MARKER"),"cleared custom instructions are absent from a new chat");
   results.push("clearing options restores inherited config; new chats use cleared instructions, resumed history is preserved");
+  const empty=await second.request("thread/start",{cwd:temporary,model:"process-fixture",modelProvider:first.launch.modelProvider,ephemeral:false,approvalPolicy:"never",sandbox:"read-only"});
+  await second.request("thread/name/set",{threadId:empty.thread.id,name:"新任务"});
+  assert(fs.existsSync(empty.thread.path),"metadata write makes the empty rollout durable before returning it to the client");
   await second.stop(); results.push("persisted thread resumes in a new engine process");
+  const third=new Driver(first.launch);await third.init();
+  await third.request("thread/resume",{threadId:empty.thread.id});await third.stop();
+  const missingPath=path.resolve(empty.thread.path);
+  assert(missingPath.startsWith(path.resolve(temporary)+path.sep),"only the isolated fixture history may be moved");
+  fs.renameSync(missingPath,missingPath+".probe-backup");
+  const missing=new Driver(first.launch);await missing.init();const callsBeforeMissing=requests.length;
+  await assert.rejects(missing.request("thread/resume",{threadId:empty.thread.id}),new RegExp("no rollout found for thread id "+empty.thread.id));
+  assert.equal(requests.length,callsBeforeMissing,"missing history cannot issue a model request");await missing.stop();
+  fs.renameSync(missingPath+".probe-backup",missingPath);
+  results.push("empty threads survive engine restart; a missing rollout reproduces the vivo error without a provider request");
 
   for(const [name,sandbox,approvalPolicy,approvalsReviewer,policyType] of [["read","read-only","never","user","readOnly"],["ask","danger-full-access","untrusted","user","dangerFullAccess"],["auto","danger-full-access","untrusted","auto_review","dangerFullAccess"],["full","danger-full-access","never","user","dangerFullAccess"]]){
     mode="responses";requests=[];

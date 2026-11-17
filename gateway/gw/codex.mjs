@@ -51,6 +51,7 @@ const BIN = path.join(ROOT, CODEX.binName);
 const CODEX_HOME = process.env.CCAPP_CODEX_HOME || path.join(CFG.home, ".codex");
 const CACHE = path.join(CFG.home, ".cache", "coxdragon");
 const LOG_LIMIT = 24 * 1024;
+const EMPTY_THREAD_NAME = "新任务";
 const PREF_FILE = path.join(CFG.home, "coxdragon-codex.json");
 const prefs = loadState(PREF_FILE, { max: 4096, shape: (j) => j && typeof j === "object" && !Array.isArray(j) ? j : undefined }).data;
 const CONTEXT_FILE = path.join(CFG.home, "coxdragon-codex-context.json");
@@ -448,7 +449,7 @@ function activityChanged(done) {
 }
 function rememberTitle(thread) {
   if (!thread?.id) return;
-  S.titles.set(thread.id, String(thread.name || thread.preview || "Codex").slice(0, 200));
+  S.titles.set(thread.id, String((thread.name === EMPTY_THREAD_NAME ? "" : thread.name) || thread.preview || "Codex").slice(0, 200));
   if (S.titles.size > 200) S.titles.delete(S.titles.keys().next().value);
 }
 
@@ -478,7 +479,7 @@ function slimModel(m) {
 function slimThread(t) {
   if (!t || typeof t !== "object") return null;
   return {
-    id: t.id, name: t.name || "", preview: t.preview || "", cwd: t.cwd, model: t.model,
+    id: t.id, name: t.name === EMPTY_THREAD_NAME ? "" : t.name || "", preview: t.preview || "", cwd: t.cwd, model: t.model,
     modelProvider: t.modelProvider, createdAt: t.createdAt, updatedAt: t.updatedAt,
     status: t.status, turns: Array.isArray(t.turns) ? t.turns : undefined,
     context: S.contexts.get(t.id) || null,
@@ -789,6 +790,7 @@ async function startThread(cwd) {
   return rpcOperation(async (rpc, check) => {
     const params = {
       cwd: dir,
+      ephemeral: false,
       modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
       config: codexOverrides(connectionStatus()),
       ...threadPermissions(),
@@ -796,6 +798,13 @@ async function startThread(cwd) {
     if (S.model) params.model = S.model;
     const r = await rpc.request("thread/start", params, 60000);
     check();
+    if (r?.thread?.id) {
+      // 0.166.0 returns an ID before an empty rollout is durable. A supported
+      // metadata write persists it without a model call or fabricated history.
+      await rpc.request("thread/name/set", { threadId: r.thread.id, name: EMPTY_THREAD_NAME }, 30000);
+      check();
+      r.thread.name = EMPTY_THREAD_NAME;
+    }
     if (r && r.thread) { S.loadedThreads.add(r.thread.id); S.threadCwds.set(r.thread.id, dir); S.activeThread = r.thread; rememberTitle(r.thread); S.activeTurn = null; S.cwd = dir; broadcast({ type: "thread", thread: slimThread(r.thread) }); }
     return r;
   });
@@ -803,13 +812,21 @@ async function startThread(cwd) {
 async function resumeThread(threadId, { select = true } = {}) {
   if (typeof threadId !== "string" || !threadId.trim()) throw Object.assign(new Error("请选择要恢复的任务"), { statusCode: 400 });
   return rpcOperation(async (rpc, check) => {
-    const r = await rpc.request("thread/resume", {
+    let r;
+    try { r = await rpc.request("thread/resume", {
       threadId: String(threadId),
       config: codexOverrides(connectionStatus()),
       modelProvider: connectionStatus().mode === "custom" ? CUSTOM_PROVIDER : "openai",
       ...(S.model ? { model: S.model } : {}),
       ...threadPermissions(),
-    }, 60000);
+    }, 60000); }
+    catch (error) {
+      check();
+      if (errMsg(error) !== "no rollout found for thread id " + threadId) throw error;
+      const missing = Object.assign(new Error("这条任务的本地记录无法恢复，请重试恢复或新建任务。"), { statusCode: 404, code: "thread_history_missing", threadId });
+      recordTaskEvent("thread/resume/failed", { threadId, error: missing });
+      throw missing;
+    }
     check();
     if (r && r.thread) {
       const restored=await readThreadUsage(r.thread.path,path.join(CODEX_HOME,"sessions"),r.thread.id);check();
@@ -1203,7 +1220,7 @@ export async function routeCodex(req, res, u, p) {
     return json(res, 404, { error: "not found" });
   } catch (e) {
     log("[codex] " + method + " " + p + " → " + errMsg(e));
-    return json(res, e.statusCode || 500, { error: errMsg(e) });
+    return json(res, e.statusCode || 500, { error: errMsg(e), ...(e.code === "thread_history_missing" ? { code: e.code, threadId: e.threadId } : {}) });
   }
 }
 

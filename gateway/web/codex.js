@@ -19,7 +19,7 @@
   const toast = A("toast", (m, e) => console.log(e ? "✗" : "•", m));
   const api = A("api", async (p, o) => {
     const r = await fetch(p, o);
-    if (!r.ok) { let m = "HTTP " + r.status; try { const j = await r.json(); m = j.error || j.message || m; } catch {} throw new Error(m); }
+    if (!r.ok) { let m = "HTTP " + r.status, body = null; try { body = await r.json(); m = body.error || body.message || m; } catch {} throw Object.assign(new Error(m), { status: r.status, body }); }
     return r.json();
   });
   const copyText = A("copyText", async (text) => { try { await navigator.clipboard.writeText(text); return true; } catch { return false; } });
@@ -233,6 +233,7 @@
     if (act === "mobile-tools" || act === "mobile-more") return openMobileMenu(act === "mobile-tools");
     if (act === "mobile-menu-close") return dom.mobileMenu.close();
     if (act === "tool-copy") return copyTool(el);
+    if (act === "recover-thread") return recoverThread(el.dataset.id);
     if (act === "composer-model") return openControls("model");
     if (act === "composer-permission") return openControls("permission");
     if (act === "composer-reference") return openControls("references");
@@ -1077,17 +1078,17 @@
     }
   }
 
-  function addError(msg, turnId = "", generic = false) {
+  function addError(msg, turnId = "", generic = false, missingThread = "") {
     if (!dom || !msg) return;
     let detail; try { const parsed = JSON.parse(msg); detail = parsed.error || parsed; } catch {}
     const message = detail?.message || msg, requestId = detail?.requestId || "";
-    const key = requestId ? "request:" + requestId : turnId + ":" + message;
+    const key = missingThread ? "missing-thread:" + missingThread : requestId ? "request:" + requestId : turnId + ":" + message;
     if (st.errors.has(key)) return;
     if (!generic) for (const [k, error] of st.errors) if (error.generic) { error.el.remove(); st.errors.delete(k); }
     const d = document.createElement("div");
     d.className = "cx-appr cx-error";
     const c = st.status?.connection, codeflowResponses = c?.mode === "custom" && c.wireApi === "responses" && /^https:\/\/codeflow\.sh(?:\/|$)/i.test(c.baseUrl || "") && (detail?.code === "upstream_error" || /upstream_error|Upstream service error/.test(msg));
-    d.innerHTML = `<div class="cx-appr-h">出错了</div><div>${esc(message)}</div>${requestId ? `<p class="tiny">Request ID: ${esc(requestId)}</p>` : ""}${codeflowResponses ? `<p>${esc(t("CodeFlow 的 Responses 接口未完成任务，请改用 Chat Completions。"))}</p><button data-act="switch-chat">${esc(t("改用 Chat Completions"))}</button>` : ""}`;
+    d.innerHTML = `<div class="cx-appr-h">${esc(t(missingThread ? "任务记录暂时不可用" : "出错了"))}</div><div>${esc(t(message))}</div>${requestId ? `<p class="tiny">Request ID: ${esc(requestId)}</p>` : ""}${codeflowResponses ? `<p>${esc(t("CodeFlow 的 Responses 接口未完成任务，请改用 Chat Completions。"))}</p><button data-act="switch-chat">${esc(t("改用 Chat Completions"))}</button>` : ""}${missingThread ? `<p class="tiny">${esc(missingThread)}</p><p>${esc(t("输入内容和引用已保留。新建任务不会带入旧聊天历史，请确认草稿后发送。"))}</p><div class="cx-recovery-actions"><button data-act="open-thread" data-id="${esc(missingThread)}">${esc(t("重试恢复"))}</button><button data-act="recover-thread" data-id="${esc(missingThread)}">${esc(t("新建任务并保留草稿"))}</button></div>` : ""}`;
     st.errors.set(key, { el: d, turnId, generic });
     const empty = dom.msgs.querySelector(".cx-empty"); if (empty) empty.remove();
     dom.msgs.appendChild(d);
@@ -1126,7 +1127,9 @@
       if (st.status) st.status.threads = st.threads;
       paintThreads();
       paintSetup();
-      if (!st.autoResumed && st.threadId && st.threads.some((t) => t.id === st.threadId)) { st.autoResumed = true; openThread(st.threadId); }
+      // A saved selection can be outside the first page or refer to a missing
+      // rollout. Ask the engine instead of silently retaining an unchecked ID.
+      if (!st.autoResumed && st.threadId) { st.autoResumed = true; openThread(st.threadId); }
     } catch { /* 未安装 / 引擎没起来时不用报 */ }
   }
 
@@ -1148,6 +1151,7 @@
     saveDraft(); st.switching = true; st.autoResumed = true; paint();
     try {
       const r = await post("/api/codex/thread", { cwd: dir });
+      saveDraft();
       clearMessages();
       st.compactError = "";
       st.thread = r.thread; st.threadId = r.thread && r.thread.id || "";
@@ -1159,6 +1163,7 @@
       if (!st.onboarded || !dom.setup.hidden) completeSetup();
       dom.input.focus();
       toast(t("新任务已开始"));
+      return r.thread;
     } catch (e) { toast(e.message, true); }
     finally { st.switching = false; paint(); dom.input.focus(); }
   }
@@ -1178,8 +1183,25 @@
       hydrateThread(r.thread);
       restoreDraft(); resetReview(); toggleSidebar(false); loadReview();
       paint(); scrollBottom();
-    } catch (e) { toast(e.message, true); }
+    } catch (e) {
+      if (seq === st.viewSeq && e.body?.code === "thread_history_missing") addError(e.message, "", false, id);
+      toast(e.message, true);
+    }
     finally { if (seq === st.viewSeq) { st.switching = false; paint(); } }
+  }
+
+  async function recoverThread(id) {
+    if (!id || st.busy || st.switching || st.connectionBusy) return;
+    const sourceId = st.threadId || "new";
+    const cwd = st.threads.find(thread => thread.id === id)?.cwd || currentCwd();
+    const thread = await newThread(cwd);
+    if (!thread?.id || thread.id === id) return;
+    // newThread saved any edits made during the request under the original ID.
+    // Keep that draft too: recovery creates a separate chat and never resends.
+    LS.set("draft." + thread.id, LS.get("draft." + sourceId, ""));
+    LS.set("references." + thread.id, LS.get("references." + sourceId, "[]"));
+    restoreDraft(); dom.input.focus();
+    toast(t("草稿已带到新任务，请确认后发送。"));
   }
 
   function resetReview() { st.gitSeq++; st.diffSeq++; st.git = null; st.gitError = ""; st.diff = ""; st.diffFile = ""; st.diffBusy = false; paintReview(); }
@@ -1209,7 +1231,7 @@
       paint();
     }).catch((e) => {
       if (st.status) st.status.activeTurn = null;
-      addError(e.message);
+      addError(e.message, "", false, e.body?.code === "thread_history_missing" ? target : "");
       toast(e.message, true);
       paint();
     }).finally(() => { st.busy = false; paint(); });

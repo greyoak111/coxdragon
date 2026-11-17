@@ -89,8 +89,9 @@ export async function startCodexUiServer() {
       entries: [{ name: "fixture.apk", kind: "archive", size: 128, dir: false }] });
     if (p === "/api/projects" && req.method === "GET") return reply(res, { projects });
     if (p === "/api/projects" && req.method === "POST") { const project = { id: "p" + projects.length, name: body.name, path: body.path }; projects.push(project); return reply(res, { ok: true, project }); }
+    if ((p === "/api/codex/open-thread" || p === "/api/codex/turn") && state.missingThread === body.threadId) return reply(res, { error:"这条任务的本地记录无法恢复，请重试恢复或新建任务。",code:"thread_history_missing",threadId:body.threadId },404);
     if (p === "/api/codex/open-thread") { state.active = body.threadId; return reply(res, { thread: threads.find((th) => th.id === body.threadId) }); }
-    if (p === "/api/codex/thread") { const thread = { id: "new" + ++state.seq, name: "新任务", cwd: body.cwd, turns: [] }; threads.unshift(thread); state.active = thread.id; return reply(res, { thread }); }
+    if (p === "/api/codex/thread") { if(state.threadCreateFailure)return reply(res,{error:"Synthetic new task failure"},503);if(state.threadCreateDelay)await new Promise(r=>setTimeout(r,state.threadCreateDelay));const thread = { id: "new" + ++state.seq, name: "新任务", cwd: body.cwd, turns: [] }; threads.unshift(thread); state.active = thread.id; return reply(res, { thread }); }
     if (p === "/api/codex/turn") {
       const turn = { id: "turn" + ++state.seq, status: "inProgress" };
       state.running.push({ threadId: body.threadId, turn });

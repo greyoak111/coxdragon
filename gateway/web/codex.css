@@ -193,6 +193,7 @@ html.cx-shell[data-theme][data-skin]{--bar-bg:var(--bg);--bar-bg2:var(--bg2);--a
 }
 @media(max-width:360px){.cx-compose-model>span{display:none}.cx-composer{padding-inline:9px}.cx-compose-permission{font-size:11px}.cx-compose-model,.cx-compose-permission{gap:3px}}
 /* Paged settings: directory on phones, persistent navigation on larger screens. */
+.cx-recovery-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.cx-recovery-actions button{min-height:42px}
 .cx-preferences [hidden],.cx-controls [hidden]{display:none!important}
 .cx-preferences[open]{display:flex;flex-direction:column}
 .cx-preferences .cx-settings-head{flex:none;gap:12px;margin:0;padding:18px 24px;border-bottom:1px solid var(--line)}
