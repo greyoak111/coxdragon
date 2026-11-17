@@ -36,3 +36,11 @@
 保留原 codeflow.sh 提供商、DeepSeek-V4.1-Flash、max 思考强度和完全访问权限；Codex 行为配置保持默认。第二项验证的是引擎重建，没有执行 Android 强制停止或应用冷启动测试。
 
 本地证据目录为 `dist/thread-recovery-phone-26.1.6/`，构建与测试记录在 `dist/build-info.json`。该目录包含修复前错误、恢复卡、草稿以及两条真实回复截图。Linux CI 的提交与结果单独记录，避免与此前 26.1.5 的 CI 混淆。
+
+## 推送与 Linux CI
+
+修复提交 `1222346a015109e7acd2657cf444e96f9cd75736` 已推送到独立仓库 `leemwood/coxdragon` 的 `codex/context-model-controls` 分支。GitHub API 确认远端提交一致，仓库 `fork=false`。
+
+本次 [CI 44076390911](https://github.com/leemwood/coxdragon/actions/runs/44076390911) 全部成功：测试阶段 8 分 46 秒，包含全量网关测试、固定 Codex 真实进程、浏览器工作流和 Java 测试；构建阶段 1 分 22 秒，targetSdk 28/36 两种 APK 均生成并上传至 `coxdragon-test-1222346`。分支 CI 使用测试签名；vivo 上安装并验收的是本地原发布签名 APK。
+
+CI 后仅补充本节验收文档，没有更改应用代码。完整源码归档为 `dist/coxdragon-source-26.1.6.zip`，归档提交与逐文件校验结果保存在本地构建记录中。
