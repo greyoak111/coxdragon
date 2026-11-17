@@ -28,6 +28,6 @@
 
 ## 验证
 
-- `node scripts/test-codex-engine.mjs`：65 项通过，包含发现失败的 models.dev 回退、模板映射/重启/重置、接口声明优先、多模型配置、仅保存保留引擎与聊天、失败完整回滚。
+- `node scripts/test-codex-engine.mjs`：66 项通过，包含发现失败的 models.dev 回退、模板映射/重启/重置、接口声明优先、多模型配置、仅保存保留引擎与聊天、失败完整回滚。
 - `node scripts/test-codex-process.mjs`：固定 Codex 0.166.0 进程连接隔离的本地合成接口，验证真实请求、用量、压缩、强度与审批；不使用真实模型。
 - `node scripts/test-codex-ui.mjs --screenshots`：真实浏览器覆盖 320/390/820/1440px、中英文，包含候选显式导入/移除、模板保持模型 ID、默认模型、仅保存、重新打开与删除。

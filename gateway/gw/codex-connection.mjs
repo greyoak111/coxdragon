@@ -139,8 +139,11 @@ export function deleteConnectionProfile(id) {
   if(connection.mode==="custom"&&connection.providerId===id)throw invalid("请先切换到其他提供商，再删除当前提供商");
   if(!profiles.some(p=>p.id===id))throw invalid("提供商配置不存在");
   const next=profiles.filter(p=>p.id!==id);
-  if(!writeAtomic(FILE,JSON.stringify({...connection,profiles:next}),{mode:0o600}))throw new Error("提供商没有删除，请重试");
-  profiles=next;
+  // ChatGPT mode retains the last custom connection for migration. Deleting
+  // that profile must also remove its legacy credential copy.
+  const active=connection.providerId===id?{mode:"chatgpt",baseUrl:"",model:"",apiKey:"",noKey:false,wireApi:"responses",effort:"",contextWindow:0,providerId:"custom",name:""}:connection;
+  if(!writeAtomic(FILE,JSON.stringify({...active,profiles:next}),{mode:0o600}))throw new Error("提供商没有删除，请重试");
+  connection=active;profiles=next;
 }
 
 export function updateCustomSelection(model, effort, contextWindow = model === connection.model ? connection.contextWindow : 0) {

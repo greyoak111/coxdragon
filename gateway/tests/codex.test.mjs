@@ -80,6 +80,14 @@ test("提供商：批量模型保存失败完整回滚模型设置和连接",()=
   }finally{cx.stopServer();cx.setConnection({mode:"chatgpt"});}
 });
 
+test("提供商：切回 ChatGPT 后删除上次提供商，同时清除旧格式的密钥副本",()=>{
+  reset();const credential="synthetic-delete-profile-credential";
+  cx.setConnection({mode:"custom",newProvider:true,baseUrl:"https://delete-credential.test/v1",model:"deleted",apiKey:credential});
+  const id=connectionStatus().providerId;cx.setConnection({mode:"chatgpt"});deleteConnectionProfile(id);
+  assert.equal(connectionStatus().mode,"chatgpt");assert.equal(connectionStatus().hasKey,false);
+  assert.equal(fs.readFileSync(path.join(CFG.home,"coxdragon-codex-connection.json"),"utf8").includes(credential),false);
+});
+
 test("Codex：四种权限传给引擎，运行中禁止改变权限", async () => {
   reset(); const calls=[];
   cx.S.rpc.request=async(method,params)=>{calls.push({method,params});return method==="turn/start"?{turn:{id:"permission-turn",status:"completed"}}:{thread:{id:"permission-thread",cwd:CFG.workspace,turns:[]}};};
