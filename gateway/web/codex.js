@@ -1331,7 +1331,7 @@
         <label>${esc(t("输入能力"))}<select id="cx-compose-input-mode"><option value="auto">${esc(t("自动获取"))}</option><option value="manual">${esc(t("手动指定"))}</option></select></label>
         <div id="cx-compose-modalities" class="cx-modality-options">${[["text","文本"],["image","图片"],["audio","音频"],["video","视频"],["pdf","PDF"]].map(([id,name])=>`<label><input type="checkbox" value="${id}"><span>${esc(t(name))}</span></label>`).join("")}</div>
         <label>${esc(t("可用思考强度"))}<select id="cx-compose-effort-mode"><option value="auto">${esc(t("自动获取"))}</option><option value="manual">${esc(t("手动指定"))}</option></select></label>
-        <input id="cx-compose-effort-values" maxlength="800" placeholder="low, medium, high" aria-label="${esc(t("自定义思考强度列表"))}"><p class="cx-field-note">${esc(t("用逗号分隔；留空表示不发送思考强度。配置不会改变服务商的实际能力。"))}</p>
+        <input id="cx-compose-effort-values" maxlength="800" placeholder="low, medium, high" aria-label="${esc(t("自定义思考强度列表"))}"><p id="cx-compose-effort-help" class="cx-field-note">${esc(t("用逗号分隔；留空表示不发送思考强度。配置不会改变服务商的实际能力。"))}</p>
       </details><button type="submit" class="cx-primary">${esc(t("保存并使用"))}</button><p class="cx-form-error" id="cx-compose-model-error" role="alert"></p></form>`;
     const form=$("cx-compose-model-form"), provider=$("cx-compose-provider"), model=$("cx-compose-model"), effort=$("cx-compose-effort"), context=$("cx-compose-context"), inputMode=$("cx-compose-input-mode"), effortMode=$("cx-compose-effort-mode"), effortValues=$("cx-compose-effort-values");
     let activeKey="", revision=0, controller=null, disposed=false;
@@ -1347,7 +1347,7 @@
       $("cx-compose-capabilities").textContent=capabilityText(m)+" · "+t("上下文上限")+" "+(m?.contextWindow?tokenNumber(m.contextWindow):t("未知"))+" · "+t("来源")+" "+([...new Set(Object.values(sources).filter(Boolean))].join(" / ")||t("未声明"));
       context.placeholder=m?.contextWindow?String(m.contextWindow):t("自动");
       $("cx-compose-context-source").textContent=context.value?t("使用手动上限；修改后在空闲时重建引擎。"):t("自动跟随模型声明；实际占用由 Codex 报告。");
-      $("cx-compose-modalities").hidden=inputMode.value!=="manual";effortValues.hidden=effortMode.value!=="manual";
+      $("cx-compose-modalities").hidden=inputMode.value!=="manual";effortValues.hidden=effortMode.value!=="manual";$("cx-compose-effort-help").hidden=effortValues.hidden;
       const selected=effort.value, options=effortMode.value==="manual"?values():(m?.supportedReasoningEfforts||[]).map(e=>e.reasoningEffort);
       if(selected&&!options.includes(selected))options.push(selected);
       effort.innerHTML=`<option value="">${esc(t("默认"))}</option>`+options.map(e=>`<option value="${esc(e)}">${esc(e)}</option>`).join("");effort.value=selected;
@@ -1673,7 +1673,7 @@
           <label>${esc(t("显示名称"))}<input id="cx-api-model-name" maxlength="200" placeholder="${esc(t("留空使用模型 ID"))}"></label><p id="cx-api-capabilities"></p>${referenceFields("cx-api")}
           <div class="cx-model-grid"><label>${esc(t("上下文大小"))}<input id="cx-api-context" type="number" min="1024" max="1000000000" step="1" inputmode="numeric" placeholder="${esc(t("自动"))}"></label><label>${esc(t("默认思考强度"))}<select id="cx-api-effort"></select></label></div>
           <label>${esc(t("输入能力"))}<select id="cx-api-input-mode"><option value="auto">${esc(t("自动获取"))}</option><option value="manual">${esc(t("手动指定"))}</option></select></label><div id="cx-api-inputs" class="cx-modality-options">${[["text","文本"],["image","图片"],["audio","音频"],["video","视频"],["pdf","PDF"]].map(([id,label])=>`<label><input type="checkbox" value="${id}">${esc(t(label))}</label>`).join("")}</div>
-          <label>${esc(t("可用思考强度"))}<select id="cx-api-effort-mode"><option value="auto">${esc(t("自动获取"))}</option><option value="manual">${esc(t("手动指定"))}</option></select></label><input id="cx-api-effort-values" maxlength="800" placeholder="low, medium, high" aria-label="${esc(t("自定义思考强度列表"))}"><p class="cx-field-note">${esc(t("用逗号分隔；留空表示不发送思考强度。配置不会改变服务商的实际能力。"))}</p><button type="button" id="cx-api-apply-model">${esc(t("加入模型目录"))}</button>
+          <label>${esc(t("可用思考强度"))}<select id="cx-api-effort-mode"><option value="auto">${esc(t("自动获取"))}</option><option value="manual">${esc(t("手动指定"))}</option></select></label><input id="cx-api-effort-values" maxlength="800" placeholder="low, medium, high" aria-label="${esc(t("自定义思考强度列表"))}"><p id="cx-api-effort-help" class="cx-field-note">${esc(t("用逗号分隔；留空表示不发送思考强度。配置不会改变服务商的实际能力。"))}</p><button type="button" id="cx-api-apply-model">${esc(t("加入模型目录"))}</button>
         </div>
         <div id="cx-provider-actions"><div class="cx-api-test-bar"><button type="button" id="cx-api-test">${esc(t("测试连接"))}</button><span>${esc(t("会发送短模型请求，可能产生少量费用。"))}</span></div><div id="cx-api-result" class="cx-api-result" role="status" aria-live="polite" hidden></div>
         <p>${esc(t("密钥保存在应用私有目录，不会显示在状态信息中。更换地址时请重新填写密钥。"))}</p><p class="cx-field-note">${esc(t("Chat Completions 通过本地适配支持文本、图片与工具调用；其他能力优先使用 Responses。测试成功不代表所有工具能力均受支持。"))}</p>
@@ -1691,7 +1691,7 @@
     function paintCapabilities(){
       const m=selected();$("cx-api-capabilities").textContent=m?`${t("输入能力")}：${capabilityText(m)} · ${t("上下文上限")}：${m.contextWindow?tokenNumber(m.contextWindow):t("未知")} · ${t("思考强度")}：${m.supportedReasoningEfforts?.map(e=>e.reasoningEffort).join(" / ")||t(m.reasoning?"由服务商默认控制":"未知")} · ${t("来源")}：${[...new Set(Object.values(m.capabilitySources||{}).filter(Boolean))].join(" / ")||t("未声明")}`:"";
       $("cx-api-context").placeholder=m?.contextWindow?String(m.contextWindow):t("自动");
-      $("cx-api-inputs").hidden=$("cx-api-input-mode").value!=="manual";$("cx-api-effort-values").hidden=$("cx-api-effort-mode").value!=="manual";
+      $("cx-api-inputs").hidden=$("cx-api-input-mode").value!=="manual";$("cx-api-effort-values").hidden=$("cx-api-effort-mode").value!=="manual";$("cx-api-effort-help").hidden=$("cx-api-effort-values").hidden;
       const value=effort.value,options=$("cx-api-effort-mode").value==="manual"?effortValues():(m?.supportedReasoningEfforts||[]).map(e=>e.reasoningEffort);
       effort.innerHTML=`<option value="">${esc(t("默认"))}</option>`+options.map(v=>`<option value="${esc(v)}">${esc(v)}</option>`).join("");effort.value=options.includes(value)?value:"";
     }
