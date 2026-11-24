@@ -41,6 +41,7 @@ Build-time-only third-party components (not shipped in the APK):
 The developer toolkit (devkit) released alongside this project consists of
 Termux open-source packages (path prefix rewritten in place), each distributed
 under its own license (including GPL/LGPL); see devkit.lock.json and SBOM.tsv
-(including the license column) in each devkit release. Corresponding source
-archives are cataloged via devkit/archive-sources.mjs and retained to fulfill
-any written request for at least three (3) years from distribution.
+(including the license column) in each devkit release. Exact upstream sources
+and build recipes for bundled LGPL libraries are pinned in
+devkit/archive-sources.mjs; complete Corresponding Source for copyleft packages
+is provided upon written request for at least three (3) years from distribution.

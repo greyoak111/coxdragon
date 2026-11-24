@@ -213,6 +213,8 @@
     const rt = $("upd-retry"); if (rt) rt.onclick = loadUpd;   // 反复失败也只挂一个监听
   }
   async function loadUpd() {
+    if ($("upd-notices")) $("upd-notices").checked = !state.settings || state.settings.remoteNotices !== false;
+    if ($("upd-ghproxy")) $("upd-ghproxy").checked = !!(state.settings && state.settings.ghProxy);
     let st;
     try { st = await api("/api/app/upd_status"); }
     catch (e) { return updFailed(e.message || "?"); }
@@ -221,8 +223,7 @@
     lastUpd = st;
     $("upd-field").classList.remove("hidden");
     $("upd-auto").checked = !!st.auto;
-    if ($("upd-ghproxy")) $("upd-ghproxy").checked = st.ghProxy !== undefined ? !!st.ghProxy : !!(state.settings && state.settings.ghProxy);
-    if ($("upd-notices")) $("upd-notices").checked = !state.settings || state.settings.remoteNotices !== false;
+    if ($("upd-ghproxy") && st.ghProxy !== undefined) $("upd-ghproxy").checked = !!st.ghProxy;
     $("upd-channel").value = st.channel === "pinned" ? "pinned" : st.channel || "stable";
     // 安装包方案（28 / 36）：老外壳没有这几个字段就不显示
     $("upd-flavor-row").classList.toggle("hidden", !st.flavor);
@@ -512,12 +513,18 @@
       toast(e2.message || t("保存失败"), true);
     }
   });
-  $("upd-ghproxy")?.addEventListener("change", (e) => post("/api/app/upd_set", { ghProxy: e.target.checked })
-    .then((r) => {
-      if (r && r.ok === false) return updBack(r.message);
-      if (state.settings) state.settings.ghProxy = e.target.checked;
-      return loadUpd();
-    }).catch((e2) => updBack(e2.message)));
+  $("upd-ghproxy")?.addEventListener("change", async (e) => {
+    const want = e.target.checked;
+    try {
+      const r = await post("/api/settings", { ghProxy: want });
+      if (!r || r.ok === false) throw new Error((r && (r.error || r.message)) || t("保存失败"));
+      if (state.settings) state.settings.ghProxy = want;
+      if (lastUpd && lastUpd.items) loadUpd();
+    } catch (e2) {
+      e.target.checked = !want;
+      toast(e2.message || t("保存失败"), true);
+    }
+  });
   $("upd-channel").addEventListener("change", (e) => {
     // 固定版本要先挑一版：开选单，下拉框先退回原样，挑完 loadUpd 会刷新成「固定 x.y.z」
     if (e.target.value === "pinned") { e.target.value = (lastUpd && lastUpd.channel) || "stable"; openClaudeVersions(); return; }

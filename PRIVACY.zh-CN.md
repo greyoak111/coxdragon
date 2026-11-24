@@ -25,20 +25,20 @@ coxdragon 没有用户账号体系、没有后端业务服务器、没有对话�
 | 用途 | 默认状态与控制开关 | 目标地址 | 发送了什么 | 校验与源码位置 |
 |---|---|---|---|---|
 | **模型推理与账户登录** | 你发消息或登录时触发 | OpenAI 官方接口（经 `codex-app-server`）或你自行配置的兼容接口 / 第三方调用地址 | 你的提示词、工具返回结果及该接口对应的认证凭据 | [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)、[`gateway/gw/claude.mjs`](gateway/gw/claude.mjs)、[`gateway/gw/providers.mjs`](gateway/gw/providers.mjs) |
-| **自动检查更新** | 默认开启（每 6 小时）；可在 **设置 → 更新 → 自动更新** 关闭 | `api.github.com`（`greyoak111/coxdragon`）、`downloads.claude.ai`、npm 镜像 | 标准 HTTPS `GET`（不含任何设备指纹或账号信息） | APK 验签名证书 + SHA-256；工具包验钉死 SHA-256 / `ed25519` 签名；Codex 验钉死双层 SHA-256（[`android/java/cox/dragon/Updater.java`](android/java/cox/dragon/Updater.java)、[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)） |
-| **维护者远程公告** | 默认开启（每 3 小时）；可在 **设置 → 更新 → 接收维护公告** 彻底关闭 | `raw.githubusercontent.com/greyoak111/coxdragon/main/notices/notices.json` | 纯静态 `GET`（不带任何本机参数；关闭后零请求） | 强制核验内置 `ed25519` 公钥分离签名 `.sig`（[`gateway/gw/notices.mjs`](gateway/gw/notices.mjs) `refreshNotices`） |
+| **自动检查更新与问题版本记录** | 默认开启（更新每 6 小时、签名兼容记录每 3 小时）；可在 **设置 → 更新 → 自动更新** 一并关闭 | `api.github.com`（`greyoak111/coxdragon`）、`raw.githubusercontent.com`、`downloads.claude.ai`、npm 镜像 | 标准 HTTPS `GET`（不含任何设备指纹或账号信息） | APK 验签名证书 + SHA-256；工具包验钉死 SHA-256 / `ed25519` 签名；Codex 验钉死双层 SHA-256；Claude 兼容记录验 `ed25519` `.sig`（[`android/java/cox/dragon/Updater.java`](android/java/cox/dragon/Updater.java)、[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)、[`gateway/gw/ccverified.mjs`](gateway/gw/ccverified.mjs) `refreshVerified`） |
+| **维护者远程公告** | 默认开启（每 3 小时）；可在 **设置 → 更新 → 接收维护公告** 彻底关闭（不影响已知问题版本拦截） | `raw.githubusercontent.com/greyoak111/coxdragon/main/notices/notices.json` | 纯静态 `GET`（不带任何本机参数；关闭后零请求） | 强制核验内置 `ed25519` 公钥分离签名 `.sig`（[`gateway/gw/notices.mjs`](gateway/gw/notices.mjs) `refreshNotices`） |
 | **GitHub 第三方代理兜底** | **默认关闭**；仅在你主动开启 **设置 → 更新 → GitHub 第三方代理兜底** 且官方源失败时启用 | `gh-proxy.com`（外部第三方公共代理） | 下载请求的公网连接 IP 与目标 GitHub Release URL（开启前请知悉对方无隐私契约） | 下载产物仍强制核对钉死 SHA-256 与签名（[`android/java/cox/dragon/Installer.java`](android/java/cox/dragon/Installer.java) `ghProxyEnabled`、[`gateway/gw/pget.mjs`](gateway/gw/pget.mjs) `ghProxy`、[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)） |
 | **工具包 / Codex 引擎 / 组件按需下载** | 首次安装或你在工作台/扩展页点击安装时触发 | GitHub Releases（`greyoak111/coxdragon`、`greyoak111/coxdragon-components`、`openai/codex`）、Termux 官方及高校镜像 | 标准文件下载请求 | 全部核对钉死 SHA-256、Termux PGP 签名或 `ed25519` 索引签名（[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)、[`gateway/gw/components.mjs`](gateway/gw/components.mjs)、[`android/assets/bin/pkg.mjs`](android/assets/bin/pkg.mjs)） |
 
-如果你希望后台完全不向 GitHub 更新源发起轮询，只需在 **设置 → 更新** 中同时关掉「自动更新」与「接收维护公告」。
+如果你希望后台完全停止对 GitHub 更新源的周期轮询，只需在 **设置 → 更新** 中同时关掉「自动更新」与「接收维护公告」（注：若本机已装的旧版 Claude Code 缺失官方签名清单文件，`gateway/gw/devside.mjs` 会补核一次签名清单以满足启动完整性校验）。
 
 ## 3. 手机权限边界与敏感界面硬隔离
 
 - **绝不申请的权限**：不申请相机（`CAMERA`）、麦克风（`RECORD_AUDIO`）、粗略或后台定位（`ACCESS_*_LOCATION`）、通讯录、短信、通话记录、日历（`READ_CALENDAR`）、应用使用统计（`PACKAGE_USAGE_STATS`）、通知栏监听（`NotificationListenerService`）或实时录屏投影（`MediaProjection`）。
 - **设备工具与无障碍多重护栏**：
   1. 默认全关；开启需通过系统锁屏验证（[`Consent.java`](android/java/cox/dragon/Consent.java)）及应用前台原生确认框（[`DeviceTools.java`](android/java/cox/dragon/DeviceTools.java)）；
-  2. 默认「用时自动开」在空闲 10 分钟后自动调用 `disableSelf()` 关闭无障碍服务（[`A11y.java`](android/java/cox/dragon/A11y.java) `scheduleIdle`），绝不后台驻留强行复活；
-  3. 遇到密码框（`isPassword()`）自动剥离文本与描述；遇到支付宝、云闪付、手机银行、2FA 动态口令应用、密码管理器及系统权限控制器（`A11y.isProtectedPackage`）**硬性拒绝读屏、截屏与手势操作**；
+  2. 默认「用时自动开」模式在空闲 10 分钟后自动调用 `disableSelf()` 关闭无障碍服务（[`A11y.java`](android/java/cox/dragon/A11y.java) `scheduleIdle`；若手动切为「常开」则保持开启直至你改回），绝不后台偷偷复活；
+  3. 遇到密码框（`isPassword()`）自动剥离文本与描述；无障碍通道遇到当前活动窗口为支付宝、云闪付、手机银行、2FA 动态口令应用、密码管理器及系统权限控制器（`A11y.isProtectedPackage`）**硬性拒绝读屏、截屏与手势操作**；
   4. Codex 线程默认以 `approvalPolicy: "untrusted"` 启动（[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)），非只读命令一律挂起等待你在界面卡片确认；Claude 路径同步挂载内存态 `PreToolUse` 钩子（[`gateway/guard/cc-guard.mjs`](gateway/guard/cc-guard.mjs)）。
 
 ## 4. 第三方模型服务商与第三方调用风险提示

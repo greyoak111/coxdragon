@@ -34,7 +34,7 @@ already-compromised phone.
 Report privately at
 <https://github.com/greyoak111/coxdragon/security/advisories/new>.
 
-coxdragon is AGPL-3.0. Corresponding source: <https://github.com/greyoak111/coxdragon>.
+coxdragon is licensed under the Apache License, Version 2.0 (see LICENSE). Source repository: <https://github.com/greyoak111/coxdragon>.
 
 ## Maintainer
 

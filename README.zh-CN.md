@@ -99,7 +99,7 @@ app-server 的 stdout 按行解析。服务端发起的请求
 
 - **零遥测、零外部 CDN 与上游 CLI 边界**：
   - 应用不生成持久化安装 ID（`iid`）、不上传崩溃或用量统计，未集成 Google Play Services、ML Kit、Firebase、Sentry 或任何广告 SDK；界面全部脚本与字体均随包离线内置于 [`gateway/web/vendor/`](gateway/web/vendor/)。
-  - 官方 `codex-app-server`（Apache-2.0）在 [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)（`CODEX`、`verifyBinary`）按钉死的归档与二进制双层 SHA-256 核验后原样运行；可选的 Claude Code 路径在 [`gateway/gw/claude.mjs`](gateway/gw/claude.mjs)（`claudeEnv`）中注入 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"` 抑制非必要流量。
+  - 官方 `codex-app-server`（Apache-2.0）在 [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)（`CODEX`、`verifyBin`）按钉死的归档与二进制双层 SHA-256 核验后原样运行；可选的 Claude Code 路径在 [`gateway/gw/claude.mjs`](gateway/gw/claude.mjs)（`claudeEnv`）中注入 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"` 抑制非必要流量。
 - **凭据隔离、本地统计与诊断脱敏**：
   - 清单声明 `android:allowBackup="false"`（[`android/AndroidManifest.xml`](android/AndroidManifest.xml)），线程、设置与密钥仅存于应用私有目录 `/data/data/cox.dragon/files/home/`（含 `~/.codex`），不进系统云备份。
   - ChatGPT 登录走官方 `account/login/start` 设备码流程，网关不内嵌任何密钥（[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)）；第三方 API Key 存于 `0600` 权限私有文件，经 `apiKeyHelper` 按需读取，不注入子进程环境变量（[`gateway/gw/claude.mjs`](gateway/gw/claude.mjs)）。
@@ -110,14 +110,14 @@ app-server 的 stdout 按行解析。服务端发起的请求
 | 用途 | 默认状态与关闭方式 | 目标地址 | 校验锚点与对应源码 |
 |---|---|---|---|
 | 模型推理与账户登录 | 你发消息或登录时触发 | OpenAI 官方接口（经 `codex-app-server`）或你自行配置的第三方调用地址 | [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)、[`gateway/gw/claude.mjs`](gateway/gw/claude.mjs)、[`gateway/gw/providers.mjs`](gateway/gw/providers.mjs) |
-| 自动检查更新（每 6 小时） | 默认开；**设置 → 更新 → 自动更新** 可关 | `api.github.com`（`greyoak111/coxdragon`）、`downloads.claude.ai`、npm 镜像 | APK 验签名证书 + SHA-256；工具包验钉死 SHA-256 / `ed25519`；Codex 验双层 SHA-256（[`android/java/cox/dragon/Updater.java`](android/java/cox/dragon/Updater.java) `AUTO_EVERY`、[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)） |
-| 维护者签名公告与兼容记录（每 3 小时） | 默认开；**设置 → 更新 → 接收维护公告** 可彻底关闭 | `raw.githubusercontent.com/greyoak111/coxdragon`（纯静态 `GET`，无设备参数） | 强制核验内置 `ed25519` 公钥分离签名 `.sig`（[`gateway/gw/notices.mjs`](gateway/gw/notices.mjs) `refreshNotices`、[`gateway/gw/ccverified.mjs`](gateway/gw/ccverified.mjs) `refreshVerified`） |
+| 自动检查更新与问题版本记录 | 默认开（更新每 6 小时、兼容记录每 3 小时）；**设置 → 更新 → 自动更新** 可一并关 | `api.github.com`（`greyoak111/coxdragon`）、`raw.githubusercontent.com`、`downloads.claude.ai`、npm 镜像 | APK 验签名证书 + SHA-256；工具包验钉死 SHA-256 / `ed25519`；Codex 验双层 SHA-256；兼容记录验 `ed25519` `.sig`（[`android/java/cox/dragon/Updater.java`](android/java/cox/dragon/Updater.java) `AUTO_EVERY`、[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)、[`gateway/gw/ccverified.mjs`](gateway/gw/ccverified.mjs) `refreshVerified`） |
+| 维护者签名公告（每 3 小时） | 默认开；**设置 → 更新 → 接收维护公告** 可彻底关闭 | `raw.githubusercontent.com/greyoak111/coxdragon`（纯静态 `GET`，无设备参数） | 强制核验内置 `ed25519` 公钥分离签名 `.sig`（[`gateway/gw/notices.mjs`](gateway/gw/notices.mjs) `refreshNotices`） |
 | GitHub 第三方代理兜底 | **默认关闭**；仅主动开启 **设置 → 更新 → GitHub 第三方代理兜底** 且官方源失败时启用 | `gh-proxy.com`（外部公共代理，开启后对方可见你的公网 IP 与目标 URL） | 下载字节仍强制核对钉死 SHA-256 与签名（[`android/java/cox/dragon/Installer.java`](android/java/cox/dragon/Installer.java) `ghProxyEnabled`、[`gateway/gw/pget.mjs`](gateway/gw/pget.mjs) `ghProxy`、[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)） |
 | 工具包 / Codex 引擎 / 组件下载 | 首装或点击安装时触发 | GitHub Releases（`coxdragon`、`coxdragon-components`、`openai/codex`）、Termux 官方及高校镜像 | 钉死 SHA-256、Termux PGP 签名或 `ed25519` 索引签名（[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)、[`gateway/gw/components.mjs`](gateway/gw/components.mjs)、[`android/assets/bin/pkg.mjs`](android/assets/bin/pkg.mjs)） |
 
 - **权限最小化与金融/口令界面硬隔离**：
   - 绝不申请相机（`CAMERA`）、麦克风（`RECORD_AUDIO`）、定位（`ACCESS_*_LOCATION`）、通讯录、短信、通话记录、日历（`READ_CALENDAR`）、应用使用统计（`PACKAGE_USAGE_STATS`）、通知监听（`NotificationListenerService`）或录屏投影（`MediaProjection`），详见 [docs/permissions.zh-CN.md](docs/permissions.zh-CN.md)。
-  - 设备工具与无障碍默认全关；开启需经锁屏验证（[`android/java/cox/dragon/Consent.java`](android/java/cox/dragon/Consent.java)）与前台原生弹窗确认（[`android/java/cox/dragon/DeviceTools.java`](android/java/cox/dragon/DeviceTools.java)），闲置 10 分钟自动 `disableSelf()` 自关（[`android/java/cox/dragon/A11y.java`](android/java/cox/dragon/A11y.java) `scheduleIdle`）；自动抹除密码框文本，并对支付宝、云闪付、手机银行、2FA 动态口令应用、密码管理器及系统权限控制器实施**硬性拦截**（[`android/java/cox/dragon/A11y.java`](android/java/cox/dragon/A11y.java) `isProtectedPackage`）；Codex 线程默认 `approvalPolicy: "untrusted"` 挂起审批，Claude 路径强制挂载内存态 `PreToolUse` 钩子（[`gateway/guard/cc-guard.mjs`](gateway/guard/cc-guard.mjs)）。
+  - 设备工具与无障碍默认全关；开启需经锁屏验证（[`android/java/cox/dragon/Consent.java`](android/java/cox/dragon/Consent.java)）与前台原生弹窗确认（[`android/java/cox/dragon/DeviceTools.java`](android/java/cox/dragon/DeviceTools.java)），默认「用时自动开」模式下闲置 10 分钟自动 `disableSelf()` 自关（[`android/java/cox/dragon/A11y.java`](android/java/cox/dragon/A11y.java) `scheduleIdle`）；自动抹除密码框文本，并在无障碍通道下对当前活动窗口为支付宝、云闪付、手机银行、2FA 动态口令应用、密码管理器及系统权限控制器实施**硬性拦截**（[`android/java/cox/dragon/A11y.java`](android/java/cox/dragon/A11y.java) `isProtectedPackage`）；Codex 线程默认 `approvalPolicy: "untrusted"` 挂起审批，Claude 路径强制挂载内存态 `PreToolUse` 钩子（[`gateway/guard/cc-guard.mjs`](gateway/guard/cc-guard.mjs)）。
   - **第三方调用提示**：发往模型接口的提示词、代码与工具输出受对应服务商隐私政策约束；切勿在不可信的第三方调用上处理敏感私密数据。
 
 ## 状态
@@ -189,10 +189,10 @@ TARGET_SDK=36 sh scripts/build.sh
 
 ## 许可
 
-coxdragon 本身以 **[Apache License 2.0](LICENSE)** 发布（另见 [NOTICE](NOTICE)）。
+coxdragon 本身以 **[Apache License 2.0](LICENSE)** 发布（另见 [NOTICE](NOTICE)；此前已发布的 `v0.1.0` / `v0.1.1` 历史安装包仍适用发布时的 AGPL-3.0 条款）。
 
 - **OpenAI Codex**：取自 `openai/codex` 官方发布（Apache-2.0），按钉死哈希下载，不随 APK 分发。
-- **开发工具包与随包 LGPL 组件**：工具包取自 Termux 官方仓库，各包许可证载于 `devkit.lock.json` / `SBOM.tsv`；随 APK 分发的 glibc 动态加载器（[third_party/glibc/README.md](third_party/glibc/README.md)）与 7-Zip 26.06（[third_party/7zip/README.md](third_party/7zip/README.md)）及著佐权工具包组件的对应源码由 [`devkit/archive-sources.mjs`](devkit/archive-sources.mjs) 归档备存并自每次二进制分发之日起至少保留三年，需要源码副本的请在 Issues 中提出。
+- **开发工具包与随包 LGPL 组件**：工具包取自 Termux 官方仓库，各包许可证载于 `devkit.lock.json` / `SBOM.tsv`；随 APK 分发的 glibc 动态加载器（[third_party/glibc/README.md](third_party/glibc/README.md)）与 7-Zip 26.06（[third_party/7zip/README.md](third_party/7zip/README.md)）及著佐权工具包组件的对应源码拉取归档工具见 [`devkit/archive-sources.mjs`](devkit/archive-sources.mjs)，自每次二进制分发之日起至少三年内按书面请求（可在仓库 Issues 中提出）提供完整对应源码副本。
 
 ## 参与
 

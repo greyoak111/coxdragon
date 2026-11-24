@@ -280,7 +280,7 @@ public final class Share extends ContentProvider {
     }
 
     // 下载 Claude Code / 组件 / 更新要连的几个地方
-    private static final String[] PROBE_HOSTS = { "downloads.claude.ai", "cccodroid.net", "dl.cccodroid.net", "registry.npmmirror.com", "registry.npmjs.org", "github.com" };
+    private static final String[] PROBE_HOSTS = { "downloads.claude.ai", "registry.npmmirror.com", "registry.npmjs.org", "github.com" };
 
     /** 网络：系统看到的网络状态 + Java 解析 + 应用自己的 curl 连一下（并行，总共最多十来秒）。
      *  安装失败常见的是「Java 能下、原生程序出不去」（VPN / 联网控制），两边都测才分得清。只记结果，不发任何内容 */
