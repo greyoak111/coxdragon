@@ -3160,3 +3160,8 @@
 3160	Giliran sebelumnya selesai, tetapi giliran berikutnya tidak mendapat hasil (terputus)
 3161	Direktori tidak ada: {dir}; memakai {cwd} sebagai gantinya
 3162	API mengembalikan error, bukan balasan normal:
+3163	Terima pengumuman pemeliharaan
+3164	Aktif secara bawaan: mengambil pengumuman bertanda tangan tentang masalah umum dan perbaikan setiap 3 jam (permintaan statis tanpa data perangkat); mematikannya menghentikan semua permintaan pengumuman
+3165	Cadangan proksi pihak ketiga GitHub (gh-proxy.com)
+3166	Nonaktif secara bawaan: jika diaktifkan, hanya memakai proksi publik pihak ketiga saat sumber resmi dan cermin gagal (operator dapat melihat IP publik dan URL unduhan Anda; isi tetap diverifikasi dengan SHA-256 dan tanda tangan yang dipatok)
+3167	Anda masuk dengan langganan pribadi: ketentuan penyedia umumnya melarang otomatisasi tanpa pengawasan berfrekuensi tinggi. Gunakan kunci API bayar-sesuai-pakai untuk tugas terjadwal guna menghindari pembatasan akun.

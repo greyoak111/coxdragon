@@ -18,7 +18,7 @@ import { archiveProblem, parseTarListing } from "./archive-check.mjs";
 const DK = PREFIX ? path.join(PREFIX, "libexec/devkit") : "";
 const STAGE = PREFIX ? path.join(path.dirname(PREFIX), "devkit-stage") : "";
 const MOD_JOBS = new Map();          // id → { phase, done, total, via, error, child, cancelled, finished, queue }
-const DEVKIT_MIRROR = "https://dl.cccodroid.net/devkit/";
+const DEVKIT_MIRROR = "";
 
 /** modules.json 同 uid 可改：dir 只认 $PREFIX 内的普通相对路径 —— 卸载时会对 dirOf(m) 整个 rmSync（196-供应链.3） */
 const modDirOk = (d) => typeof d === "string" && d.length > 0 && !d.includes("\0") && !d.includes("\\") &&
@@ -234,13 +234,14 @@ async function modRunInstall(mj, m, base, job) {
     job.phase = "downloading"; job.done = 0; job.total = m.gz.bytes;
     const tick = setInterval(() => { try { job.done = fs.statSync(part).size; } catch {} }, 500);
     try {
-      // GitHub Release 与 dl.cccodroid.net 镜像逐字节同一份，内容按 modules.json 里的 sha256 把关
-      const gh = base + m.gz.file, mirror = DEVKIT_MIRROR + base.replace(/\/$/, "").split("/").pop() + "/" + m.gz.file;
-      const srcs = modMirrorFirst ? [mirror, gh] : [gh, mirror];
+      // 内容按 modules.json 里的 sha256 把关；镜像未配置时只走 GitHub Release
+      const gh = base + m.gz.file;
+      const mirror = DEVKIT_MIRROR ? DEVKIT_MIRROR + base.replace(/\/$/, "").split("/").pop() + "/" + m.gz.file : null;
+      const srcs = mirror ? (modMirrorFirst ? [mirror, gh] : [gh, mirror]) : [gh];
       let lastErr;
       for (let i = 0; i < 4 && !job.cancelled; i++) {
-        const url = srcs[i % 2];
-        job.via = url === gh ? "GitHub" : "dl.cccodroid.net";
+        const url = srcs[i % srcs.length];
+        job.via = url === gh ? "GitHub" : new URL(url).host;
         try {
           await compRun(job, path.join(PREFIX, "bin", "curl"), ["-fL", "-sS", "-C", "-", "--retry", "2", "--connect-timeout", "15", "--speed-limit", "10000", "--speed-time", "45", "-o", part, url]);
           lastErr = null; modMirrorFirst = url !== gh; break;

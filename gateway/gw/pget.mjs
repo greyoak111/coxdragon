@@ -1,5 +1,8 @@
 import fs from "node:fs";
+import path from "node:path";
 import { spawn } from "node:child_process";
+import { CFG } from "./config.mjs";
+import { SETTINGS } from "./settings-store.mjs";
 import { writeAll } from "./bigfile.mjs";
 
 // ── 分段并行下载 ─────────────────────────────────────────────────────
@@ -115,7 +118,16 @@ function single({ curl, url, file, total, curlArgs, onProgress, cancelled }) {
   });
 }
 
-/** GitHub 地址的备用加速线（gh-proxy.com，第三方）：只用作最后一条备用；内容照样按 sha256 把关，不需要信任它 */
-export function ghProxy(url) {
+export function ghProxyEnabled() {
+  if (SETTINGS.ghProxy === true) return true;
+  if (CFG.runtime) {
+    try { return fs.statSync(path.join(CFG.runtime, ".gh-proxy")).isFile(); } catch {}
+  }
+  return false;
+}
+
+/** GitHub 地址的备用加速线（gh-proxy.com，第三方）：默认关闭；仅用户在设置里开启后才作为最后一条备用；内容照样按 sha256 把关 */
+export function ghProxy(url, enabled = ghProxyEnabled()) {
+  if (!enabled) return "";
   return /^https:\/\/github\.com\//.test(url || "") ? "https://gh-proxy.com/" + url.slice("https://".length) : "";
 }

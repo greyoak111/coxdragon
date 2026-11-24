@@ -3160,3 +3160,8 @@
 3160	El turno anterior terminó, pero el siguiente no recibió resultado (interrumpido)
 3161	No existe el directorio: {dir}; se usa {cwd} en su lugar
 3162	La API devolvió un error, no una respuesta normal:
+3163	Avisos de mantenimiento
+3164	Activado por defecto: obtiene cada 3 h avisos firmados sobre problemas conocidos y soluciones (petición estática sin datos del dispositivo); al desactivarlo no se hacen peticiones de avisos
+3165	Proxy público alternativo para GitHub (gh-proxy.com)
+3166	Desactivado por defecto: al activarlo, solo usa un proxy público de terceros si fallan las fuentes oficiales y réplicas (el operador ve tu IP pública y el enlace; el contenido se sigue verificando con SHA-256 y firma fijados)
+3167	Estás usando una suscripción personal: los términos del proveedor suelen prohibir el sondeo automatizado desatendido de alta frecuencia. Usa mejor una clave API de pago por uso para tareas programadas y evita restricciones en la cuenta.

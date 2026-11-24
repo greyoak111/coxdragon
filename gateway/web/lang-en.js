@@ -3200,5 +3200,10 @@ window.I18N_DICT.en = {
   "上游没发结束标记就断开了，回答已按说完处理；这条是否完整无法确认，如果没说完，发一句「继续」": "The upstream disconnected without an end marker, so the reply was treated as finished. Whether it is complete can't be confirmed; if it was cut off, send “continue”",
   "上一轮已答完，接着的这一轮没有等到结果（已中断）": "The previous turn finished, but the turn after it got no result (interrupted)",
   "目录不存在：{dir}，已改用 {cwd}": "Directory not found: {dir}; using {cwd} instead",
-  "接口报错，不是正常回复：": "The API returned an error, not a normal reply:"
+  "接口报错，不是正常回复：": "The API returned an error, not a normal reply:",
+  "接收维护公告": "Maintainer notices",
+  "默认开：每 3 小时从签名源拉取已知问题与修复提示（纯静态请求，不带任何本机信息）；关闭后不再发起公告请求": "On by default: fetches signed notices about known issues and fixes every 3 hours (plain static GET with no device data); turning this off stops all notice requests",
+  "GitHub 第三方代理兜底（gh-proxy.com）": "GitHub third-party proxy fallback (gh-proxy.com)",
+  "默认关：开启后，仅当官方源与镜像均连不上时才经第三方公共代理下载（对方可见你的公网 IP 与下载链接；内容仍按钉住的 SHA-256 与签名校验）": "Off by default: when enabled, falls back to a public third-party proxy only if official and mirror hosts fail (the proxy operator can see your public IP and download URL; files are still verified against pinned SHA-256 and signatures)",
+  "当前用的是个人订阅登录：上游服务条款通常禁止高频无人值守自动化轮询，定时批处理建议改用按量计费 API Key 以免触发账号风控。": "You are signed in with a personal subscription: upstream terms generally prohibit high-frequency unattended polling. Consider using a pay-as-you-go API key for scheduled batch jobs to avoid account restrictions.",
 };

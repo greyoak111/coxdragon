@@ -12,9 +12,10 @@ import crypto from "node:crypto";
 import { CFG, LIVE, PREFIX, log } from "./config.mjs";
 import { NEXT, readBody, sendJson } from "./http.mjs";
 import { privCall } from "./usage.mjs";
+import { SETTINGS } from "./settings-store.mjs";
 
 const SOURCES = (process.env.CCAPP_NOTICES_URL ? [process.env.CCAPP_NOTICES_URL] : [])
-  .concat(["https://cccodroid.net/notices.json", "https://raw.githubusercontent.com/greyoak111/cccodroid/main/notices/notices.json"]);
+  .concat(["https://raw.githubusercontent.com/greyoak111/coxdragon/main/notices/notices.json"]);
 // 与组件索引同一把公钥（gw/components.mjs）；Claude Code 验证记录（gw/ccverified.mjs）也用它。测试（CCAPP_TEST=1）时可换成测试钥匙
 export const PUBKEY = crypto.createPublicKey(!LIVE && process.env.CCAPP_TEST_PUBKEY ? process.env.CCAPP_TEST_PUBKEY :
   "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEA4u1V3UuRVZgXwqXXQaQIBaefPf2PCGqKqvsna9Pgzzs=\n-----END PUBLIC KEY-----\n");
@@ -56,6 +57,7 @@ async function fetchOne(url) {
 }
 
 export async function refreshNotices(force = false) {
+  if (SETTINGS.remoteNotices === false) return;
   if (busy) return busy;
   if (!force && Date.now() - fetchedAt < EVERY) return;
   busy = (async () => {
@@ -108,6 +110,9 @@ if (LIVE) setInterval(() => refreshNotices().catch(() => {}), EVERY).unref?.();
 // POST /api/notices/dismiss {id}：知道了
 export async function routeNotices(req, res, u, p) {
   if (p === "/api/notices" && req.method === "GET") {
+    if (SETTINGS.remoteNotices === false) {
+      return sendJson(res, 200, { ok: true, items: [], disabled: true, error: "", at: fetchedAt, fetching: false, cached: !!data });
+    }
     await Promise.race([refreshNotices().catch(() => {}), new Promise((r) => setTimeout(r, 8000))]);
     const lang = (u.searchParams.get("lang") || "zh").startsWith("zh") ? "zh" : "en";
     const seen = readSeen(), all = active(lang);

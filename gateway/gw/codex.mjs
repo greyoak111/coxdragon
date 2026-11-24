@@ -23,6 +23,7 @@ import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import { CFG, PREFIX, log } from "./config.mjs";
+import { ghProxyEnabled } from "./pget.mjs";
 import { NEXT, readBody, sendJson } from "./http.mjs";
 import { enosysRun } from "./claude.mjs";
 import { SETTINGS } from "./settings-store.mjs";
@@ -204,7 +205,7 @@ async function doInstall() {
   broadcastInstall();
   const tar = path.join(CACHE, CODEX.asset);
   let ok = false;
-  const urls = [CODEX.url, PROXY_PREFIX + CODEX.url];
+  const urls = ghProxyEnabled() ? [CODEX.url, PROXY_PREFIX + CODEX.url] : [CODEX.url];
   let last = "";
   for (const u of urls) {
     try {

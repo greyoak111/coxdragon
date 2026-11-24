@@ -3160,3 +3160,8 @@
 3160	Le tour précédent est terminé, mais le tour suivant n'a reçu aucun résultat (interrompu)
 3161	Dossier introuvable : {dir} ; {cwd} est utilisé à la place
 3162	L'API a renvoyé une erreur, pas une réponse normale :
+3163	Annonces de maintenance
+3164	Activé par défaut : récupère toutes les 3 h les avis signés sur les problèmes connus et correctifs (requête statique sans donnée de l'appareil) ; désactiver coupe toute requête d'avis
+3165	Relais proxy tiers GitHub en secours (gh-proxy.com)
+3166	Désactivé par défaut : une fois activé, utilise un proxy public tiers uniquement si les sources officielles et miroirs échouent (l'opérateur voit votre IP publique et l'URL ; le contenu reste vérifié par SHA-256 et signature)
+3167	Vous utilisez un abonnement personnel : les conditions en amont interdisent généralement l'automatisation sans surveillance à haute fréquence. Préférez une clé API facturée à l'usage pour éviter des restrictions de compte.

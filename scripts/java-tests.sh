@@ -19,4 +19,6 @@ if [ -f "$AJAR" ]; then
   # 第二份稳定性报告 l 组（BUG-A01/A02/A03/A04/A05 的纯逻辑；只调基本类型判断，不碰安卓运行时）
   javac -nowarn -d "$OUT" -cp "$OUT:$AJAR" "$ROOT/android/tests/cox/dragon/Stab2LHostTest.java"
   java -cp "$OUT:$AJAR" cox.dragon.Stab2LHostTest
+  javac -nowarn -d "$OUT" -cp "$OUT:$AJAR" "$ROOT/android/tests/cox/dragon/A11yProtectedPackageTest.java"
+  java -cp "$OUT:$AJAR" cox.dragon.A11yProtectedPackageTest
 else echo "跳过 WhatsNewPickTest（没有 android.jar）"; fi

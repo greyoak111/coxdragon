@@ -8,10 +8,11 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { CFG, LIVE, log } from "./config.mjs";
 import { PUBKEY, loadSigned, saveSigned } from "./notices.mjs";
+import { SETTINGS } from "./settings-store.mjs";
 
 // CCAPP_CLAUDE_VERIFIED_URL：只用这一个地址（测试用）
 const SOURCES = process.env.CCAPP_CLAUDE_VERIFIED_URL ? [process.env.CCAPP_CLAUDE_VERIFIED_URL]
-  : ["https://cccodroid.net/claude-code/verified.json", "https://raw.githubusercontent.com/greyoak111/cccodroid/main/claude-code/verified.json"];
+  : ["https://raw.githubusercontent.com/greyoak111/coxdragon/main/claude-code/verified.json"];
 const EVERY = 3 * 3600e3;
 export const VERIFIED_CACHE = path.join(CFG.home, ".cache", "cccodroid", "claude-verified.json");
 
@@ -29,6 +30,7 @@ async function fetchOne(url) {
 }
 
 export function refreshVerified(force = false) {
+  if (SETTINGS.remoteNotices === false) return Promise.resolve();
   if (busy) return busy;
   if (!force && Date.now() - fetchedAt < EVERY) return Promise.resolve();
   busy = (async () => {

@@ -1,6 +1,6 @@
 # coxdragon
 
-[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Android](https://img.shields.io/badge/Android-8.0%2B%20(arm64)-green)](https://developer.android.com)
 [![Status](https://img.shields.io/badge/status-early%20alpha-orange)](#status)
 
@@ -9,10 +9,10 @@ Codex app-server inside an ordinary Android app, keeps it behind a local authent
 gateway, and turns its JSON-RPC events into a chat-style workspace: threads, tool calls,
 file changes, command output, and approval cards.
 
-It is a fork of **[cccodroid](https://github.com/greyoak111/cccodroid)** (Apache-2.0),
-relicensed as a co-creation project under **AGPL-3.0**. The Android shell, local
-gateway, terminal, file browser and settings come from that work; the Codex engine,
-the Codex page and the `cox.dragon` package are new.
+It is a fork of **[cccodroid](https://github.com/greyoak111/cccodroid)**, released
+under **Apache-2.0**. The Android shell, local gateway, terminal, file browser and
+settings come from that work; the Codex engine, the Codex page and the `cox.dragon`
+package are new.
 
 > Not affiliated with or endorsed by OpenAI or Anthropic. Codex is downloaded from
 > OpenAI's official release and run unmodified. Claude Code is not bundled.
@@ -107,6 +107,33 @@ instead of hiding it:
 Known limitations are listed in [SECURITY.md](SECURITY.md) (upstream document; the
 Codex-specific section is at the top of this README).
 
+## Privacy & data protection
+
+See **[PRIVACY.md](PRIVACY.md)** for the full breakdown. coxdragon has **no user accounts, no backend server, no cloud chat sync, and zero first-party telemetry or proprietary analytics SDKs** — every control below can be verified directly in the source tree:
+
+- **Zero telemetry, zero external CDNs & upstream CLI boundaries**:
+  - No persistent install ID (`iid`), no usage or crash uploads, and no Google Play Services, ML Kit, Firebase, Sentry, or ad SDKs; all UI scripts and fonts ship offline in [`gateway/web/vendor/`](gateway/web/vendor/).
+  - Official `codex-app-server` (Apache-2.0) is verified against pinned archive and binary SHA-256 hashes in [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs) (`CODEX`, `verifyBinary`); for the optional Claude Code path, [`gateway/gw/claude.mjs`](gateway/gw/claude.mjs) (`claudeEnv`) sets `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"`.
+- **Credential isolation, local usage & scrubbed diagnostics**:
+  - `android:allowBackup="false"` in [`android/AndroidManifest.xml`](android/AndroidManifest.xml) keeps threads, settings, and keys inside `/data/data/cox.dragon/files/home/` (including `~/.codex`) and out of Android cloud backups.
+  - ChatGPT sign-in runs through the official `account/login/start` device-code flow with zero embedded keys ([`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)); third-party API keys live in `0600` private files read via `apiKeyHelper` rather than child environment variables ([`gateway/gw/claude.mjs`](gateway/gw/claude.mjs)).
+  - The gateway binds loopback `127.0.0.2` (UI) and `127.0.0.1` only, requiring a per-install token, Host/Origin checks, and boot-scoped single-use HMAC signatures ([`gateway/gw/access.mjs`](gateway/gw/access.mjs), [`android/java/cox/dragon/Events.java`](android/java/cox/dragon/Events.java)).
+  - Usage stats read local session files only with zero network requests ([`gateway/gw/usage.mjs`](gateway/gw/usage.mjs)); diagnostic zips scrub keys, tokens, emails, and user prompts locally before invoking the system share sheet and exclude transcripts ([`android/java/cox/dragon/Share.java`](android/java/cox/dragon/Share.java) `bundleLogs`); GitHub feedback pre-fills a `greyoak111/coxdragon` browser URL only when you tap the button ([`gateway/gw/feedback.mjs`](gateway/gw/feedback.mjs) `issueDraft`).
+- **Complete outbound network inventory & switches** (aside from commands you explicitly approve in chats/terminals):
+
+| Purpose | Default & Switch | Destinations | Trust Anchor & Source |
+|---|---|---|---|
+| Model inference & sign-in | When you chat or sign in | OpenAI official endpoints (via `codex-app-server`) or your custom third-party endpoint | [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs), [`gateway/gw/claude.mjs`](gateway/gw/claude.mjs), [`gateway/gw/providers.mjs`](gateway/gw/providers.mjs) |
+| Automatic update checks (every 6h) | On; turn off in **Settings → Updates → Automatic updates** | `api.github.com` (`greyoak111/coxdragon`), `downloads.claude.ai`, npm mirrors | APK signing cert + SHA-256; pinned SHA-256 / `ed25519` for devkit; dual SHA-256 for Codex ([`android/java/cox/dragon/Updater.java`](android/java/cox/dragon/Updater.java) `AUTO_EVERY`, [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)) |
+| Signed maintainer notices & verified list (every 3h) | On; turn off in **Settings → Updates → Maintainer notices** | `raw.githubusercontent.com/greyoak111/coxdragon` (static `GET`, no device parameters) | Pinned `ed25519` public key detached `.sig` ([`gateway/gw/notices.mjs`](gateway/gw/notices.mjs) `refreshNotices`, [`gateway/gw/ccverified.mjs`](gateway/gw/ccverified.mjs) `refreshVerified`) |
+| Third-party GitHub proxy (`gh-proxy.com`) | **Off by default**; opt in via **Settings → Updates → GitHub third-party proxy fallback** | `gh-proxy.com` (external public proxy; sees your IP and target URL if enabled) | Pinned SHA-256 and signatures still enforced ([`android/java/cox/dragon/Installer.java`](android/java/cox/dragon/Installer.java) `ghProxyEnabled`, [`gateway/gw/pget.mjs`](gateway/gw/pget.mjs) `ghProxy`, [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)) |
+| Toolkit / Codex engine / component downloads | First-run setup or tapping Install | GitHub Releases (`coxdragon`, `coxdragon-components`, `openai/codex`), Termux & university mirrors | Pinned SHA-256, Termux PGP signature, or `ed25519` index signature ([`gateway/gw/codex.mjs`](gateway/gw/codex.mjs), [`gateway/gw/components.mjs`](gateway/gw/components.mjs), [`android/assets/bin/pkg.mjs`](android/assets/bin/pkg.mjs)) |
+
+- **Permission minimization & protected-app screen blocking**:
+  - Never requests `CAMERA`, `RECORD_AUDIO`, `ACCESS_*_LOCATION`, contacts, SMS, call logs, `READ_CALENDAR`, `PACKAGE_USAGE_STATS`, `NotificationListenerService`, or `MediaProjection`; see [docs/permissions.md](docs/permissions.md).
+  - Device tools and accessibility are off by default, gated by lock-screen check ([`android/java/cox/dragon/Consent.java`](android/java/cox/dragon/Consent.java)) and a foreground native dialog ([`android/java/cox/dragon/DeviceTools.java`](android/java/cox/dragon/DeviceTools.java)), auto-disable after 10 minutes of inactivity ([`android/java/cox/dragon/A11y.java`](android/java/cox/dragon/A11y.java) `scheduleIdle`), strip `isPassword()` text, **hard-block banking, Alipay/UnionPay/wallets, 2FA authenticators, password managers, and system permission controllers** ([`android/java/cox/dragon/A11y.java`](android/java/cox/dragon/A11y.java) `isProtectedPackage`), start Codex threads under `approvalPolicy: "untrusted"`, and enforce an in-memory `PreToolUse` hook ([`gateway/guard/cc-guard.mjs`](gateway/guard/cc-guard.mjs)) on the Claude path.
+  - **Custom third-party endpoints**: Prompts, code, and tool outputs sent to any model endpoint are governed by that operator's privacy policy — never use untrusted third-party endpoints for sensitive secrets or personal data.
+
 ## Status
 
 Early alpha. The protocol and login path have been exercised against the official
@@ -180,15 +207,10 @@ checked into the build only for reproducibility. Build caches (`devkit/cache`,
 
 ## License
 
-**GNU Affero General Public License v3.0 or later** — see [LICENSE](LICENSE).
+coxdragon itself is released under the **[Apache License 2.0](LICENSE)** (see also [NOTICE](NOTICE)).
 
-coxdragon is based on cccodroid, Copyright 2026 greyoak111 and contributors,
-licensed under Apache-2.0. The upstream license text is kept in
-[LICENSE-APACHE-2.0](LICENSE-APACHE-2.0), and [NOTICE](NOTICE) lists the bundled
-third-party components. Because this is an AGPL project, if you run a modified
-version as a network service, you must offer its corresponding source to users.
-
-Corresponding source: <https://github.com/greyoak111/coxdragon>
+- **OpenAI Codex**: fetched from the official `openai/codex` release (Apache-2.0) against pinned SHA-256 hashes; not bundled in the APK.
+- **Toolchain & bundled LGPL libraries**: toolchain packages come from the official Termux repositories with per-package licenses recorded in `devkit.lock.json` / `SBOM.tsv`. Corresponding Source for the bundled glibc loader ([third_party/glibc/README.md](third_party/glibc/README.md)), 7-Zip 26.06 ([third_party/7zip/README.md](third_party/7zip/README.md)), and copyleft toolchain packages is archived via [`devkit/archive-sources.mjs`](devkit/archive-sources.mjs) and retained for at least three years from each binary release; request a copy in Issues if needed.
 
 ## Contributing
 

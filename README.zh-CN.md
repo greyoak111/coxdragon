@@ -1,6 +1,6 @@
 # coxdragon
 
-[![许可](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
+[![许可](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
 [![Android](https://img.shields.io/badge/Android-8.0%2B%20(arm64)-green)](https://developer.android.com)
 [![状态](https://img.shields.io/badge/status-early%20alpha-orange)](#状态)
 
@@ -8,9 +8,9 @@
 app-server 放进一个普通安卓应用里，用本机网关把它护住，再把它的 JSON-RPC 事件铺成
 聊天式工作区：线程、工具调用、文件改动、命令输出、审批卡片。
 
-它是 **[cccodroid](https://github.com/greyoak111/cccodroid)**（Apache-2.0）的
-分支，按共创项目改用 **AGPL-3.0**。安卓外壳、本机网关、终端、文件浏览器和设置来自
-上游；Codex 引擎、Codex 页面和 `cox.dragon` 包名是新加的。
+它是 **[cccodroid](https://github.com/greyoak111/cccodroid)** 的分支，同样采用
+**Apache-2.0** 许可发布。安卓外壳、本机网关、终端、文件浏览器和设置来自上游；Codex
+引擎、Codex 页面和 `cox.dragon` 包名是新加的。
 
 > 与 OpenAI、Anthropic 均无隶属或背书关系。Codex 从 OpenAI 官方 Release 下载、原样
 > 运行；Claude Code 不随包分发。
@@ -93,6 +93,33 @@ app-server 的 stdout 按行解析。服务端发起的请求
 
 已知的边界见 [SECURITY.md](SECURITY.md)（上游文档；Codex 相关的取舍在本节上面）。
 
+## 隐私与数据保护
+
+完整说明见 **[隐私与数据保护说明（PRIVACY.zh-CN.md）](PRIVACY.zh-CN.md)**。coxdragon **没有用户账号体系、没有后端业务服务器、没有对话云同步，也没有任何第一方遥测或闭源统计 SDK**；以下每一项控制均可直接在仓库源码中逐行核查：
+
+- **零遥测、零外部 CDN 与上游 CLI 边界**：
+  - 应用不生成持久化安装 ID（`iid`）、不上传崩溃或用量统计，未集成 Google Play Services、ML Kit、Firebase、Sentry 或任何广告 SDK；界面全部脚本与字体均随包离线内置于 [`gateway/web/vendor/`](gateway/web/vendor/)。
+  - 官方 `codex-app-server`（Apache-2.0）在 [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)（`CODEX`、`verifyBinary`）按钉死的归档与二进制双层 SHA-256 核验后原样运行；可选的 Claude Code 路径在 [`gateway/gw/claude.mjs`](gateway/gw/claude.mjs)（`claudeEnv`）中注入 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1"` 抑制非必要流量。
+- **凭据隔离、本地统计与诊断脱敏**：
+  - 清单声明 `android:allowBackup="false"`（[`android/AndroidManifest.xml`](android/AndroidManifest.xml)），线程、设置与密钥仅存于应用私有目录 `/data/data/cox.dragon/files/home/`（含 `~/.codex`），不进系统云备份。
+  - ChatGPT 登录走官方 `account/login/start` 设备码流程，网关不内嵌任何密钥（[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)）；第三方 API Key 存于 `0600` 权限私有文件，经 `apiKeyHelper` 按需读取，不注入子进程环境变量（[`gateway/gw/claude.mjs`](gateway/gw/claude.mjs)）。
+  - 本机网关仅绑定回环 `127.0.0.2`（界面专用）与 `127.0.0.1`，要求安装令牌、Host/Origin 核验与启动期单次防重放 HMAC 签名（[`gateway/gw/access.mjs`](gateway/gw/access.mjs)、[`android/java/cox/dragon/Events.java`](android/java/cox/dragon/Events.java)）。
+  - 「用量」页仅读取本地会话文件，零网络请求（[`gateway/gw/usage.mjs`](gateway/gw/usage.mjs)）；「打包诊断」在调用系统分享面板前本地抹除密钥、令牌、邮箱与消息正文且不含会话记录（[`android/java/cox/dragon/Share.java`](android/java/cox/dragon/Share.java) `bundleLogs`）；「到 GitHub 反馈」仅在你主动点击时拼出 `greyoak111/coxdragon` 浏览器预填链接（[`gateway/gw/feedback.mjs`](gateway/gw/feedback.mjs) `issueDraft`）。
+- **出站网络请求全量清单与一键关闭开关**（除你主动批准执行的联网命令外，应用自身仅存在以下联网路径）：
+
+| 用途 | 默认状态与关闭方式 | 目标地址 | 校验锚点与对应源码 |
+|---|---|---|---|
+| 模型推理与账户登录 | 你发消息或登录时触发 | OpenAI 官方接口（经 `codex-app-server`）或你自行配置的第三方调用地址 | [`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)、[`gateway/gw/claude.mjs`](gateway/gw/claude.mjs)、[`gateway/gw/providers.mjs`](gateway/gw/providers.mjs) |
+| 自动检查更新（每 6 小时） | 默认开；**设置 → 更新 → 自动更新** 可关 | `api.github.com`（`greyoak111/coxdragon`）、`downloads.claude.ai`、npm 镜像 | APK 验签名证书 + SHA-256；工具包验钉死 SHA-256 / `ed25519`；Codex 验双层 SHA-256（[`android/java/cox/dragon/Updater.java`](android/java/cox/dragon/Updater.java) `AUTO_EVERY`、[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)） |
+| 维护者签名公告与兼容记录（每 3 小时） | 默认开；**设置 → 更新 → 接收维护公告** 可彻底关闭 | `raw.githubusercontent.com/greyoak111/coxdragon`（纯静态 `GET`，无设备参数） | 强制核验内置 `ed25519` 公钥分离签名 `.sig`（[`gateway/gw/notices.mjs`](gateway/gw/notices.mjs) `refreshNotices`、[`gateway/gw/ccverified.mjs`](gateway/gw/ccverified.mjs) `refreshVerified`） |
+| GitHub 第三方代理兜底 | **默认关闭**；仅主动开启 **设置 → 更新 → GitHub 第三方代理兜底** 且官方源失败时启用 | `gh-proxy.com`（外部公共代理，开启后对方可见你的公网 IP 与目标 URL） | 下载字节仍强制核对钉死 SHA-256 与签名（[`android/java/cox/dragon/Installer.java`](android/java/cox/dragon/Installer.java) `ghProxyEnabled`、[`gateway/gw/pget.mjs`](gateway/gw/pget.mjs) `ghProxy`、[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)） |
+| 工具包 / Codex 引擎 / 组件下载 | 首装或点击安装时触发 | GitHub Releases（`coxdragon`、`coxdragon-components`、`openai/codex`）、Termux 官方及高校镜像 | 钉死 SHA-256、Termux PGP 签名或 `ed25519` 索引签名（[`gateway/gw/codex.mjs`](gateway/gw/codex.mjs)、[`gateway/gw/components.mjs`](gateway/gw/components.mjs)、[`android/assets/bin/pkg.mjs`](android/assets/bin/pkg.mjs)） |
+
+- **权限最小化与金融/口令界面硬隔离**：
+  - 绝不申请相机（`CAMERA`）、麦克风（`RECORD_AUDIO`）、定位（`ACCESS_*_LOCATION`）、通讯录、短信、通话记录、日历（`READ_CALENDAR`）、应用使用统计（`PACKAGE_USAGE_STATS`）、通知监听（`NotificationListenerService`）或录屏投影（`MediaProjection`），详见 [docs/permissions.zh-CN.md](docs/permissions.zh-CN.md)。
+  - 设备工具与无障碍默认全关；开启需经锁屏验证（[`android/java/cox/dragon/Consent.java`](android/java/cox/dragon/Consent.java)）与前台原生弹窗确认（[`android/java/cox/dragon/DeviceTools.java`](android/java/cox/dragon/DeviceTools.java)），闲置 10 分钟自动 `disableSelf()` 自关（[`android/java/cox/dragon/A11y.java`](android/java/cox/dragon/A11y.java) `scheduleIdle`）；自动抹除密码框文本，并对支付宝、云闪付、手机银行、2FA 动态口令应用、密码管理器及系统权限控制器实施**硬性拦截**（[`android/java/cox/dragon/A11y.java`](android/java/cox/dragon/A11y.java) `isProtectedPackage`）；Codex 线程默认 `approvalPolicy: "untrusted"` 挂起审批，Claude 路径强制挂载内存态 `PreToolUse` 钩子（[`gateway/guard/cc-guard.mjs`](gateway/guard/cc-guard.mjs)）。
+  - **第三方调用提示**：发往模型接口的提示词、代码与工具输出受对应服务商隐私政策约束；切勿在不可信的第三方调用上处理敏感私密数据。
+
 ## 状态
 
 早期 alpha。协议和登录链路已经在安卓 17 arm64 真机上对着官方
@@ -162,14 +189,10 @@ TARGET_SDK=36 sh scripts/build.sh
 
 ## 许可
 
-**GNU Affero 通用公共许可证 v3.0 或更高版本** —— 见 [LICENSE](LICENSE)。
+coxdragon 本身以 **[Apache License 2.0](LICENSE)** 发布（另见 [NOTICE](NOTICE)）。
 
-coxdragon 基于 cccodroid（Copyright 2026 greyoak111 及贡献者，Apache-2.0）。
-上游许可原文保留在 [LICENSE-APACHE-2.0](LICENSE-APACHE-2.0)，
-[NOTICE](NOTICE) 列出随包第三方组件。因为本项目是 AGPL，若你把修改版作为网络服务
-运行，必须向用户提供对应的源码。
-
-对应源码：<https://github.com/greyoak111/coxdragon>
+- **OpenAI Codex**：取自 `openai/codex` 官方发布（Apache-2.0），按钉死哈希下载，不随 APK 分发。
+- **开发工具包与随包 LGPL 组件**：工具包取自 Termux 官方仓库，各包许可证载于 `devkit.lock.json` / `SBOM.tsv`；随 APK 分发的 glibc 动态加载器（[third_party/glibc/README.md](third_party/glibc/README.md)）与 7-Zip 26.06（[third_party/7zip/README.md](third_party/7zip/README.md)）及著佐权工具包组件的对应源码由 [`devkit/archive-sources.mjs`](devkit/archive-sources.mjs) 归档备存并自每次二进制分发之日起至少保留三年，需要源码副本的请在 Issues 中提出。
 
 ## 参与
 

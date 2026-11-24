@@ -195,7 +195,7 @@
 
 
   // ── 交流群与参与：帮助页最后一节、更新说明卡片底部共用。群号为主，二维码点开才显示 ──
-  const COMMUNITY = { qq: "1062538743", repo: "https://github.com/greyoak111/cccodroid", discord: "https://discord.gg/jE6KW8kwpe" };
+  const COMMUNITY = { qq: "1062538743", repo: "https://github.com/greyoak111/coxdragon", discord: "https://discord.gg/jE6KW8kwpe" };
   function communityHtml(compact) {
     const R = COMMUNITY.repo, zh = isZh();
     return `<div class="cm-box${compact ? " compact" : ""}">
