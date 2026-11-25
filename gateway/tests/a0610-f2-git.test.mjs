@@ -24,6 +24,8 @@ async function serve(...routes) {
 const base = await serve(routeGit);
 const W = CFG.workspace;
 fs.mkdirSync(W, { recursive: true });
+const gitBin = path.join(process.env.CCAPP_PREFIX, "bin", "git");
+if (!fs.existsSync(gitBin)) fs.symlinkSync(execFileSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).trim(), gitBin);
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C.UTF-8" };
 const git = (cwd, ...args) => execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd, env: GIT_ENV, encoding: "utf8" });
 const get = async (p) => { const r = await fetch(base + p); return { status: r.status, body: await r.json() }; };

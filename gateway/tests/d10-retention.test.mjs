@@ -42,6 +42,8 @@ test("读保留期：没写、写坏、不是正整数都按永久；合法的�
 
 test("启动补写：没有文件就新建；有别的键照留并留 .bak；用户写过的（含写坏的值）不动；整份坏了不碰", async () => {
   fs.rmSync(F, { force: true });
+  const { ucKeep } = await import("../gw/userconf.mjs");
+  ucKeep([".claude/settings.json"]);
   let r = await ensureSessionRetention();
   assert.equal(r.changed, true);
   assert.deepEqual(read(), { cleanupPeriodDays: RETENTION_DAYS });
@@ -49,7 +51,6 @@ test("启动补写：没有文件就新建；有别的键照留并留 .bak；用
 
   put(JSON.stringify({ model: "x", hooks: { Stop: [] } }, null, 2));
   ucPending(); // 当前样子先让卡片看见（hooks 是要问的键），再认下，模拟用户已确认过
-  const { ucKeep } = await import("../gw/userconf.mjs");
   ucKeep([".claude/settings.json"]);
   r = await ensureSessionRetention();
   assert.equal(r.changed, true);
