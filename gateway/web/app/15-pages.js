@@ -362,11 +362,12 @@
   // ── 更新日志 ── 和 GitHub Releases 同一份（scripts/changelog.mjs 生成 web/changelog/zh|en.json，其余语言用英文）。
   // 第一次点开才取。五十多版、上百 KB：每版只先放标题和一个估了高度的空壳，进到视口上下一屏多的范围才渲染正文，
   // 离远了收回成量好高度的空壳 —— DOM 里任何时候只有眼前那几版。目录、滚动高亮、搜索和帮助页同一套，搜索查原文不用渲染。
-  const CL = { lang: "", list: [], low: [], h: [], io: null };
+  const CL = { lang: "", cur: "", list: [], low: [], h: [], io: null };
   async function loadChangelog() {
     // 同帮助页：繁体没有单独一份，回落英文（0.6.10 审计 195-L.1）
     const lang = ((window.I18N && I18N.lang) || "zh") === "zh" ? "zh" : "en";
-    if (CL.lang === lang) return spyToc("changelog");
+    const curNow = ((lastUpd && lastUpd.items) || []).find((x) => x.id === "app")?.current || (state.serverStatus && state.serverStatus.appVersion) || "";
+    if (CL.lang === lang && CL.cur === curNow) return spyToc("changelog");
     const body = $("cl-body"), toc = $("cl-toc");
     if (CL.io) { CL.io.disconnect(); CL.io = null; }
     toc.innerHTML = "";
@@ -382,8 +383,8 @@
       $("cl-retry").onclick = () => { CL.lang = ""; loadChangelog(); };
       return;
     }
-    CL.lang = lang; CL.list = list; CL.h = []; CL.low = list.map((x) => ("v" + x.v + "\n" + x.md).toLowerCase());
-    const cur = ((lastUpd && lastUpd.items) || []).find((x) => x.id === "app")?.current || "";
+    const cur = ((lastUpd && lastUpd.items) || []).find((x) => x.id === "app")?.current || (state.serverStatus && state.serverStatus.appVersion) || "";
+    CL.lang = lang; CL.cur = cur; CL.list = list; CL.h = []; CL.low = list.map((x) => ("v" + x.v + "\n" + x.md).toLowerCase());
     // 估高：按这一栏能放几个字折行，再加段落间距；渲染时量出真高，差的那点在 clShow 里补回滚动位置
     const w = Math.max(240, body.clientWidth || 600), cpl = w / (lang === "zh" ? 14.5 : 7.4);
     const est = (md) => Math.round(md.split("\n").reduce((h, l) => h + (l.trim() ? Math.max(1, Math.ceil(l.length / cpl)) * 24.5 : 10), 0));
