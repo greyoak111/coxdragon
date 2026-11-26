@@ -207,4 +207,5 @@ coxdragon 本身以 **[Apache License 2.0](LICENSE)** 发布（另见 [NOTICE](N
 - [OpenAI Codex](https://github.com/openai/codex) —— 官方 app-server 与 CLI。
 - [Termux](https://termux.dev) —— 组成工具包的软件包。
 - [Shizuku](https://shizuku.rikka.app) —— 可选的提权辅助集成。
+- **[YQXYWM](https://github.com/YQXYWM)** —— 排查并提交跨版本升级后预下载工具包误判降级与启动期确认弹窗死锁的根因定位报告。
 - 完整的第三方库与许可见上游 README。

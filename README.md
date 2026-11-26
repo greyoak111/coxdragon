@@ -227,4 +227,5 @@ large PR.
 - [OpenAI Codex](https://github.com/openai/codex) — the official app-server and CLI.
 - [Termux](https://termux.dev) — the packages that make up the devkit.
 - [Shizuku](https://shizuku.rikka.app) — the optional privileged helper integration.
+- **[YQXYWM](https://github.com/YQXYWM)** — root-cause report for the pre-downloaded devkit downgrade misclassification and startup confirmation dialog deadlock.
 - The upstream README keeps the full list of third-party libraries and licenses.
